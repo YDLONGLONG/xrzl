@@ -1,0 +1,14 @@
+{
+  "name": "blood-on-the-clocktower",
+  "version": "1.0.0",
+  "description": "多人联机网页版血染钟楼 - 系统说书人",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}
