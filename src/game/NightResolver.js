@@ -255,10 +255,17 @@ class NightResolver {
           const adjusted = this.engine.balanceSystem.adjustInfo(player.role, { roleName, teamName }, player, this.engine);
           if (adjusted === null) {
             isFalse = true;
-            // 中毒时给错误信息
-            const allRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','僧侣','守鸦人','圣女','杀手','士兵','市长','圣徒','下毒者','红唇女郎','小恶魔'];
-            roleName = allRoles[Math.floor(Math.random() * allRoles.length)];
-            teamName = Math.random() < 0.5 ? '善良' : '邪恶';
+            // 假信息方向由平衡系统决定：好人弱势→显示邪恶（帮好人找邪恶），邪恶弱势→显示善良（误导好人）
+            const helpGood = this.engine.balanceSystem.favorWeakSide(this.engine);
+            const goodRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','僧侣','守鸦人','圣女','杀手','士兵','市长','圣徒'];
+            const evilRoles = ['下毒者','红唇女郎','男爵','间谍','小恶魔'];
+            if (helpGood) {
+              teamName = '邪恶';
+              roleName = evilRoles[Math.floor(Math.random() * evilRoles.length)];
+            } else {
+              teamName = '善良';
+              roleName = goodRoles[Math.floor(Math.random() * goodRoles.length)];
+            }
           }
         }
         this.engine.setPlayerPrivateInfo(player, {

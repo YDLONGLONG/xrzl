@@ -161,7 +161,7 @@ class BotManager {
     // 提名阶段 - 只有bot有概率提名，断线真实玩家不提名
     if (gs.phase === 'NOMINATION_PHASE' && bot.isBot && bot.isAlive && !bot.hasNominated && !bot._botNominated) {
       if (bot._botTimer) return;
-      if (Math.random() < 0.35) {
+      if (Math.random() < this.engine.prob('bot_nominate')) {
         bot._botNominated = true;
         this._scheduleBot(botId, 1500 + Math.random() * 2500, (b) => {
           if (room.gameState.phase !== 'NOMINATION_PHASE') return;
@@ -252,9 +252,9 @@ class BotManager {
 
     if (bot.role && bot.role.team === 'EVIL') {
       if (nominee.role && nominee.role.team === 'EVIL') return false;
-      return Math.random() < 0.7;
+      return Math.random() < this.engine.prob('bot_evil_vote_yes');
     }
-    return Math.random() < 0.5;
+    return Math.random() < this.engine.prob('bot_good_vote_yes');
   }
 }
 

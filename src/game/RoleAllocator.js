@@ -340,7 +340,7 @@ class RoleAllocator {
     const demon = players.find(p => p.role.category === 'DEMON');
     if (!demon) return;
 
-    const redHerring = BalanceSystem.selectRedHerring(players, demon, this.engine.room);
+    const redHerring = BalanceSystem.selectRedHerring(players, demon, this.engine);
     fortuneteller.abilityState.redHerring = redHerring.id;
   }
 }

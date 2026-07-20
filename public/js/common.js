@@ -88,3 +88,77 @@ function setSession(roomId, playerId) {
   sessionStorage.setItem('roomId', roomId);
   sessionStorage.setItem('playerId', playerId);
 }
+
+function showConfirm(message, options = {}) {
+  return new Promise((resolve) => {
+    const title = options.title || '确认';
+    const confirmText = options.confirmText || '确定';
+    const cancelText = options.cancelText || '取消';
+    const type = options.type || 'default';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-${type}">
+        <div class="confirm-title">${title}</div>
+        <div class="confirm-message">${message}</div>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">${cancelText}</button>
+          <button class="confirm-btn confirm-ok">${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const okBtn = overlay.querySelector('.confirm-ok');
+    const cancelBtn = overlay.querySelector('.confirm-cancel');
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => {
+        overlay.remove();
+        resolve(result);
+      }, 200);
+    };
+
+    okBtn.addEventListener('click', () => close(true));
+    cancelBtn.addEventListener('click', () => close(false));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(false);
+    });
+
+    const onKey = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); close(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(false); }
+    };
+    document.addEventListener('keydown', onKey);
+    const origRemove = overlay.remove.bind(overlay);
+    overlay.remove = function() {
+      document.removeEventListener('keydown', onKey);
+      origRemove();
+    };
+
+    requestAnimationFrame(() => {
+      overlay.classList.add('confirm-show');
+    });
+  });
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
+  }
+  return Promise.resolve();
+}

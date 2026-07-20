@@ -13,6 +13,7 @@ let isGodView = false;
 let godState = null;
 let isReconnecting = false;
 let reconnectAttempts = 0;
+let hasLeftRoom = false;
 
 // ========== 初始化 ==========
 window.addEventListener('DOMContentLoaded', () => {
@@ -81,6 +82,7 @@ function clearSession() {
 
 function initSocketEvents() {
   socket.on('connect', () => {
+    if (hasLeftRoom) return;
     console.log('已连接到服务器');
     // 如果之前有会话，尝试重连
     if (isReconnecting || (myRoomId && myName)) {
@@ -89,6 +91,7 @@ function initSocketEvents() {
   });
 
   socket.on('disconnect', () => {
+    if (hasLeftRoom) return;
     console.log('与服务器断开连接');
     if (myRoomId && myName) {
       showToast('与服务器断开，正在尝试重新连接...');
@@ -97,6 +100,8 @@ function initSocketEvents() {
   });
 
   socket.on('room:created', ({ roomId, playerId }) => {
+    if (hasLeftRoom) return;
+    hasLeftRoom = false;
     myId = playerId;
     myRoomId = roomId;
     saveSession();
@@ -104,6 +109,8 @@ function initSocketEvents() {
   });
 
   socket.on('room:joined', ({ roomId, playerId }) => {
+    if (hasLeftRoom) return;
+    hasLeftRoom = false;
     myId = playerId;
     myRoomId = roomId;
     saveSession();
@@ -111,6 +118,7 @@ function initSocketEvents() {
   });
 
   socket.on('room:reconnected', ({ roomId, playerId, gameStarted }) => {
+    if (hasLeftRoom) return;
     myId = playerId;
     myRoomId = roomId;
     isReconnecting = false;
@@ -123,78 +131,117 @@ function initSocketEvents() {
   });
 
   socket.on('room:playerDisconnected', ({ name }) => {
+    if (hasLeftRoom) return;
     showToast(`玩家 ${name} 已断线，AI将托管其行动`);
   });
 
   socket.on('room:playerReconnected', ({ name }) => {
+    if (hasLeftRoom) return;
     showToast(`玩家 ${name} 已重新连接`);
   });
 
   socket.on('room:stateUpdate', (state) => {
+    if (hasLeftRoom) return;
     currentState = state;
+    // 房主才显示设置按钮
+    const settingsBtn = $('settingsBtn');
+    if (settingsBtn) {
+      settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
+    }
     renderGameState(state);
   });
 
   socket.on('game:stateUpdate', (state) => {
+    if (hasLeftRoom) return;
     currentState = state;
+    // 房主才显示设置按钮
+    const settingsBtn = $('settingsBtn');
+    if (settingsBtn) {
+      settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
+    }
     renderGameState(state);
   });
 
   socket.on('room:error', ({ message }) => {
+    if (hasLeftRoom) return;
     showToast(message);
   });
 
+  // 概率设置相关事件
+  socket.on('room:probConfig', (data) => {
+    if (hasLeftRoom) return;
+    renderProbSettings(data.config, data.meta, data.mode);
+  });
+  socket.on('room:probConfigSaved', () => {
+    if (hasLeftRoom) return;
+    showToast('概率设置已保存');
+    closeProbSettings();
+  });
+
   socket.on('room:kicked', ({ message }) => {
+    if (hasLeftRoom) return;
     showToast(message || '你已被踢出房间');
     backToHome();
   });
 
   socket.on('game:over', (data) => {
+    if (hasLeftRoom) return;
     showGameOver(data);
   });
 
   socket.on('night:wake', (data) => {
+    if (hasLeftRoom) return;
     showNightWake(data);
   });
 
   socket.on('night:actionAck', (data) => {
+    if (hasLeftRoom) return;
     if (data.success) hideNightOverlay();
   });
 
   socket.on('game:votingStarted', (data) => {
+    if (hasLeftRoom) return;
     showVotingPanel(data);
   });
 
   socket.on('game:voteUpdate', (data) => {
+    if (hasLeftRoom) return;
     updateVoteDisplay(data);
   });
 
   socket.on('game:voteResult', (data) => {
+    if (hasLeftRoom) return;
     showVoteResult(data);
   });
 
   socket.on('game:nominationStarted', (data) => {
+    if (hasLeftRoom) return;
     showNominationStarted(data);
   });
 
   socket.on('game:executionResult', (data) => {
+    if (hasLeftRoom) return;
     showExecutionResult(data);
   });
 
   socket.on('game:abilityUsed', (data) => {
+    if (hasLeftRoom) return;
     showAbilityUsed(data);
   });
 
   socket.on('chat:message', (msg) => {
+    if (hasLeftRoom) return;
     addChatMessage(msg);
   });
 
   socket.on('player:died', (data) => {
+    if (hasLeftRoom) return;
     showPlayerDied(data);
   });
 
   // 上帝视角事件
   socket.on('god:loginResult', (data) => {
+    if (hasLeftRoom) return;
     if (data.success) {
       isGodView = true;
       $('godLoginForm').style.display = 'none';
@@ -209,11 +256,13 @@ function initSocketEvents() {
   });
 
   socket.on('god:state', (state) => {
+    if (hasLeftRoom) return;
     godState = state;
     renderGodView();
   });
 
   socket.on('god:actionLog', (entry) => {
+    if (hasLeftRoom) return;
     if (godState) {
       godState.actionLog.push(entry);
       if (godState.actionLog.length > 200) godState.actionLog.shift();
@@ -222,6 +271,7 @@ function initSocketEvents() {
   });
 
   socket.on('god:playerUpdate', (playerData) => {
+    if (hasLeftRoom) return;
     if (godState && godState.players) {
       const idx = godState.players.findIndex(p => p.id === playerData.id);
       if (idx >= 0) {
@@ -235,6 +285,7 @@ function initSocketEvents() {
   });
 
   socket.on('god:logoutResult', () => {
+    if (hasLeftRoom) return;
     isGodView = false;
     godState = null;
     $('godPanel').style.display = 'none';
@@ -255,17 +306,10 @@ function showGameView() {
 }
 
 function backToHome() {
-  $('homeView').style.display = 'flex';
-  $('gameView').style.display = 'none';
-  $('gameOverPanel').style.display = 'none';
-  $('godPanel').style.display = 'none';
-  isGodView = false;
-  godState = null;
-  $('createName').value = '';
-  $('joinRoomId').value = '';
-  $('joinName').value = '';
-  // 离开房间
-  if (myRoomId) {
+  if (hasLeftRoom) return;
+  hasLeftRoom = true;
+
+  if (myRoomId && socket && socket.connected) {
     socket.emit('room:leave');
   }
   clearSession();
@@ -280,6 +324,21 @@ function backToHome() {
   unreadWhispers = {};
   customRoleMode = false;
   customRoleMap = {};
+  isGodView = false;
+  godState = null;
+  isReconnecting = false;
+
+  $('homeView').style.display = 'flex';
+  $('gameView').style.display = 'none';
+  $('gameOverPanel').style.display = 'none';
+  $('godPanel').style.display = 'none';
+  $('createName').value = '';
+  $('joinRoomId').value = '';
+  $('joinName').value = '';
+
+  setTimeout(() => {
+    hasLeftRoom = false;
+  }, 300);
 }
 
 // ========== 首页操作 ==========
@@ -289,6 +348,7 @@ function createRoom() {
     showError('请输入昵称', 'createError');
     return;
   }
+  hasLeftRoom = false;
   myName = name;
   socket.emit('room:create', { playerName: name });
 }
@@ -304,13 +364,15 @@ function joinRoom() {
     showError('请输入昵称', 'joinError');
     return;
   }
+  hasLeftRoom = false;
   myName = name;
   socket.emit('room:join', { roomId, playerName: name });
 }
 
-function leaveRoom() {
-  if (confirm('确定要离开房间吗？')) {
-    socket.emit('room:leave');
+async function leaveRoom() {
+  if (hasLeftRoom) return;
+  const ok = await showConfirm('确定要离开房间吗？', { type: 'warning', title: '离开房间', confirmText: '离开', cancelText: '取消' });
+  if (ok) {
     backToHome();
   }
 }
@@ -351,11 +413,12 @@ function addBot() {
   socket.emit('room:addBot');
 }
 
-function kickPlayer(pid) {
+async function kickPlayer(pid) {
   const p = currentState && currentState.players ? currentState.players.find(x => x.id === pid) : null;
   if (!p) return;
   const name = p.name + (p.isBot ? '(机器人)' : '');
-  if (!confirm(`确定要将 ${name} 踢出房间吗？`)) return;
+  const ok = await showConfirm(`确定要将 ${name} 踢出房间吗？`, { type: 'warning', title: '踢出玩家' });
+  if (!ok) return;
   socket.emit('room:kick', { targetId: pid });
 }
 
@@ -401,6 +464,15 @@ function renderGameState(state) {
 
 function updateHeader(state) {
   $('headerRoomId').textContent = `房间: ${state.roomId || myRoomId}`;
+  $('headerRoomId').title = '点击复制房间号';
+  $('headerRoomId').style.cursor = 'pointer';
+  $('headerRoomId').onclick = () => {
+    const roomId = state.roomId || myRoomId;
+    if (roomId) {
+      copyToClipboard(roomId);
+      showToast('房间号已复制');
+    }
+  };
 
   // 显示角色数量配置
   const playerCount = state.players ? state.players.filter(p => p.seat !== -1).length : 0;
@@ -677,14 +749,14 @@ function renderCenter(state) {
         $('actionTitle').textContent = '投票';
         $('selectedTargets').innerHTML = '';
         if (myVote === true || myVote === false) {
-          // 已投票：显示当前选择 + 改票按钮（还有人未投时可改票）
+          // 已投票：显示当前选择 + 撤回投票按钮（还有人未投时可撤回）
           const voteLabel = myVote === true
             ? '<span style="color:#2ecc71; font-weight:bold;">✅ 已投赞成</span>'
             : '<span style="color:#e74c3c; font-weight:bold;">❌ 已投反对</span>';
           if (hasUnvoted) {
             $('actionButtons').innerHTML = `
               <div style="text-align:center; margin-bottom:8px;">${voteLabel}</div>
-              <button class="btn btn-sm btn-warning" onclick="showVoteButtons()" style="width:100%;">🔄 改票</button>
+              <button class="btn btn-sm btn-warning" onclick="revokeVote()" style="width:100%;">↩️ 撤回投票</button>
             `;
           } else {
             $('actionButtons').innerHTML = `<div style="text-align:center;">${voteLabel}<br><span style="color:#aaa; font-size:0.85em;">投票即将结束...</span></div>`;
@@ -922,7 +994,7 @@ function handleNightOverlay(state) {
 }
 
 // ========== 白天交互 ==========
-function nominatePlayer(targetId) {
+async function nominatePlayer(targetId) {
   const phase = currentState.phase;
   if (phase !== 'DAY_DISCUSSION' && phase !== 'NOMINATION_PHASE') {
     showToast('现在不是提名时间');
@@ -936,7 +1008,8 @@ function nominatePlayer(targetId) {
     }
   }
   const target = currentState.players.find(p => p.id === targetId);
-  if (confirm(`确定提名 ${target.seat+1}号 ${target.name} 吗？`)) {
+  const ok = await showConfirm(`确定提名 ${target.seat+1}号 ${target.name} 吗？`, { title: '提名确认' });
+  if (ok) {
     socket.emit('day:nominates', { targetId });
   }
 }
@@ -962,12 +1035,9 @@ function castVote(vote) {
   socket.emit('day:vote', { vote });
 }
 
-// 显示投票按钮（改票模式）
-function showVoteButtons() {
-  $('actionButtons').innerHTML = `
-    <button class="btn btn-success vote-btn yes" onclick="castVote(true)">赞成处决</button>
-    <button class="btn btn-danger vote-btn no" onclick="castVote(false)">反对</button>
-  `;
+// 撤回投票
+function revokeVote() {
+  socket.emit('day:revokeVote');
 }
 
 function endVoting() {
@@ -988,13 +1058,14 @@ function confirmPhase() {
   socket.emit('game:confirm');
 }
 
-function useSlayerAbility() {
+async function useSlayerAbility() {
   const players = currentState.players.filter(p => p.isAlive && p.seat !== -1 && p.id !== myId);
   const name = prompt('杀手技能：选择要击杀的玩家\n' + players.map((p,i) => `${i+1}: ${p.seat+1}号 ${p.name}`).join('\n'));
   if (name) {
     const idx = parseInt(name) - 1;
     if (idx >= 0 && idx < players.length) {
-      if (confirm(`确定对 ${players[idx].seat+1}号 ${players[idx].name} 使用杀手技能吗？每局只能使用一次。`)) {
+      const ok = await showConfirm(`确定对 ${players[idx].seat+1}号 ${players[idx].name} 使用杀手技能吗？每局只能使用一次。`, { type: 'warning', title: '杀手技能', confirmText: '确认击杀' });
+      if (ok) {
         socket.emit('day:useAbility', { abilityName: 'slayer', targetId: players[idx].id });
       }
     }
@@ -1949,3 +2020,504 @@ window.addEventListener('resize', () => {
     if (chatArea) chatArea.classList.remove('mobile-open');
   }
 });
+
+// ========== 概率设置面板 ==========
+let _probConfigDraft = null;
+let _probConfigMeta = null;
+let _probBackupAdvanced = null; // 切到标准模式前备份高级模式的配置
+let _probMode = 'standard'; // 'standard' | 'advanced'
+let _probShowAdvanced = false; // 高级模式下是否展开高级参数
+
+// 偏袒强度映射（前端版，与后端 prob-config.js 中 applyFavorStrength 逻辑一致）
+function applyFavorStrength(cfg, strength) {
+  const s = Math.max(0, Math.min(1, strength));
+  const b = cfg.balance;
+  b.baseFavor = s;
+  b.maxFavor = s;
+  b.favorMultiplier = 0;
+  b.mayorSaveBase = 0.5;
+  b.mayorSaveBonus = 0.5 * s;
+  b.mayorSavePenalty = 0.5 * s;
+  b.goodWeakThreshold = -0.2;
+  b.evilWeakThreshold = 0.3;
+  b.favorStrength = s;
+}
+
+// 获取标准模式配置（前端版，与后端 getStandardProbConfig 一致）
+function getStandardConfig() {
+  return {
+    recluse_evil: 0.5,
+    recluse_minion: 0.5,
+    recluse_demon: 0.5,
+    recluse_outsider: 0.5,
+    spy_good_chef: 0.5,
+    spy_good_empath: 0.5,
+    spy_not_minion: 0.5,
+    spy_as_townsfolk: 0.5,
+    spy_as_outsider: 0.5,
+    bot_nominate: 0.30,
+    bot_evil_vote_yes: 0.7,
+    bot_good_vote_yes: 0.5,
+    balance: {
+      baseFavor: 1.0, maxFavor: 1.0, favorMultiplier: 1.0,
+      mayorSaveBase: 0.5, mayorSaveBonus: 0.5, mayorSavePenalty: 0.5,
+      goodWeakThreshold: -0.2, evilWeakThreshold: 0.3,
+      redHerringFavorMinion: true, redHerringFavorGood: true,
+      poisonedCorrectInfo: false, favorStrength: 1.0
+    },
+    balanceWeights: {
+      numbersAdvantage: 0.3, deadEvil: 0.2, deadGood: -0.15,
+      keyRolesAlive: 0.15, demonSafety: 0.1
+    }
+  };
+}
+
+// 按点路径取值
+function _getCfgVal(cfg, keyPath) {
+  const parts = keyPath.split('.');
+  let v = cfg;
+  for (const p of parts) {
+    if (v == null) return undefined;
+    v = v[p];
+  }
+  return v;
+}
+
+function _setCfgVal(cfg, keyPath, val) {
+  const parts = keyPath.split('.');
+  let obj = cfg;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!obj[parts[i]]) obj[parts[i]] = {};
+    obj = obj[parts[i]];
+  }
+  obj[parts[parts.length - 1]] = val;
+}
+
+function openProbSettings() {
+  if (!currentState || !currentState.isHost) {
+    showToast('只有房主可以打开设置');
+    return;
+  }
+  if (currentState.probConfig && currentState.probConfigMeta) {
+    _probConfigDraft = JSON.parse(JSON.stringify(currentState.probConfig));
+    _probConfigMeta = currentState.probConfigMeta;
+    // 使用服务器保存的模式，默认标准
+    const savedMode = currentState.probMode;
+    _probMode = (savedMode === 'advanced') ? 'advanced' : 'standard';
+    _updateModeButtons();
+    _renderProbSettingsUI();
+  } else {
+    socket.emit('room:getProbConfig');
+  }
+  $('probSettingsPanel').style.display = 'block';
+  const gameStarted = currentState && currentState.gameStarted;
+  $('probSaveBtn').disabled = !!gameStarted;
+  $('probResetBtn').disabled = !!gameStarted;
+  $('probSaveBtn').style.opacity = gameStarted ? '0.5' : '1';
+  $('probResetBtn').style.opacity = gameStarted ? '0.5' : '1';
+}
+
+function closeProbSettings() {
+  $('probSettingsPanel').style.display = 'none';
+}
+
+// 应用标准模式预设
+function _applyStandardPreset() {
+  if (!_probConfigDraft) return;
+  const std = getStandardConfig();
+  // 深拷贝标准配置到draft
+  Object.assign(_probConfigDraft, JSON.parse(JSON.stringify(std)));
+}
+
+function setProbMode(mode) {
+  if (mode === _probMode) return;
+  if (mode === 'standard') {
+    // 切到标准模式：先备份当前高级配置
+    _probBackupAdvanced = JSON.parse(JSON.stringify(_probConfigDraft));
+    _applyStandardPreset();
+  } else {
+    // 切回高级模式：恢复备份，若无备份则用标准配置作为起点
+    if (_probBackupAdvanced) {
+      _probConfigDraft = JSON.parse(JSON.stringify(_probBackupAdvanced));
+    } else {
+      _probConfigDraft = getStandardConfig();
+      _probConfigDraft.balance.favorStrength = 0.7;
+      applyFavorStrength(_probConfigDraft, 0.7);
+    }
+  }
+  _probMode = mode;
+  _probShowAdvanced = false;
+  _updateModeButtons();
+  _renderProbSettingsUI();
+}
+
+function _updateModeButtons() {
+  const btnS = $('probModeStandard');
+  const btnA = $('probModeAdvanced');
+  const desc = $('probModeDesc');
+  if (_probMode === 'standard') {
+    btnS.style.background = 'linear-gradient(135deg,#f39c12,#e67e22)';
+    btnS.style.color = '#fff';
+    btnS.style.fontWeight = 'bold';
+    btnA.style.background = 'rgba(255,255,255,0.08)';
+    btnA.style.color = '#ccc';
+    btnA.style.fontWeight = 'normal';
+    desc.innerHTML = '<b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统<b>必帮弱方</b>，中毒/醉酒/酒鬼<b>必出假信息</b>，适合快速开始游戏。';
+  } else {
+    btnS.style.background = 'rgba(255,255,255,0.08)';
+    btnS.style.color = '#ccc';
+    btnS.style.fontWeight = 'normal';
+    btnA.style.background = 'linear-gradient(135deg,#3498db,#2980b9)';
+    btnA.style.color = '#fff';
+    btnA.style.fontWeight = 'bold';
+    desc.innerHTML = '<b style="color:#85c1e9;">🔧 高级模式：</b>可自由调节各项概率。核心通过"偏袒强度"滑块控制平衡系统，还可展开高级参数微调权重。适合想自定义体验的玩家。';
+  }
+}
+
+function renderProbSettings(config, meta, mode) {
+  _probConfigDraft = JSON.parse(JSON.stringify(config));
+  _probConfigMeta = meta;
+  // 使用服务器保存的模式，默认标准
+  _probMode = (mode === 'advanced') ? 'advanced' : 'standard';
+  _updateModeButtons();
+  _renderProbSettingsUI();
+}
+
+// 格式化概率显示
+function _fmtProb(v) {
+  if (v === 1) return '<b style="color:#2ecc71;">100%</b>';
+  if (v === 0) return '<b style="color:#e74c3c;">0%</b>';
+  return '<b style="color:#f9e79f;">' + Math.round(v * 100) + '%</b>';
+}
+
+// 格式化Bot行为概率（非0/50/100的固定值）
+function _fmtBotProb(v) {
+  return '<b style="color:#f9e79f;">' + Math.round(v * 100) + '%</b>';
+}
+
+function _renderProbSettingsUI() {
+  const config = _probConfigDraft;
+  const meta = _probConfigMeta;
+  if (!config || !meta) return;
+  const container = $('probSettingsContent');
+  const isStandard = _probMode === 'standard';
+
+  if (isStandard) {
+    // ===== 标准模式UI：只读展示，显示实际概率值 =====
+    let html = '';
+
+    // 角色技能干扰概率
+    html += `<div style="background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#2ecc71; margin-bottom:10px; font-size:1.05em;">🎯 角色技能干扰概率（预设值）</h3>
+      <p style="color:#888; font-size:12px; margin-bottom:10px;">隐士/间谍的干扰登记概率使用标准50%随机。</p>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
+    meta.forEach(cat => {
+      if (cat.category === '角色技能干扰概率') {
+        cat.items.forEach(item => {
+          const v = _getCfgVal(config, item.key);
+          html += `<div style="color:#bbb; font-size:12px; padding:5px 10px; background:rgba(255,255,255,0.03); border-radius:4px;">
+            <span style="color:#2ecc71;">●</span> ${item.label}：${_fmtProb(v)}
+          </div>`;
+        });
+      }
+    });
+    html += `</div></div>`;
+
+    // 酒鬼/中毒信息
+    html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
+      <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息<b style="color:#e74c3c;">100%为假</b></div>
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 假信息的内容方向由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
+        <div style="padding-left:20px; color:#aaa; font-size:12px;">
+          · 好人弱势时 → 假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b>（帮好人调查）<br>
+          · 邪恶弱势时 → 假信息指向<b style="color:#2ecc71;">善良/无恶魔</b>（误导好人）<br>
+          · 局势均衡时 → 假信息方向随机
+        </div>
+      </div>
+    </div>`;
+
+    // Bot行为
+    html += `<div style="background:rgba(52,152,219,0.08); border:1px solid rgba(52,152,219,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#3498db; margin-bottom:10px; font-size:1.05em;">🤖 Bot 行为（预设值）</h3>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
+    meta.forEach(cat => {
+      if (cat.category === 'Bot 行为') {
+        cat.items.forEach(item => {
+          const v = _getCfgVal(config, item.key);
+          html += `<div style="color:#bbb; font-size:12px; padding:5px 10px; background:rgba(255,255,255,0.03); border-radius:4px;">
+            <span style="color:#3498db;">●</span> ${item.label}：${_fmtBotProb(v)}
+          </div>`;
+        });
+      }
+    });
+    html += `</div></div>`;
+
+    // 偏袒规则（核心特色）
+    const ws = config.balanceWeights;
+    html += `<div style="background:rgba(231,76,60,0.1); border:2px solid rgba(231,76,60,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#e74c3c; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒规则（100%生效）</h3>
+      <div style="padding:12px; background:rgba(231,76,60,0.15); border:2px solid #e74c3c; border-radius:8px; text-align:center;">
+        <div style="font-size:1.2em; font-weight:bold; color:#f1948a;">必帮弱方</div>
+        <div style="color:#ccc; font-size:12px; margin-top:6px; line-height:1.5;">偏袒系统100%触发 · 干扰项偏向弱方 · 市长替死按弱势调整 · 假信息方向自动偏向弱方</div>
+      </div>
+      <div style="background:rgba(0,0,0,0.2); border-radius:6px; padding:12px; margin-top:12px;">
+        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
+        <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+          分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × ${(ws.numbersAdvantage*3).toFixed(2)}<br>
+          &emsp;+ 已死邪恶 × ${ws.deadEvil.toFixed(2)} − 已死好人 × ${(-ws.deadGood).toFixed(2)}<br>
+          &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
+          <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
+        </div>
+        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（标准模式：偏袒强度100%）</div>
+        <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+          baseFavor=1, favorMultiplier=1, maxFavor=1<br>
+          偏袒概率 = min(|分数| × 1 + 1, 1) = <b style="color:#e74c3c;">100%</b><br>
+          <span style="color:#888;">→ 好人弱势(分数&lt;-0.2)：100%触发偏袒帮好人</span><br>
+          <span style="color:#888;">→ 邪恶弱势(分数&gt;0.3)：100%触发偏袒帮邪恶（误导好人）</span><br>
+          <span style="color:#888;">→ 局势均衡(-0.2≤分数≤0.3)：50%概率偏向任一方向</span>
+        </div>
+      </div>
+    </div>`;
+
+    container.innerHTML = html;
+    return;
+  }
+
+  // ===== 高级模式UI =====
+  let html = '';
+
+  // 角色技能干扰概率
+  html += `<div style="background:rgba(255,255,255,0.05); border:1px solid rgba(52,152,219,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(52,152,219,0.2); padding-bottom:6px;">🎯 角色技能干扰概率</h3>`;
+  meta.forEach(cat => {
+    if (cat.category === '角色技能干扰概率') {
+      cat.items.forEach(item => {
+        const val = _getCfgVal(config, item.key);
+        const v = (val !== undefined) ? val : item.default;
+        html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
+          <label style="color:#ddd; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
+          <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+            oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
+            style="flex:2; min-width:150px; accent-color:#3498db;" />
+          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#85c1e9; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
+        </div>`;
+      });
+    }
+  });
+  html += `</div>`;
+
+  // 酒鬼/中毒信息（说明，无滑块）
+  html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
+    <div style="color:#ccc; font-size:13px; line-height:1.8;">
+      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息是否为假，由"中毒/醉酒可能获得真信息"开关控制</div>
+      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 当需要给出假信息时，<b style="color:#f9e79f;">假信息的内容方向由偏袒强度自动决定</b>：</div>
+      <div style="padding-left:20px; color:#aaa; font-size:12px;">
+        · 偏袒强度越高，假信息越倾向于帮助弱方<br>
+        · 好人弱势 → 假信息指向邪恶/恶魔（帮好人调查）<br>
+        · 邪恶弱势 → 假信息指向善良/无恶魔（误导好人）
+      </div>
+    </div>
+  </div>`;
+
+  // Bot行为
+  html += `<div style="background:rgba(255,255,255,0.05); border:1px solid rgba(52,152,219,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(52,152,219,0.2); padding-bottom:6px;">🤖 Bot 行为</h3>`;
+  meta.forEach(cat => {
+    if (cat.category === 'Bot 行为') {
+      cat.items.forEach(item => {
+        const val = _getCfgVal(config, item.key);
+        const v = (val !== undefined) ? val : item.default;
+        html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
+          <label style="color:#ddd; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
+          <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+            oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
+            style="flex:2; min-width:150px; accent-color:#3498db;" />
+          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#85c1e9; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
+        </div>`;
+      });
+    }
+  });
+  html += `</div>`;
+
+  // 平衡偏袒系统（简化：核心滑块 + 开关 + 公式说明）
+  const wsAdv = config.balanceWeights;
+  const favorS = config.balance.favorStrength !== undefined ? config.balance.favorStrength : 0.7;
+  const strengthPct = Math.round(favorS * 100);
+  let strengthDesc = '';
+  if (favorS >= 0.95) strengthDesc = '<span style="color:#e74c3c;">必帮弱方</span>';
+  else if (favorS >= 0.6) strengthDesc = '<span style="color:#f39c12;">偏向弱方</span>';
+  else if (favorS >= 0.3) strengthDesc = '<span style="color:#f1c40f;">轻微偏袒</span>';
+  else strengthDesc = '<span style="color:#95a5a6;">几乎不偏袒</span>';
+
+  const baseF = favorS.toFixed(2);
+  const multF = favorS.toFixed(2);
+  const maxF = '1.00';
+  const goodWeakThF = config.balance.goodWeakThreshold !== undefined ? config.balance.goodWeakThreshold.toFixed(2) : '-0.20';
+  const evilWeakThF = config.balance.evilWeakThreshold !== undefined ? config.balance.evilWeakThreshold.toFixed(2) : '0.30';
+
+  html += `<div style="background:rgba(52,152,219,0.1); border:2px solid rgba(52,152,219,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
+
+    <div style="background:rgba(0,0,0,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+        <label style="color:#eee; font-size:14px; font-weight:bold; min-width:100px;">偏袒强度</label>
+        <input type="range" data-pkey="balance.favorStrength" min="0" max="1" step="0.05" value="${favorS}"
+          oninput="onFavorStrengthInput(this)" onchange="onFavorStrengthChanged(this)"
+          style="flex:1; accent-color:#3498db;" />
+        <span class="prob-val-label" data-pkey-label="balance.favorStrength" style="color:#85c1e9; font-weight:bold; min-width:80px; text-align:right; font-size:14px;">${strengthPct}%</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:#888; padding:0 112px 0 100px;">
+        <span>不偏袒</span>
+        <span id="favorStrengthDesc" style="font-weight:bold;">${strengthDesc}</span>
+        <span>必帮弱方</span>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:15px; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:8px; color:#ddd; font-size:13px; cursor:pointer;">
+        <input type="checkbox" data-pkey="balance.poisonedCorrectInfo" ${config.balance.poisonedCorrectInfo ? 'checked' : ''} onchange="onProbChanged(this)" style="width:16px; height:16px; cursor:pointer;" />
+        中毒/醉酒可能获得真信息
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; color:#ddd; font-size:13px; cursor:pointer;">
+        <input type="checkbox" data-pkey="balance.redHerringFavorMinion" ${config.balance.redHerringFavorMinion !== false ? 'checked' : ''} onchange="onProbChanged(this)" style="width:16px; height:16px; cursor:pointer;" />
+        干扰项偏向弱势方
+      </label>
+    </div>
+
+    <div style="background:rgba(0,0,0,0.15); border-radius:6px; padding:12px; margin-top:12px;">
+      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
+      <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+        分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × ${(wsAdv.numbersAdvantage*3).toFixed(2)}<br>
+        &emsp;+ 已死邪恶 × ${wsAdv.deadEvil.toFixed(2)} − 已死好人 × ${(-wsAdv.deadGood).toFixed(2)}<br>
+        &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
+        <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
+      </div>
+      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（当前偏袒强度=${strengthPct}%）</div>
+      <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+        baseFavor=${baseF}, favorMultiplier=${multF}, maxFavor=${maxF}<br>
+        偏袒概率 = min(|分数| × ${multF} + ${baseF}, ${maxF})<br>
+        <span style="color:#888;">→ 好人弱势(分数&lt;${goodWeakThF})：概率触发偏袒帮好人</span><br>
+        <span style="color:#888;">→ 邪恶弱势(分数&gt;${evilWeakThF})：概率触发偏袒帮邪恶（误导好人）</span><br>
+        <span style="color:#888;">→ 局势均衡(${goodWeakThF}≤分数≤${evilWeakThF})：50%概率偏向任一方向</span>
+      </div>
+    </div>
+  </div>`;
+
+  // 高级参数（可折叠）
+  html += `<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1); border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div onclick="toggleProbAdvanced()" style="padding:10px 15px; cursor:pointer; display:flex; align-items:center; justify-content:space-between; user-select:none;">
+      <span style="color:#888; font-size:13px;">🔧 高级参数（平衡权重）${_probShowAdvanced ? '' : ' — 点击展开'}</span>
+      <span style="color:#666; font-size:12px;">${_probShowAdvanced ? '▲ 收起' : '▼ 展开'}</span>
+    </div>`;
+  if (_probShowAdvanced) {
+    html += `<div style="padding:0 15px 15px;">
+      <p style="color:#777; font-size:11px; margin-bottom:10px;">这些参数控制平衡分数的计算方式，通常不需要修改。</p>`;
+    meta.forEach(cat => {
+      if (cat.advanced) {
+        cat.items.forEach(item => {
+          const val = _getCfgVal(config, item.key);
+          const v = (val !== undefined) ? val : item.default;
+          html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
+            <label style="color:#999; min-width:180px; flex:1; font-size:12px;">${item.label}</label>
+            <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+              oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
+              style="flex:2; min-width:150px; accent-color:#7f8c8d;" />
+            <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#999; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${v.toFixed(2)}</span>
+          </div>`;
+        });
+      }
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+
+  container.innerHTML = html;
+}
+
+function toggleProbAdvanced() {
+  _probShowAdvanced = !_probShowAdvanced;
+  _renderProbSettingsUI();
+}
+
+function onFavorStrengthInput(el) {
+  const val = parseFloat(el.value);
+  const pct = Math.round(val * 100);
+  const label = document.querySelector('[data-pkey-label="balance.favorStrength"]');
+  if (label) label.textContent = pct + '%';
+  // 更新描述
+  const desc = document.getElementById('favorStrengthDesc');
+  if (desc) {
+    if (val >= 0.95) desc.innerHTML = '<span style="color:#e74c3c;">必帮弱方</span>';
+    else if (val >= 0.6) desc.innerHTML = '<span style="color:#f39c12;">偏向弱方</span>';
+    else if (val >= 0.3) desc.innerHTML = '<span style="color:#f1c40f;">轻微偏袒</span>';
+    else desc.innerHTML = '<span style="color:#95a5a6;">几乎不偏袒</span>';
+  }
+}
+
+function onFavorStrengthChanged(el) {
+  const strength = parseFloat(el.value);
+  _setCfgVal(_probConfigDraft, 'balance.favorStrength', strength);
+  applyFavorStrength(_probConfigDraft, strength);
+  // 不需要重新渲染（滑块已经在正确位置）
+}
+
+function onProbSliderInput(el) {
+  const key = el.getAttribute('data-pkey');
+  const val = parseFloat(el.value);
+  const label = document.querySelector(`[data-pkey-label="${key}"]`);
+  if (label) {
+    if (key.startsWith('balanceWeights')) {
+      label.textContent = val.toFixed(2);
+    } else {
+      label.textContent = Math.round(val * 100) + '%';
+    }
+  }
+}
+
+function onProbChanged(el) {
+  const key = el.getAttribute('data-pkey');
+  let val;
+  if (el.type === 'checkbox') {
+    val = el.checked;
+  } else {
+    val = parseFloat(el.value);
+  }
+  _setCfgVal(_probConfigDraft, key, val);
+  // 干扰项两个开关联动（同开同关）
+  if (key === 'balance.redHerringFavorMinion') {
+    _setCfgVal(_probConfigDraft, 'balance.redHerringFavorGood', val);
+  }
+}
+
+function saveProbConfig() {
+  if (!_probConfigDraft) return;
+  if (currentState && currentState.gameStarted) {
+    showToast('游戏已开始，无法修改设置');
+    return;
+  }
+  if (_probMode === 'standard') {
+    _applyStandardPreset();
+  } else {
+    // 确保favorStrength已应用到其他参数
+    const s = _probConfigDraft.balance.favorStrength;
+    if (s !== undefined) applyFavorStrength(_probConfigDraft, s);
+  }
+  socket.emit('room:setProbConfig', { config: _probConfigDraft, mode: _probMode });
+}
+
+async function resetProbConfig() {
+  if (currentState && currentState.gameStarted) {
+    showToast('游戏已开始，无法重置设置');
+    return;
+  }
+  const ok = await showConfirm('确定恢复默认概率设置吗？（将切换回标准模式）', { title: '重置设置' });
+  if (!ok) return;
+  _probMode = 'standard';
+  _probBackupAdvanced = null;
+  _probShowAdvanced = false;
+  _updateModeButtons();
+  socket.emit('room:resetProbConfig');
+}
+

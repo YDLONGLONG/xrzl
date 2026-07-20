@@ -22,7 +22,7 @@ class Washerwoman extends Role {
     // 村民候选人：真正的村民，或间谍（可能被登记为村民）
     const townsfolkCandidates = alive.filter(p => {
       if (p.role.team === 'GOOD' && p.role.category === 'TOWNSFOLK') return true;
-      if (p.role.id === 'spy' && Math.random() < 0.3) return true;
+      if (p.role.id === 'spy' && Math.random() < engine.prob('spy_as_townsfolk')) return true;
       return false;
     });
     
@@ -78,8 +78,8 @@ class Librarian extends Role {
     // 外来者：真正的外来者或隐士（可能登记为外来者），间谍可能被误登记
     const outsiderCandidates = alive.filter(p => {
       if (p.role.category === 'OUTSIDER') return true;
-      if (p.role.id === 'recluse' && Math.random() < 0.3) return true;
-      if (p.role.id === 'spy' && Math.random() < 0.3) return true;
+      if (p.role.id === 'recluse' && Math.random() < engine.prob('recluse_outsider')) return true;
+      if (p.role.id === 'spy' && Math.random() < engine.prob('spy_as_outsider')) return true;
       return false;
     });
     
@@ -88,7 +88,7 @@ class Librarian extends Role {
       let isFalse = false;
       if (player.isPoisoned) {
         const adjusted = engine.balanceSystem.adjustInfo(this, msg, player, engine);
-        if (adjusted === null && Math.random() < 0.5) {
+        if (adjusted === null) {
           isFalse = true;
           const fakeOutsider = randomChoice(alive);
           msg = `${fakeOutsider.seat+1}号(${fakeOutsider.name})附近有外来者`;
@@ -148,12 +148,12 @@ class Investigator extends Role {
     // 爪牙或隐士（隐士可能被登记为爪牙）
     const minionCandidates = alive.filter(p => 
       (p.role && p.role.category === 'MINION') ||
-      (p.role && p.role.id === 'recluse' && Math.random() < 0.5)
+      (p.role && p.role.id === 'recluse' && Math.random() < engine.prob('recluse_minion'))
     );
     // 排除间谍（间谍可能不被登记为爪牙）
     const actualMinions = minionCandidates.filter(p => {
       if (p.role.category === 'MINION' && p.role.id !== 'spy') return true;
-      if (p.role.id === 'spy') return Math.random() >= 0.5;
+      if (p.role.id === 'spy') return Math.random() >= engine.prob('spy_not_minion');
       return true; // 隐士
     });
     
@@ -210,10 +210,10 @@ class Chef extends Role {
         // 判断是否为"邪恶相邻"，考虑隐士/间谍的干扰
         const appearsEvil = (p) => {
           if (p.role.team === 'EVIL') {
-            if (p.role.id === 'spy' && Math.random() < 0.5) return false;
+            if (p.role.id === 'spy' && Math.random() < engine.prob('spy_good_chef')) return false;
             return true;
           }
-          if (p.role.id === 'recluse' && Math.random() < 0.5) return true;
+          if (p.role.id === 'recluse' && Math.random() < engine.prob('recluse_evil')) return true;
           return false;
         };
         if (appearsEvil(p1) && appearsEvil(p2)) evilPairs++;
@@ -260,11 +260,11 @@ class Empath extends Role {
     const evilCount = neighbors.filter(n => {
       if (n.role.team === 'EVIL') {
         // 间谍可能被登记为善良
-        if (n.role.id === 'spy' && Math.random() < 0.5) return false;
+        if (n.role.id === 'spy' && Math.random() < engine.prob('spy_good_empath')) return false;
         return true;
       }
       // 隐士可能被登记为邪恶
-      if (n.role.id === 'recluse' && Math.random() < 0.5) return true;
+      if (n.role.id === 'recluse' && Math.random() < engine.prob('recluse_evil')) return true;
       return false;
     }).length;
     
@@ -326,8 +326,8 @@ class Fortuneteller extends Role {
     
     const redHerring = player.abilityState.redHerring;
     // 隐士可能被登记为恶魔
-    const p1RecluseDemon = p1.role.id === 'recluse' && Math.random() < 0.5;
-    const p2RecluseDemon = p2.role.id === 'recluse' && Math.random() < 0.5;
+    const p1RecluseDemon = p1.role.id === 'recluse' && Math.random() < engine.prob('recluse_demon');
+    const p2RecluseDemon = p2.role.id === 'recluse' && Math.random() < engine.prob('recluse_demon');
     // 间谍可能被登记为非恶魔（已作为恶魔时正常检测）
     const hasDemon = (p1.role.category === 'DEMON' || p2.role.category === 'DEMON' ||
                       p1.id === redHerring || p2.id === redHerring ||
@@ -518,7 +518,7 @@ class Mayor extends Role {
 
   onDeath(gameState, player, cause, engine) {
     if (cause === 'DEMON' && !player.isPoisoned) {
-      const prob = engine.balanceSystem.getMayorSaveProbability(engine.room);
+      const prob = engine.balanceSystem.getMayorSaveProbability(engine);
       if (Math.random() < prob) {
         const others = getAlivePlayers(engine.room).filter(p => p.id !== player.id);
         if (others.length > 0) {

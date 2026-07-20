@@ -1,6 +1,7 @@
 // 游戏引擎 - 状态机核心
 const { PHASES } = require('../config/game-config');
 const { getSeatedPlayers, getAlivePlayers } = require('../utils/helpers');
+const { getStandardProbConfig, PROB_CONFIG_META } = require('../config/prob-config');
 const RoleAllocator = require('./RoleAllocator');
 const NightResolver = require('./NightResolver');
 const VoteManager = require('./VoteManager');
@@ -44,6 +45,10 @@ class GameEngine {
 
     // 私聊系统消息节流：记录每对玩家上次发送系统消息的时间
     this.whisperSystemMessageTimestamps = {};
+
+    // 概率配置（从room读取，房主可在大厅修改）
+    this.probConfig = room.probConfig || getStandardProbConfig();
+    room.probConfig = this.probConfig;
     this.roleAllocator = new RoleAllocator(this);
     this.nightResolver = new NightResolver(this);
     this.voteManager = new VoteManager(this);
@@ -83,6 +88,62 @@ class GameEngine {
     } else {
       this.godViewPlayers.delete(playerId);
     }
+  }
+
+  // 读取概率配置（支持点号路径，如 'balance.baseFavor'）
+  prob(keyPath) {
+    const parts = keyPath.split('.');
+    let val = this.probConfig;
+    for (const p of parts) {
+      if (val === undefined || val === null) return undefined;
+      val = val[p];
+    }
+    return val;
+  }
+
+  // 获取概率配置（发给前端）
+  getProbConfig() {
+    return JSON.parse(JSON.stringify(this.probConfig));
+  }
+
+  // 设置概率配置（房主使用）
+  setProbConfig(newConfig) {
+    // 简单合并：只更新已有key，防止注入
+    const meta = require('../config/prob-config').PROB_CONFIG_META;
+    const rangeMap = {};
+    meta.forEach(cat => cat.items.forEach(item => {
+      rangeMap[item.key] = { min: item.min, max: item.max };
+    }));
+    const getRange = (key) => {
+      if (rangeMap[key]) return rangeMap[key];
+      return { min: -2, max: 2 }; // 默认宽松范围
+    };
+    const merge = (target, source, prefix = '') => {
+      for (const key of Object.keys(source)) {
+        const fullKey = prefix ? `${prefix}.${key}` : key;
+        if (target[key] !== undefined && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          merge(target[key], source[key], fullKey);
+        } else if (target[key] !== undefined) {
+          const val = source[key];
+          if (typeof val === 'number') {
+            const { min, max } = getRange(fullKey);
+            target[key] = Math.max(min, Math.min(max, val));
+          } else if (typeof val === 'boolean') {
+            target[key] = val;
+          }
+        }
+      }
+    };
+    merge(this.probConfig, newConfig);
+    this.broadcastState();
+    return true;
+  }
+
+  // 重置概率配置为默认值
+  resetProbConfig() {
+    this.probConfig = getStandardProbConfig();
+    this.broadcastState();
+    return true;
   }
 
   // 获取上帝视角完整状态
@@ -357,11 +418,9 @@ class GameEngine {
       return { success: false, message: '请选择一名玩家' };
     }
     
-    // 先校验再记录行动日志（在setPlayerPrivateInfo产生PRIVATE_INFO日志之前）
     const targets = action.targets || [];
-    // 酒鬼的selectCount是动态设置的，使用wakeInfo中的canSelectCount校验
     const isDrunk = player.role && player.role.id === 'drunk' && player.fakeRole;
-    const effectiveSelectCount = isDrunk ? (player.role.selectCount || 0) : (player.role.selectCount || 0);
+    const effectiveSelectCount = player.role.selectCount || 0;
     if (effectiveSelectCount > 0 && targets.length !== effectiveSelectCount) {
       return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
     }
@@ -401,6 +460,11 @@ class GameEngine {
   // 处理投票
   processVote(playerId, vote) {
     return this.voteManager.processVote(playerId, vote);
+  }
+
+  // 撤回投票
+  revokeVote(playerId) {
+    return this.voteManager.revokeVote(playerId);
   }
 
   // 处理白天技能
@@ -521,6 +585,10 @@ class GameEngine {
         return role ? role.name : rid;
       }) : null,
       privateInfo: viewer.privateInfo,
+      isHost: viewerId === room.hostId,
+      probConfig: viewerId === room.hostId ? this.getProbConfig() : null,
+      probConfigMeta: viewerId === room.hostId ? PROB_CONFIG_META : null,
+      probMode: viewerId === room.hostId ? room.probMode : null,
       allRoles: gs.winner ? Array.from(room.players.values())
         .filter(p => p.seat !== -1)
         .map(p => ({

@@ -188,6 +188,46 @@ class VoteManager {
     return { success: true };
   }
 
+  revokeVote(playerId) {
+    const gs = this.engine.room.gameState;
+    const player = this.engine.room.players.get(playerId);
+
+    if (!player) return { success: false };
+    if (gs.phase !== PHASES.VOTING) {
+      return { success: false, message: '现在不是投票阶段' };
+    }
+
+    const nomination = gs.nominations[gs.currentNominationIndex];
+    if (!nomination || nomination.resolved) {
+      return { success: false };
+    }
+
+    const previousVote = nomination.currentVotes[playerId];
+    if (previousVote === undefined) {
+      return { success: false, message: '你尚未投票' };
+    }
+
+    // 撤回投票
+    delete nomination.currentVotes[playerId];
+    if (previousVote === true) {
+      nomination.votes.delete(playerId);
+      // 死者撤回赞成票，退还投票标记
+      if (!player.isAlive) {
+        player.voteToken++;
+      }
+    }
+    nomination.voteCount = nomination.votes.size;
+
+    // 实时广播撤回
+    this.engine.io.to(this.engine.room.id).emit('game:voteRevoked', {
+      voterId: playerId,
+      voteCount: nomination.voteCount
+    });
+
+    this.engine.broadcastState();
+    return { success: true };
+  }
+
   endVoting() {
     const gs = this.engine.room.gameState;
     const nomination = gs.nominations[gs.currentNominationIndex];

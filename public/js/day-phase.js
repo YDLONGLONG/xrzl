@@ -26,6 +26,21 @@ function castVote(vote) {
     return;
   }
   sendSocket('day:vote', { vote });
+  const voteLabel = vote
+    ? '<span style="color:#2ecc71; font-weight:bold;">✅ 已投赞成</span>'
+    : '<span style="color:#e74c3c; font-weight:bold;">❌ 已投反对</span>';
+  $('actionButtons').innerHTML = `
+    <div style="text-align:center; margin-bottom:8px;">${voteLabel}</div>
+    <button class="btn btn-sm btn-warning" onclick="revokeVote()" style="width:100%;">↩️ 撤回投票</button>
+  `;
+}
+
+function revokeVote() {
+  sendSocket('day:revokeVote');
+  $('actionButtons').innerHTML = `
+    <button class="btn btn-success vote-btn yes" onclick="castVote(true)">赞成处决</button>
+    <button class="btn btn-danger vote-btn no" onclick="castVote(false)">反对</button>
+  `;
 }
 
 function endVoting() {
@@ -89,7 +104,7 @@ function showAbilityUsed(data) {
   $('centerMessage').innerHTML = `<div style="color:#9b59b6;">${msg}</div>`;
 }
 
-function nominatePlayer(targetId) {
+async function nominatePlayer(targetId) {
   const phase = currentState.phase;
   if (phase !== 'DAY_DISCUSSION' && phase !== 'NOMINATION_PHASE') {
     showToast('现在不是提名时间');
@@ -102,15 +117,19 @@ function nominatePlayer(targetId) {
       return;
     }
   }
-  if (confirm(`确定提名 ${currentState.players.find(p=>p.id===targetId).seat+1}号 玩家吗？`)) {
+  const target = currentState.players.find(p => p.id === targetId);
+  const ok = await showConfirm(`确定提名 ${target.seat+1}号 玩家吗？`, { title: '提名确认' });
+  if (ok) {
     sendSocket('day:nominates', { targetId });
   }
 }
 
-function useSlayerAbility() {
-  const targetId = selectTargetPlayer('选择要击杀的玩家（杀手技能）');
+async function useSlayerAbility() {
+  const targetId = await selectTargetPlayer('选择要击杀的玩家（杀手技能）');
   if (targetId) {
-    if (confirm('确定使用杀手技能吗？每局只能使用一次。')) {
+    const target = currentState.players.find(p => p.id === targetId);
+    const ok = await showConfirm(`确定对 ${target ? target.seat+1 + '号 ' + target.name : '该玩家'} 使用杀手技能吗？每局只能使用一次。`, { type: 'warning', title: '杀手技能', confirmText: '确认击杀' });
+    if (ok) {
       sendSocket('day:useAbility', { abilityName: 'slayer', targetId });
     }
   }

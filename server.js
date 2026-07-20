@@ -3,6 +3,7 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
+const { getStandardProbConfig, PROB_CONFIG_META } = require('./src/config/prob-config');
 
 const app = express();
 const server = http.createServer(app);
@@ -183,7 +184,11 @@ function broadcastRoomState(roomId) {
       io.to(pid).emit('room:stateUpdate', {
         roomId: room.id, hostId: room.hostId, players,
         seats: room.seats.map(s => s ? s.id : null),
-        gameStarted: false, phase: 'LOBBY'
+        gameStarted: false, phase: 'LOBBY',
+        isHost: pid === room.hostId,
+        probConfig: pid === room.hostId ? JSON.parse(JSON.stringify(room.probConfig)) : null,
+        probConfigMeta: pid === room.hostId ? PROB_CONFIG_META : null,
+        probMode: pid === room.hostId ? room.probMode : null
       });
     }
   }
@@ -361,7 +366,9 @@ io.on('connection', (socket) => {
     const room = {
       id: roomId, players: new Map(), seats: new Array(15).fill(null),
       hostId: socket.id, gameStarted: false, gameState: null,
-      maxPlayers: 15, minPlayers: 5, confirmations: new Set(), createdAt: new Date()
+      maxPlayers: 15, minPlayers: 5, confirmations: new Set(), createdAt: new Date(),
+      probConfig: getStandardProbConfig(),
+      probMode: 'standard'
     };
     const player = createPlayer(socket.id, playerName);
     room.players.set(socket.id, player);
@@ -541,12 +548,7 @@ io.on('connection', (socket) => {
     if (target.isHost) { socket.emit('room:error', { message: '不能踢出房主' }); return; }
 
     if (target.isBot) {
-      // 踢出机器人
-      if (target.seat !== -1) {
-        room.seats[target.seat] = null;
-      }
-      room.players.delete(targetId);
-      broadcastRoomState(roomId);
+      forceRemovePlayer(roomId, targetId);
     } else {
       // 踢出真实玩家：通知对方被踢，然后移除
       io.to(targetId).emit('room:kicked', { message: '你已被房主踢出房间' });
@@ -644,7 +646,6 @@ io.on('connection', (socket) => {
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
-        io.to(roomId).emit('game:nominationUpdate', res);
         broadcastRoomState(roomId);
       }
     }
@@ -674,6 +675,22 @@ io.on('connection', (socket) => {
     const engine = gameEngines.get(roomId);
     if (engine) {
       const res = engine.processVote(socket.id, vote);
+      if (!res.success) {
+        socket.emit('room:error', { message: res.message });
+      } else {
+        broadcastRoomState(roomId);
+      }
+    }
+  });
+
+  // 撤回投票
+  socket.on('day:revokeVote', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result || !result.room.gameStarted) return;
+    const { roomId } = result;
+    const engine = gameEngines.get(roomId);
+    if (engine) {
+      const res = engine.revokeVote(socket.id);
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
@@ -757,7 +774,6 @@ io.on('connection', (socket) => {
     const engine = gameEngines.get(roomId);
     if (!engine) { socket.emit('room:error', { message: '游戏尚未开始' }); return; }
     if (password !== GOD_PASSWORD) {
-      socket.emit('room:error', { message: '密码错误' });
       socket.emit('god:loginResult', { success: false });
       return;
     }
@@ -775,6 +791,79 @@ io.on('connection', (socket) => {
       engine.setGodView(socket.id, false);
     }
     socket.emit('god:logoutResult', { success: true });
+  });
+
+  // ========== 概率设置（仅房主） ==========
+  socket.on('room:getProbConfig', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
+    const { roomId } = result;
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以修改设置' }); return; }
+    socket.emit('room:probConfig', {
+      config: JSON.parse(JSON.stringify(room.probConfig)),
+      meta: PROB_CONFIG_META,
+      mode: room.probMode
+    });
+  });
+
+  socket.on('room:setProbConfig', ({ config, mode }) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
+    const { roomId } = result;
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以修改设置' }); return; }
+    if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法修改设置' }); return; }
+
+    // 保存模式
+    if (mode === 'standard' || mode === 'advanced') {
+      room.probMode = mode;
+    }
+
+    // 校验并合并
+    const rangeMap = {};
+    PROB_CONFIG_META.forEach(cat => cat.items.forEach(item => {
+      rangeMap[item.key] = { min: item.min, max: item.max };
+    }));
+    const getRange = (key) => rangeMap[key] || { min: -2, max: 2 };
+    const merge = (target, source, prefix = '') => {
+      for (const key of Object.keys(source)) {
+        const fullKey = prefix ? `${prefix}.${key}` : key;
+        if (target[key] !== undefined && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          merge(target[key], source[key], fullKey);
+        } else if (target[key] !== undefined) {
+          const val = source[key];
+          if (typeof val === 'number') {
+            const { min, max } = getRange(fullKey);
+            target[key] = Math.max(min, Math.min(max, val));
+          } else if (typeof val === 'boolean') {
+            target[key] = val;
+          }
+        }
+      }
+    };
+    merge(room.probConfig, config || {});
+    broadcastRoomState(roomId);
+    socket.emit('room:probConfigSaved', { success: true });
+  });
+
+  socket.on('room:resetProbConfig', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
+    const { roomId } = result;
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以修改设置' }); return; }
+    if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法修改设置' }); return; }
+    room.probConfig = getStandardProbConfig();
+    room.probMode = 'standard';
+    // 同步给engine（如果已存在）
+    const engine = gameEngines.get(roomId);
+    if (engine) engine.probConfig = room.probConfig;
+    broadcastRoomState(roomId);
+    socket.emit('room:probConfigSaved', { success: true });
   });
 });
 

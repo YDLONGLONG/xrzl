@@ -67,6 +67,7 @@
         <span class="phase-badge" id="headerPhase"></span>
       </div>
       <div class="header-right">
+        <button class="btn btn-sm btn-secondary" id="settingsBtn" onclick="openProbSettings()" style="display:none; background: rgba(241,196,15,0.3); border: 1px solid #f1c40f; color: #f9e79f;">⚙️ 概率设置</button>
         <button class="btn btn-sm btn-secondary" id="godBtn" onclick="toggleGodView()" style="background: rgba(155,89,182,0.3); border: 1px solid #9b59b6; color: #d4a5e8;">👁 上帝视角</button>
         <button class="btn btn-sm btn-secondary" onclick="openRoleOverview()" style="background: rgba(52,152,219,0.3); border: 1px solid #3498db; color: #85c1e9;">📖 角色总览</button>
         <button class="btn btn-secondary btn-sm" onclick="leaveRoom()">离开房间</button>
@@ -248,6 +249,39 @@
       <div style="display:flex; gap:10px; justify-content:flex-end;">
         <button class="btn btn-sm btn-secondary" onclick="clearCustomRoles()">清空所有选择</button>
         <button id="customRoleConfirmBtn" class="btn btn-sm btn-primary" onclick="applyCustomRoles()">确认并关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 概率设置面板 -->
+  <div id="probSettingsPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
+    <div style="max-width:900px; margin:0 auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+        <h1 style="color:#f1c40f; font-size:1.8em; margin:0;">⚙️ 概率设置</h1>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-sm btn-warning" onclick="resetProbConfig()" id="probResetBtn">恢复默认</button>
+          <button class="btn btn-sm btn-secondary" onclick="closeProbSettings()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+        </div>
+      </div>
+
+      <!-- 模式切换 -->
+      <div style="background:rgba(241,196,15,0.08); border:1px solid rgba(241,196,15,0.3); border-radius:8px; padding:12px 15px; margin-bottom:15px;">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
+          <span style="color:#f9e79f; font-weight:bold; font-size:14px;">概率模式：</span>
+          <div style="display:flex; border:1px solid rgba(241,196,15,0.4); border-radius:6px; overflow:hidden;">
+            <button id="probModeStandard" onclick="setProbMode('standard')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:linear-gradient(135deg,#f39c12,#e67e22); color:#fff; font-weight:bold;">📊 标准模式</button>
+            <button id="probModeAdvanced" onclick="setProbMode('advanced')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:rgba(255,255,255,0.08); color:#ccc;">🔧 高级模式</button>
+          </div>
+        </div>
+        <div id="probModeDesc" style="color:#bbb; font-size:12px; line-height:1.6;">
+          <b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统必帮弱方，中毒/醉酒/酒鬼必出假信息，适合快速开始游戏。
+        </div>
+      </div>
+
+      <p style="color:#aaa; margin-bottom:15px; font-size:13px;">仅房主可修改。设置仅在本局游戏生效，游戏开始后无法修改。</p>
+      <div id="probSettingsContent"></div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+        <button class="btn btn-primary btn-sm" onclick="saveProbConfig()" id="probSaveBtn">💾 保存设置</button>
       </div>
     </div>
   </div>
