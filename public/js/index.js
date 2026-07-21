@@ -7,13 +7,18 @@ socket.on('connect', () => {
 
 socket.on('room:created', ({ roomId, playerId }) => {
   setSession(roomId, playerId);
-  window.location.href = `/game.html?roomId=${roomId}`;
+  showGameView();
 });
 
 socket.on('room:joined', ({ roomId, playerId }) => {
   setSession(roomId, playerId);
-  window.location.href = `/game.html?roomId=${roomId}`;
+  showGameView();
 });
+
+function showGameView() {
+  document.getElementById('homeView').style.display = 'none';
+  document.getElementById('gameView').style.display = 'flex';
+}
 
 socket.on('room:error', ({ message }) => {
   showToast(message);
