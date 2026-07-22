@@ -98,7 +98,18 @@ class BotManager {
         }
       });
       this._lastPhase = gs.phase;
-      this._lastNominationCount = gs.nominations ? gs.nominations.length : 0;
+      this._lastNominationIndex = gs.currentNominationIndex !== undefined ? gs.currentNominationIndex : -1;
+    }
+
+    // 提名变化时（同一阶段内的新提名）重置投票状态
+    if (gs.phase === 'VOTING' && gs.currentNominationIndex !== this._lastNominationIndex) {
+      room.players.forEach(p => {
+        if (p.isBot || !p.isConnected) {
+          p._botVoted = false;
+          this._clearBotTimer(p);
+        }
+      });
+      this._lastNominationIndex = gs.currentNominationIndex;
     }
 
     room.players.forEach((p, pid) => {
@@ -146,16 +157,30 @@ class BotManager {
     }
 
     // 投票阶段 - 自动投票
-    if (gs.phase === 'VOTING' && !bot._botVoted && this._canBotVote(bot)) {
-      if (bot._botTimer) return;
-      bot._botVoted = true;
-      this._scheduleBot(botId, 400 + Math.random() * 1200, (b) => {
-        if (room.gameState.phase !== 'VOTING') return;
-        // 断线真实玩家只投反对票，bot使用AI决策
-        const vote = b.isBot ? this._getBotVoteDecision(b) : false;
-        this.engine.processVote(botId, vote);
-      });
-      return;
+    if (gs.phase === 'VOTING' && this._canBotVote(bot)) {
+      const nomination = gs.nominations[gs.currentNominationIndex];
+      if (!nomination || nomination.resolved) return;
+      
+      const hasVoted = nomination.currentVotes[botId] !== undefined;
+      
+      if (!hasVoted && !bot._botVoted) {
+        if (bot._botTimer) return;
+        bot._botVoted = true;
+        const delay = 400 + Math.random() * 1200;
+        this._scheduleBot(botId, delay, (b) => {
+          if (room.gameState.phase !== 'VOTING') {
+            b._botVoted = false;
+            return;
+          }
+          const vote = b.isBot ? this._getBotVoteDecision(b) : false;
+          const result = this.engine.processVote(botId, vote);
+          if (!result || !result.success) {
+            b._botVoted = false;
+            this._retryBotVote(botId);
+          }
+        });
+        return;
+      }
     }
 
     // 提名阶段 - 只有bot有概率提名，断线真实玩家不提名
@@ -168,10 +193,10 @@ class BotManager {
           if (b.hasNominated || !b.isAlive) return;
           this._doBotNominate(b);
         });
+        return;
       } else {
         bot._botNominated = true;
       }
-      return;
     }
 
     // 确认阶段 - 自动确认（天亮/讨论/提名/处决）
@@ -192,6 +217,37 @@ class BotManager {
     if (bot.isAlive) return true;
     if (bot.voteToken > 0) return true;
     return false;
+  }
+
+  // bot投票失败后重试（如管家限制等）
+  _retryBotVote(botId) {
+    const room = this.engine.room;
+    if (!room) return;
+    const bot = room.players.get(botId);
+    if (!bot) return;
+    
+    this._scheduleBot(botId, 800 + Math.random() * 800, (b) => {
+      if (room.gameState.phase !== 'VOTING') {
+        b._botVoted = false;
+        return;
+      }
+      const nomination = room.gameState.nominations[room.gameState.currentNominationIndex];
+      if (!nomination || nomination.resolved) {
+        b._botVoted = false;
+        return;
+      }
+      const hasVoted = nomination.currentVotes[botId] !== undefined;
+      if (hasVoted) {
+        b._botVoted = true;
+        return;
+      }
+      const vote = b.isBot ? this._getBotVoteDecision(b) : false;
+      const result = this.engine.processVote(botId, vote);
+      if (!result || !result.success) {
+        b._botVoted = false;
+        this._retryBotVote(botId);
+      }
+    });
   }
 
   _doBotNightAction(bot) {

@@ -1,2 +1,5 @@
+/.trae
+/.trae-html-share-packages
+/.uploads
 /node_modules
 /package-lock.json

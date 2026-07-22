@@ -251,12 +251,23 @@ class NightResolver {
         let teamName = target.role.team === 'GOOD' ? '善良' : '邪恶';
         let realRoleName = roleName;
         let realTeamName = teamName;
+        let correctProbInfo = null;
         if (player.isPoisoned) {
-          const adjusted = this.engine.balanceSystem.adjustInfo(player.role, { roleName, teamName }, player, this.engine);
-          if (adjusted === null) {
+          const adjustedResult = this.engine.balanceSystem.adjustInfo(player.role, { roleName, teamName }, player, this.engine, '守鸦人中毒正确信息');
+          correctProbInfo = adjustedResult.probInfo;
+          if (adjustedResult.info === null) {
             isFalse = true;
-            // 假信息方向由平衡系统决定：好人弱势→显示邪恶（帮好人找邪恶），邪恶弱势→显示善良（误导好人）
-            const helpGood = this.engine.balanceSystem.favorWeakSide(this.engine);
+            const favorResult = this.engine.balanceSystem.favorWeakSide(this.engine);
+            const helpGood = favorResult.result;
+            const probInfo = {
+              type: 'balance_favor',
+              balanceScore: favorResult.balanceScore,
+              probability: favorResult.probability,
+              threshold: favorResult.threshold,
+              scenario: favorResult.scenario,
+              result: helpGood,
+              description: '中毒守鸦人假信息方向'
+            };
             const goodRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','僧侣','守鸦人','圣女','杀手','士兵','市长','圣徒'];
             const evilRoles = ['下毒者','红唇女郎','男爵','间谍','小恶魔'];
             if (helpGood) {
@@ -266,12 +277,18 @@ class NightResolver {
               teamName = '善良';
               roleName = goodRoles[Math.floor(Math.random() * goodRoles.length)];
             }
+            this.engine.setPlayerPrivateInfo(player, {
+              type: 'ravenkeeper',
+              message: `${target.seat+1}号 ${target.name} 的身份是【${roleName}】（${teamName}阵营）`
+            }, isFalse, { realRoleName, realTeamName, realPlayerId: targetId, correctProbInfo, probInfo });
+            return;
           }
         }
+        const realData = isFalse ? { realRoleName, realTeamName, realPlayerId: targetId } : (correctProbInfo ? { probInfo: correctProbInfo } : null);
         this.engine.setPlayerPrivateInfo(player, {
           type: 'ravenkeeper',
           message: `${target.seat+1}号 ${target.name} 的身份是【${roleName}】（${teamName}阵营）`
-        }, isFalse, isFalse ? { realRoleName, realTeamName, realPlayerId: targetId } : null);
+        }, isFalse, realData);
       }
     }
     this.pendingRavenkeeper = null;

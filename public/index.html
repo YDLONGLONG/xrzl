@@ -11,6 +11,10 @@
 <body>
   <!-- 首页/大厅 -->
   <div id="homeView" class="home-container">
+    <div style="display:flex; justify-content:center; align-items:center; gap:8px; margin-bottom:10px;">
+      <span id="connStatusDot" class="conn-dot conn-connecting"></span>
+      <span id="connStatusText" style="font-size:14px; color:#888;">连接中...</span>
+    </div>
     <h1 class="home-title">血染钟楼</h1>
     <p class="home-subtitle">灾祸之酿 · 系统说书人 · 多人联机</p>
     
@@ -22,6 +26,9 @@
           <input type="text" id="createName" placeholder="输入昵称" maxlength="20">
         </div>
         <button class="btn btn-primary" onclick="createRoom()">创建房间</button>
+        <div style="margin-top:15px;">
+          <button class="btn btn-secondary" onclick="openHistoryPanel()" style="width:100%; background:linear-gradient(135deg,#3498db,#2980b9); border:none;">📜 历史记录</button>
+        </div>
         <div class="error-msg" id="createError"></div>
       </div>
       
@@ -79,21 +86,25 @@
 
     <!-- 中央信息区 -->
     <div class="center-area" id="centerArea">
-      <div class="center-message" id="centerMessage">等待游戏开始...</div>
-      
-      <div id="actionPanel" class="action-panel" style="display:none;">
-        <div class="action-title" id="actionTitle"></div>
-        <div class="selected-targets" id="selectedTargets"></div>
-        <div class="action-buttons" id="actionButtons"></div>
+      <div class="center-scroll" id="centerScroll">
+        <div class="center-message" id="centerMessage">等待游戏开始...</div>
       </div>
-
-      <div class="confirm-bar" id="confirmBar" style="display:none;">
-        <div id="confirmText">等待全员确认...</div>
-        <div class="confirm-progress">
-          <div class="confirm-progress-fill" id="confirmProgressFill" style="width: 0%"></div>
+      
+      <div class="center-bottom">
+        <div id="actionPanel" class="action-panel" style="display:none;">
+          <div class="action-title" id="actionTitle"></div>
+          <div class="selected-targets" id="selectedTargets"></div>
+          <div class="action-buttons" id="actionButtons"></div>
         </div>
-        <div class="confirm-players" id="confirmPlayers"></div>
-        <button class="btn btn-success btn-sm" id="confirmBtn" style="margin-top: 10px;" onclick="confirmPhase()">我已准备好，进入下一阶段</button>
+
+        <div class="confirm-bar" id="confirmBar" style="display:none;">
+          <div id="confirmText">等待全员确认...</div>
+          <div class="confirm-progress">
+            <div class="confirm-progress-fill" id="confirmProgressFill" style="width: 0%"></div>
+          </div>
+          <div class="confirm-players" id="confirmPlayers"></div>
+          <button class="btn btn-success btn-sm" id="confirmBtn" style="margin-top: 10px;" onclick="confirmPhase()">我已准备好，进入下一阶段</button>
+        </div>
       </div>
     </div>
 
@@ -208,31 +219,30 @@
   </div>
 
   <!-- 角色总览面板 -->
-  <div id="roleOverviewPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
-    <div style="max-width:900px; margin:0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h1 style="color:#3498db; font-size:1.8em;">📖 角色总览</h1>
+  <div id="roleOverviewPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:12px 16px; overflow:hidden;">
+    <div style="max-width:1200px; margin:0 auto; height:100%; display:flex; flex-direction:column;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
+        <h1 style="color:#3498db; font-size:1.4em; margin:0;">📖 角色总览</h1>
         <button class="btn btn-sm btn-secondary" onclick="closeRoleOverview()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
       </div>
 
-      <div style="margin-bottom:20px;">
-        <h2 style="color:#2ecc71; font-size:1.3em; margin-bottom:10px; border-bottom:1px solid rgba(46,204,113,0.3); padding-bottom:8px;">村民</h2>
-        <div id="roTownsfolk" class="role-grid"></div>
-      </div>
-
-      <div style="margin-bottom:20px;">
-        <h2 style="color:#f39c12; font-size:1.3em; margin-bottom:10px; border-bottom:1px solid rgba(243,156,18,0.3); padding-bottom:8px;">外来者</h2>
-        <div id="roOutsider" class="role-grid"></div>
-      </div>
-
-      <div style="margin-bottom:20px;">
-        <h2 style="color:#e74c3c; font-size:1.3em; margin-bottom:10px; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:8px;">爪牙</h2>
-        <div id="roMinion" class="role-grid"></div>
-      </div>
-
-      <div style="margin-bottom:20px;">
-        <h2 style="color:#e74c3c; font-size:1.3em; margin-bottom:10px; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:8px;">恶魔</h2>
-        <div id="roDemon" class="role-grid"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; flex:1; min-height:0; margin-top:10px;">
+        <div style="display:flex; flex-direction:column; min-height:0;">
+          <h2 style="color:#2ecc71; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(46,204,113,0.3); padding-bottom:4px; flex-shrink:0;">村民</h2>
+          <div id="roTownsfolk" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
+        </div>
+        <div style="display:flex; flex-direction:column; min-height:0;">
+          <h2 style="color:#f39c12; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(243,156,18,0.3); padding-bottom:4px; flex-shrink:0;">外来者</h2>
+          <div id="roOutsider" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
+        </div>
+        <div style="display:flex; flex-direction:column; min-height:0;">
+          <h2 style="color:#e74c3c; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:4px; flex-shrink:0;">爪牙</h2>
+          <div id="roMinion" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
+        </div>
+        <div style="display:flex; flex-direction:column; min-height:0;">
+          <h2 style="color:#e74c3c; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:4px; flex-shrink:0;">恶魔</h2>
+          <div id="roDemon" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -282,6 +292,29 @@
       <div id="probSettingsContent"></div>
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
         <button class="btn btn-primary btn-sm" onclick="saveProbConfig()" id="probSaveBtn">💾 保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史记录面板 -->
+  <div id="historyPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:300; padding:20px; overflow-y:auto;">
+    <div style="max-width:1100px; margin:0 auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <h1 id="historyTitle" style="color:#3498db; font-size:1.8em;">📜 历史记录</h1>
+        <div>
+          <button class="btn btn-sm btn-secondary" id="historyBackBtn" onclick="closeHistoryDetail()" style="display:none; background:rgba(52,152,219,0.3); border:1px solid #3498db; color:#85c1e9; margin-right:10px;">← 返回列表</button>
+          <button class="btn btn-sm btn-secondary" onclick="closeHistoryPanel()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+        </div>
+      </div>
+
+      <!-- 历史记录列表 -->
+      <div id="historyList" style="display:block;">
+        <div id="historyListContent"></div>
+      </div>
+
+      <!-- 历史记录详情 -->
+      <div id="historyDetail" style="display:none;">
+        <div id="historyDetailContent"></div>
       </div>
     </div>
   </div>

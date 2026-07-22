@@ -283,8 +283,12 @@ class RoleAllocator {
           message: fakeMsg,
           isDrunk: true,
           isFalse: true,
-          realInfo: { realRole: '酒鬼' }
+          realInfo: { realRole: '酒鬼' },
+          day: 0,
+          phase: 'FIRST_NIGHT',
+          id: 'info_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
         };
+        drunk.privateInfoHistory = [drunk.privateInfo];
         this.engine.io.to(drunk.id).emit('game:privateInfo', drunk.privateInfo);
         this.engine.logAction('PRIVATE_INFO', `${drunk.seat+1}号 ${drunk.name}（酒鬼）以为自己是【${drunk.fakeRole.name}】⚠️【假信息/酒鬼】`, {
           playerId: drunk.id,
@@ -340,8 +344,13 @@ class RoleAllocator {
     const demon = players.find(p => p.role.category === 'DEMON');
     if (!demon) return;
 
-    const redHerring = BalanceSystem.selectRedHerring(players, demon, this.engine);
-    fortuneteller.abilityState.redHerring = redHerring.id;
+    const result = BalanceSystem.selectRedHerring(players, demon, this.engine);
+    fortuneteller.abilityState.redHerring = result.player.id;
+    this.engine.logAction('ABILITY', `占卜师红鲱鱼设置为 ${result.player.seat+1}号 ${result.player.name}（${result.player.role.name}）`, {
+      playerId: fortuneteller.id,
+      redHerringId: result.player.id,
+      probInfo: result.probInfo
+    });
   }
 }
 

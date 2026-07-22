@@ -111,6 +111,8 @@ class VoteManager {
     });
 
     this.engine.broadcastState();
+    // 确保bot管理器立即处理投票阶段
+    this.engine.botManager.notifyAllBots();
   }
 
   processVote(playerId, vote) {
@@ -173,10 +175,9 @@ class VoteManager {
     const eligibleVoters = Array.from(this.engine.room.players.values())
       .filter(p => p.seat !== -1 && (p.isAlive || (p.isDead && p.voteToken > 0)));
 
-    const aliveEligible = eligibleVoters.filter(p => p.isAlive);
-    const allAliveVoted = aliveEligible.every(p => nomination.currentVotes[p.id] !== undefined);
+    const allEligibleVoted = eligibleVoters.every(p => nomination.currentVotes[p.id] !== undefined);
 
-    if (allAliveVoted) {
+    if (allEligibleVoted) {
       setTimeout(() => {
         if (this.engine.room.gameState.phase === PHASES.VOTING) {
           this.endVoting();

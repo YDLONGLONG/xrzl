@@ -57,30 +57,51 @@ class BalanceSystem {
     return Math.min(Math.abs(balanceScore) * mult + base, max);
   }
 
-  // 是否给中毒/醉酒玩家正确信息
-  static shouldGiveCorrectInfo(player, engine) {
+  // 是否给中毒/醉酒玩家正确信息（返回详细信息对象）
+  static shouldGiveCorrectInfo(player, engine, description = '中毒正确信息') {
     const room = engine.room;
     const cfg = this.getConfig(engine);
-    // 配置禁用时，中毒/醉酒永远获得假信息
-    if (cfg && cfg.balance && cfg.balance.poisonedCorrectInfo === false) {
-      return false;
-    }
     const score = this.calculateBalanceScore(room, engine);
     const prob = this.getFavorProbability(score, engine);
-    const threshold = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
 
-    if (player.role.team === 'GOOD' && score < threshold) {
-      return Math.random() < prob;
+    let result = false;
+    let scenario = 'balanced';
+    let threshold = 0;
+
+    // 配置禁用时，中毒/醉酒永远获得假信息
+    if (cfg && cfg.balance && cfg.balance.poisonedCorrectInfo === false) {
+      scenario = 'disabled';
+      threshold = 0;
+      result = false;
+    } else if (player.role.team === 'GOOD' && score < goodWeakTh) {
+      scenario = 'good_weak';
+      threshold = prob;
+      result = Math.random() < prob;
+    } else {
+      scenario = 'balanced';
+      threshold = 0;
+      result = false;
     }
-    return false;
+
+    return {
+      result,
+      balanceScore: score,
+      probability: prob,
+      threshold,
+      scenario,
+      goodWeakThreshold: goodWeakTh,
+      description
+    };
   }
 
-  // 调整信息（中毒时）
-  static adjustInfo(role, correctInfo, player, engine) {
-    if (this.shouldGiveCorrectInfo(player, engine)) {
-      return correctInfo;
+  // 调整信息（中毒时），返回 { info, probInfo }
+  static adjustInfo(role, correctInfo, player, engine, description) {
+    const infoResult = this.shouldGiveCorrectInfo(player, engine, description);
+    if (infoResult.result) {
+      return { info: correctInfo, probInfo: infoResult };
     }
-    return null;
+    return { info: null, probInfo: infoResult };
   }
 
   // 决定假信息方向：true=偏向帮好人（好人弱势，假信息指向邪恶/恶魔），false=偏向帮邪恶（邪恶弱势，假信息指向善良/无恶魔）
@@ -93,16 +114,36 @@ class BalanceSystem {
     const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
 
+    let result;
+    let scenario = 'balanced';
+    let threshold = 0.5;
+
     if (score < goodWeakTh) {
       // 好人弱势：按偏袒概率返回true（帮好人）
-      return Math.random() < prob;
-    }
-    if (score > evilWeakTh) {
+      scenario = 'good_weak';
+      threshold = prob;
+      result = Math.random() < prob;
+    } else if (score > evilWeakTh) {
       // 邪恶弱势：按偏袒概率返回false（帮邪恶=误导好人）
-      return !(Math.random() < prob);
+      scenario = 'evil_weak';
+      threshold = prob;
+      result = !(Math.random() < prob);
+    } else {
+      // 局势均衡：50/50随机
+      scenario = 'balanced';
+      threshold = 0.5;
+      result = Math.random() < 0.5;
     }
-    // 局势均衡：50/50随机
-    return Math.random() < 0.5;
+
+    return {
+      result,
+      balanceScore: score,
+      probability: prob,
+      threshold,
+      scenario,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh
+    };
   }
 
   // 选择red herring位置
@@ -115,26 +156,58 @@ class BalanceSystem {
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
     const favorMinion = cfg ? cfg.balance.redHerringFavorMinion !== false : true;
     const favorGood = cfg ? cfg.balance.redHerringFavorGood !== false : true;
+    const prob = this.getFavorProbability(score, engine);
 
-    // 好人弱势时，red herring倾向选爪牙
+    let scenario = 'balanced';
+    let threshold = 0;
+    let result = null;
+    let favored = false;
+
+    // 好人弱势时，red herring倾向选爪牙（帮好人：让占卜师更容易查到邪恶）
     if (favorMinion && score < goodWeakTh) {
+      scenario = 'good_weak_favor_minion';
+      threshold = prob;
       const minions = candidates.filter(p => p.role.category === 'MINION');
-      if (minions.length > 0 && Math.random() < this.getFavorProbability(score, engine)) {
-        return minions[Math.floor(Math.random() * minions.length)];
+      if (minions.length > 0 && Math.random() < prob) {
+        result = minions[Math.floor(Math.random() * minions.length)];
+        favored = true;
       }
     }
 
-    // 邪恶弱势时，red herring倾向选强好人
-    if (favorGood && score > evilWeakTh) {
+    // 邪恶弱势时，red herring倾向选强好人（帮邪恶：误导好人出强好人）
+    if (!result && favorGood && score > evilWeakTh) {
+      scenario = 'evil_weak_favor_good';
+      threshold = prob;
       const keyGood = candidates.filter(p => 
         p.role.team === 'GOOD' && ['fortuneteller', 'empath', 'chef', 'investigator'].includes(p.role.id)
       );
-      if (keyGood.length > 0 && Math.random() < this.getFavorProbability(score, engine)) {
-        return keyGood[Math.floor(Math.random() * keyGood.length)];
+      if (keyGood.length > 0 && Math.random() < prob) {
+        result = keyGood[Math.floor(Math.random() * keyGood.length)];
+        favored = true;
       }
     }
 
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    if (!result) {
+      scenario = scenario === 'balanced' ? 'random' : scenario + '_fallback';
+      threshold = 1 / candidates.length;
+      result = candidates[Math.floor(Math.random() * candidates.length)];
+      favored = false;
+    }
+
+    return {
+      player: result,
+      probInfo: {
+        type: 'red_herring',
+        balanceScore: score,
+        probability: prob,
+        threshold,
+        scenario,
+        result: favored,
+        description: '占卜师红鲱鱼选择',
+        selectedId: result.id,
+        selectedName: result.name
+      }
+    };
   }
 
   // 市长替死概率

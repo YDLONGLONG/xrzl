@@ -11,9 +11,10 @@ const BalanceSystem = require('./BalanceSystem');
 const BotManager = require('./BotManager');
 
 class GameEngine {
-  constructor(room, io) {
+  constructor(room, io, onSaveHistory = null) {
     this.room = room;
     this.io = io;
+    this._onSaveHistory = onSaveHistory;
     
     // 初始化游戏状态
     this.room.gameState = {
@@ -167,7 +168,8 @@ class GameEngine {
         team: p.role ? p.role.team : null,
         category: p.role ? p.role.category : null,
         voteToken: p.voteToken,
-        privateInfo: p.privateInfo
+        privateInfo: p.privateInfo,
+        privateInfoHistory: p.privateInfoHistory || []
       }));
 
     return {
@@ -202,20 +204,31 @@ class GameEngine {
 
   // 设置玩家私密信息（自动记录真假信息和上帝视角日志）
   setPlayerPrivateInfo(player, info, isFalse = false, realInfo = null) {
-    player.privateInfo = {
+    const gs = this.room.gameState;
+    const infoEntry = {
       ...info,
       isFalse: isFalse,
-      realInfo: isFalse ? realInfo : null
+      realInfo: isFalse ? realInfo : null,
+      day: gs ? (gs.dayCount || 0) : 0,
+      phase: gs ? gs.phase : '',
+      id: 'info_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
     };
+    player.privateInfo = infoEntry;
+    if (!player.privateInfoHistory) player.privateInfoHistory = [];
+    player.privateInfoHistory.push(infoEntry);
     // 通知该玩家
     this.io.to(player.id).emit('game:privateInfo', player.privateInfo);
+    // 通知该玩家完整历史
+    this.io.to(player.id).emit('game:privateInfoHistory', player.privateInfoHistory);
     // 记录到行动日志
     const falseMark = isFalse ? ' ⚠️【假信息】' : '';
+    const probInfo = realInfo && realInfo.probInfo ? realInfo.probInfo : null;
     this.logAction('PRIVATE_INFO', `${player.seat+1}号 ${player.name}（${player.role?.name || '?'}）收到信息：${info.message}${falseMark}`, {
       playerId: player.id,
       info: info.message,
       isFalse,
-      realInfo: isFalse ? realInfo : null
+      realInfo: isFalse ? realInfo : null,
+      probInfo
     });
     // 通知上帝视角玩家更新该玩家信息
     const playerData = {
@@ -233,7 +246,8 @@ class GameEngine {
       team: player.role ? player.role.team : null,
       category: player.role ? player.role.category : null,
       voteToken: player.voteToken,
-      privateInfo: player.privateInfo
+      privateInfo: player.privateInfo,
+      privateInfoHistory: player.privateInfoHistory
     };
     for (const pid of this.godViewPlayers) {
       this.io.to(pid).emit('god:playerUpdate', playerData);
@@ -241,6 +255,7 @@ class GameEngine {
   }
 
   startGame(customRoles = {}) {
+    this.room.startedAt = new Date();
     const seatedPlayers = getSeatedPlayers(this.room);
     if (seatedPlayers.length < this.room.minPlayers) {
       return;
@@ -585,6 +600,7 @@ class GameEngine {
         return role ? role.name : rid;
       }) : null,
       privateInfo: viewer.privateInfo,
+      privateInfoHistory: viewer.privateInfoHistory || [],
       isHost: viewerId === room.hostId,
       probConfig: viewerId === room.hostId ? this.getProbConfig() : null,
       probConfigMeta: viewerId === room.hostId ? PROB_CONFIG_META : null,

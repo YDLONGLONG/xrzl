@@ -16,6 +16,67 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// 历史记录内存存储
+const gameHistory = [];
+const MAX_HISTORY = 50;
+
+function generateHistoryId() {
+  return 'hist_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+}
+
+function saveGameHistory(room, engine, allRoles) {
+  const gs = room.gameState;
+  if (!gs) return;
+  
+  const historyEntry = {
+    id: generateHistoryId(),
+    roomId: room.id,
+    startedAt: room.startedAt || new Date(gs.dayCount === 0 ? Date.now() - 3600000 : Date.now()),
+    endedAt: gs.endedAt || new Date(),
+    winner: gs.winner,
+    winReason: gs.winReason,
+    playerCount: allRoles.length,
+    players: allRoles,
+    actionLog: gs.actionLog.slice(),
+    chatLog: gs.chatLog ? gs.chatLog.slice() : []
+  };
+  
+  gameHistory.unshift(historyEntry);
+  if (gameHistory.length > MAX_HISTORY) {
+    gameHistory.pop();
+  }
+  room.historyId = historyEntry.id;
+}
+
+// 历史记录 API
+app.get('/api/history', (req, res) => {
+  const list = gameHistory.map(h => ({
+    id: h.id,
+    startedAt: h.startedAt,
+    endedAt: h.endedAt,
+    winner: h.winner,
+    winReason: h.winReason,
+    playerCount: h.playerCount,
+    players: h.players.map(p => ({
+      name: p.name,
+      seat: p.seat,
+      roleName: p.roleName,
+      team: p.team,
+      isAlive: p.isAlive,
+      isBot: p.isBot
+    }))
+  }));
+  res.json({ success: true, history: list });
+});
+
+app.get('/api/history/:id', (req, res) => {
+  const entry = gameHistory.find(h => h.id === req.params.id);
+  if (!entry) {
+    return res.status(404).json({ success: false, message: '历史记录不存在' });
+  }
+  res.json({ success: true, data: entry });
+});
+
 // 内存存储
 const rooms = new Map();
 const gameEngines = new Map();
@@ -600,7 +661,9 @@ io.on('connection', (socket) => {
     }
 
     const customRoles = data.customRoles || {};
-    const engine = new GameEngine(room, io);
+    const engine = new GameEngine(room, io, (allRoles) => {
+      saveGameHistory(room, engine, allRoles);
+    });
     gameEngines.set(roomId, engine);
     room.gameStarted = true;
     engine.startGame(customRoles);
@@ -766,7 +829,7 @@ io.on('connection', (socket) => {
   });
 
   // ========== 上帝视角 ==========
-  const GOD_PASSWORD = '123456';
+  const GOD_PASSWORD = '0';
   socket.on('god:login', ({ password }) => {
     const result = getPlayerRoom(socket.id);
     if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }

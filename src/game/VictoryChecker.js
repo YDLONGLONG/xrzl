@@ -60,6 +60,7 @@ class VictoryChecker {
     gs.phase = PHASES.GAME_OVER;
     gs.winner = winner;
     gs.winReason = reason;
+    gs.endedAt = new Date();
 
     this.engine.logAction('GAME_OVER', `游戏结束！${winner === 'GOOD' ? '善良阵营' : '邪恶阵营'}获胜！原因：${reason}`, {
       winner, reason
@@ -73,9 +74,16 @@ class VictoryChecker {
         name: p.name,
         seat: p.seat,
         roleName: p.role.name,
+        roleId: p.role.id,
         team: p.role.team,
-        isAlive: p.isAlive
+        isAlive: p.isAlive,
+        isBot: !!p.isBot
       }));
+
+    // 保存历史记录
+    if (this.engine._onSaveHistory) {
+      this.engine._onSaveHistory(allRoles);
+    }
 
     this.engine.io.to(room.id).emit('game:over', {
       winner,

@@ -149,7 +149,18 @@
   padding: 20px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.center-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding-right: 5px;
+  margin-right: -5px;
+}
+.center-bottom {
+  flex-shrink: 0;
+  margin-top: 15px;
 }
 .center-message {
   text-align: center;
@@ -178,7 +189,6 @@
 }
 
 .action-panel {
-  margin-top: auto;
   padding: 15px;
   background: rgba(0,0,0,0.3);
   border-radius: 8px;
@@ -208,7 +218,7 @@
 
 /* 确认进度 */
 .confirm-bar {
-  margin-top: 15px;
+  margin-top: 12px;
   padding: 10px;
   background: rgba(0,0,0,0.2);
   border-radius: 6px;
@@ -797,9 +807,11 @@
     padding: 12px;
     border-radius: 6px;
     min-height: 0;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+    overflow: hidden;
     padding-bottom: 70px; /* 为聊天按钮留出空间 */
+  }
+  .center-bottom {
+    margin-top: 10px;
   }
   .center-message {
     font-size: 1em;

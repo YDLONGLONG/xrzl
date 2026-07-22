@@ -23,6 +23,33 @@ body {
   min-height: 100vh;
   padding: 20px;
 }
+
+/* 连接状态指示器 */
+.conn-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.conn-connected {
+  background: #2ecc71;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.6);
+}
+.conn-disconnected {
+  background: #e74c3c;
+  box-shadow: 0 0 8px rgba(231, 76, 60, 0.6);
+}
+.conn-connecting {
+  background: #f39c12;
+  box-shadow: 0 0 8px rgba(243, 156, 18, 0.6);
+  animation: conn-pulse 1.5s ease-in-out infinite;
+}
+@keyframes conn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .home-title {
   font-size: 3em;
   color: #d4af37;
@@ -353,6 +380,38 @@ body {
   font-size: 13px;
   color: #aaa;
   line-height: 1.7;
+}
+
+/* 角色总览紧凑模式 */
+.role-grid-compact {
+  grid-template-columns: 1fr;
+  gap: 6px;
+  align-content: start;
+}
+.role-grid-compact .role-card {
+  padding: 8px 10px;
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.role-grid-compact .role-card-name {
+  font-size: 13px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+.role-grid-compact .role-card-team {
+  font-size: 10px;
+  padding: 1px 6px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+.role-grid-compact .role-card-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  flex-basis: 100%;
+  margin-top: 2px;
 }
 
 /* 自定义确认弹窗 */

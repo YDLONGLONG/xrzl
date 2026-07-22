@@ -92,7 +92,7 @@ class DeathManager {
       const { Imp } = require('../roles/Demon');
       sw.role = new Imp();
       // 通知红唇女郎
-      this.engine.io.to(sw.id).emit('game:privateInfo', {
+      this.engine.setPlayerPrivateInfo(sw, {
         type: 'scarletwoman',
         message: '恶魔已死，你成为了新的小恶魔！'
       });

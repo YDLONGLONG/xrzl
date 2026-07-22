@@ -84,6 +84,7 @@ function initSocketEvents() {
   socket.on('connect', () => {
     if (hasLeftRoom) return;
     console.log('已连接到服务器');
+    updateConnStatus('connected');
     // 如果之前有会话，尝试重连
     if (isReconnecting || (myRoomId && myName)) {
       doReconnect();
@@ -93,10 +94,22 @@ function initSocketEvents() {
   socket.on('disconnect', () => {
     if (hasLeftRoom) return;
     console.log('与服务器断开连接');
+    updateConnStatus('disconnected');
     if (myRoomId && myName) {
       showToast('与服务器断开，正在尝试重新连接...');
       isReconnecting = true;
     }
+  });
+
+  socket.on('reconnect_attempt', (attemptNumber) => {
+    if (hasLeftRoom) return;
+    updateConnStatus('connecting');
+  });
+
+  socket.on('connect_error', (error) => {
+    if (hasLeftRoom) return;
+    console.log('连接错误:', error);
+    updateConnStatus('disconnected');
   });
 
   socket.on('room:created', ({ roomId, playerId }) => {
@@ -296,6 +309,33 @@ function initSocketEvents() {
     $('godBtn').style.background = 'rgba(155,89,182,0.3)';
     $('godBtn').style.color = '#d4a5e8';
   });
+}
+
+// ========== 连接状态 ==========
+function updateConnStatus(status) {
+  const dot = $('connStatusDot');
+  const text = $('connStatusText');
+  if (!dot || !text) return;
+
+  dot.className = 'conn-dot';
+  switch (status) {
+    case 'connected':
+      dot.classList.add('conn-connected');
+      text.textContent = '已连接';
+      text.style.color = '#2ecc71';
+      break;
+    case 'disconnected':
+      dot.classList.add('conn-disconnected');
+      text.textContent = '已断开';
+      text.style.color = '#e74c3c';
+      break;
+    case 'connecting':
+    default:
+      dot.classList.add('conn-connecting');
+      text.textContent = '连接中...';
+      text.style.color = '#f39c12';
+      break;
+  }
 }
 
 // ========== 视图切换 ==========
@@ -691,8 +731,14 @@ function renderCenter(state) {
         break;
 
       case 'DEFENSE':
+        const defNom = state.nominations && state.nominations.length > 0 ? state.nominations[state.nominations.length - 1] : null;
+        const defNominator = defNom ? state.players.find(p => p.id === defNom.nominatorId) : null;
+        const defNominee = defNom ? state.players.find(p => p.id === defNom.nomineeId) : null;
+        const nominatorText = defNominator ? `${defNominator.seat+1}号 ${defNominator.name}` : '?';
+        const nomineeText = defNominee ? `${defNominee.seat+1}号 ${defNominee.name}` : '?';
         if (state.currentDefensePlayerId === myId) {
           html = '<div style="color:#e74c3c;">⚖️ 你被提名了！请辩护</div>';
+          html += `<div style="margin-top:8px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominatorText}</span></div>`;
           html += '<div style="margin-top:10px;">辩护完毕后点击按钮进入投票</div>';
           showAction = true;
           $('actionTitle').textContent = '辩护';
@@ -701,6 +747,7 @@ function renderCenter(state) {
         } else {
           const def = state.players.find(p => p.id === state.currentDefensePlayerId);
           html = `<div style="color:#f39c12;">⚖️ ${def ? def.seat+1+'号 '+def.name : ''} 正在辩护...</div>`;
+          html += `<div style="margin-top:8px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominatorText}</span></div>`;
         }
         break;
 
@@ -708,8 +755,12 @@ function renderCenter(state) {
         html = '<div style="color:#e74c3c;">🗳️ 投票中</div>';
         const curNom = state.nominations ? state.nominations[state.nominations.length-1] : null;
         const nominee = curNom ? state.players.find(p => p.id === curNom.nomineeId) : null;
+        const nominator = curNom ? state.players.find(p => p.id === curNom.nominatorId) : null;
         if (nominee) {
           html += `<div style="margin-top:10px; font-size:1.2em;">是否处决 ${nominee.seat+1}号 ${nominee.name}？</div>`;
+          if (nominator) {
+            html += `<div style="margin-top:6px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominator.seat+1}号 ${nominator.name}</span></div>`;
+          }
         }
 
         // 显示赞成/反对/未投票名单
@@ -793,10 +844,34 @@ function renderCenter(state) {
     }
 
     // 统一显示玩家私密信息（所有阶段都显示，不标注真假——仅在上帝视角标注）
-    if (state.privateInfo && state.privateInfo.message) {
+    const infoList = state.privateInfoHistory && state.privateInfoHistory.length > 0 ? state.privateInfoHistory : (state.privateInfo ? [state.privateInfo] : []);
+    if (infoList.length > 0) {
+      // 按天分组
+      const byDay = {};
+      infoList.forEach(info => {
+        const d = info.day !== undefined ? info.day : 0;
+        if (!byDay[d]) byDay[d] = [];
+        byDay[d].push(info);
+      });
+      const days = Object.keys(byDay).map(Number).sort((a,b) => a - b);
+
+      let infoHtml = '';
+      days.forEach(day => {
+        const dayLabel = day === 0 ? '首夜' : `第${day}夜`;
+        infoHtml += `<div style="margin-bottom:6px;">
+          <div style="color:#d4af37; font-size:0.8em; margin-bottom:4px; opacity:0.8;">${dayLabel}</div>`;
+        byDay[day].forEach(info => {
+          infoHtml += `<div style="color:#f0d78c; line-height:1.5; font-size:0.9em; margin-bottom:3px;">· ${escapeHtml(info.message).replace(/\n/g, '<br>')}</div>`;
+        });
+        infoHtml += '</div>';
+      });
+
       html += `<div style="margin-top:15px; padding:12px; background:rgba(212,175,55,0.08); border-left:3px solid #d4af37; border-radius:4px;">
-        <div style="color:#d4af37; font-size:0.85em; margin-bottom:5px; letter-spacing:1px;">📜 你的信息</div>
-        <div style="color:#f0d78c; line-height:1.6;">${state.privateInfo.message}</div>
+        <div style="color:#d4af37; font-size:0.85em; margin-bottom:8px; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
+          <span>📜 你的信息</span>
+          <span style="font-size:0.85em; opacity:0.6;">共 ${infoList.length} 条</span>
+        </div>
+        ${infoHtml}
       </div>`;
     }
   }
@@ -805,6 +880,11 @@ function renderCenter(state) {
   msg.innerHTML = html;
   actionPanel.style.display = showAction || (state.phase === 'DEFENSE' && state.currentDefensePlayerId === myId) || state.phase === 'VOTING' ? 'block' : 'none';
   confirmBar.style.display = showConfirm ? 'block' : 'none';
+  const bottomVisible = (actionPanel.style.display === 'block') || (confirmBar.style.display === 'block');
+  const centerBottom = document.querySelector('.center-bottom');
+  if (centerBottom) {
+    centerBottom.style.display = bottomVisible ? 'block' : 'none';
+  }
 
   if (showConfirm) {
     const confirmed = state.confirmedCount || 0;
@@ -1461,7 +1541,7 @@ function renderGodView() {
 
   // 游戏状态
   const phaseNames = {
-    'LOBBY': '大厅', 'FIRST_NIGHT': '第一夜', 'NIGHT_WAKE': '夜晚唤醒',
+    'LOBBY': '大厅', 'FIRST_NIGHT': '首夜', 'NIGHT_WAKE': '夜晚唤醒',
     'NIGHT': '夜晚', 'DAY_DAWN': '天亮', 'DAY_DISCUSSION': '白天讨论',
     'NOMINATION_PHASE': '提名阶段', 'DEFENSE': '辩护', 'VOTING': '投票',
     'EXECUTION': '处决', 'GAME_OVER': '游戏结束'
@@ -1561,12 +1641,12 @@ function updateGodPlayers() {
     const teamColor = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
     const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
     let infoCell = '<span style="color:#555;">-</span>';
-    if (p.privateInfo && p.privateInfo.message) {
-      const falseStyle = p.privateInfo.isFalse ? 'color:#e74c3c;' : 'color:#f0d78c;';
-      const falseTag = p.privateInfo.isFalse 
-        ? ' <span style="color:#e74c3c;font-weight:bold;font-size:11px;">⚠假</span>' 
-        : ' <span style="color:#2ecc71;font-size:11px;">✓</span>';
-      infoCell = `<span style="${falseStyle} font-size:12px;">${escapeHtml(p.privateInfo.message)}${falseTag}</span>`;
+    const hist = p.privateInfoHistory && p.privateInfoHistory.length > 0 ? p.privateInfoHistory : (p.privateInfo ? [p.privateInfo] : []);
+    if (hist.length > 0) {
+      const latest = hist[hist.length - 1];
+      const falseStyle = latest.isFalse ? 'color:#e74c3c;' : 'color:#f0d78c;';
+      infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message)}">${escapeHtml(latest.message).substring(0, 30)}${latest.message.length > 30 ? '...' : ''}</span>
+        <span style="color:#888; font-size:11px;">(${hist.length}条)</span>`;
     }
     return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05); opacity:${p.isAlive?1:0.5};">
       <td style="padding:8px;">${p.seat+1}</td>
@@ -1589,14 +1669,30 @@ function renderGodPlayer(p, team) {
   if (p.isBot) marks += ' 🤖';
   if (p.isConnected === false) marks += ' 📡断线';
   let infoHtml = '';
-  if (p.privateInfo && p.privateInfo.message) {
-    const falseMark = p.privateInfo.isFalse 
-      ? '<span style="color:#e74c3c; font-weight:bold;"> ⚠️假信息</span>' 
-      : '<span style="color:#2ecc71;"> ✓真</span>';
-    infoHtml = `<div style="font-size:12px; margin-left:20px; margin-top:3px; padding:4px 8px; background:rgba(0,0,0,0.2); border-radius:3px;">
-      <span style="color:#d4af37;">💬</span>
-      <span style="color:${p.privateInfo.isFalse ? '#e74c3c' : '#f0d78c'};">${escapeHtml(p.privateInfo.message)}</span>
-      ${falseMark}
+  const infoHist = p.privateInfoHistory && p.privateInfoHistory.length > 0 ? p.privateInfoHistory : (p.privateInfo ? [p.privateInfo] : []);
+  if (infoHist.length > 0) {
+    // 按天分组
+    const byDay = {};
+    infoHist.forEach(info => {
+      const d = info.day !== undefined ? info.day : 0;
+      if (!byDay[d]) byDay[d] = [];
+      byDay[d].push(info);
+    });
+    const days = Object.keys(byDay).map(Number).sort((a,b) => a - b);
+    let dayHtml = '';
+    days.forEach(day => {
+      const dayLabel = day === 0 ? '第一夜' : `第${day}夜`;
+      dayHtml += `<div style="margin-bottom:3px;"><span style="color:#d4af37; font-size:11px; opacity:0.7;">${dayLabel}</span></div>`;
+      byDay[day].forEach(info => {
+        const falseMark = info.isFalse 
+          ? '<span style="color:#e74c3c; font-weight:bold; font-size:11px;"> ⚠️假</span>' 
+          : '<span style="color:#2ecc71; font-size:11px;"> ✓</span>';
+        dayHtml += `<div style="font-size:11.5px; line-height:1.4; color:${info.isFalse ? '#e74c3c' : '#f0d78c'}; margin-left:10px; margin-bottom:2px;">· ${escapeHtml(info.message)}${falseMark}</div>`;
+      });
+    });
+    infoHtml = `<div style="margin-left:20px; margin-top:3px; padding:6px 8px; background:rgba(0,0,0,0.2); border-radius:3px;">
+      <div style="color:#d4af37; font-size:11px; margin-bottom:3px;">💬 信息（${infoHist.length}条）</div>
+      ${dayHtml}
     </div>`;
   }
   return `<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05); ${deadStyle}">
@@ -1605,6 +1701,57 @@ function renderGodPlayer(p, team) {
     <span style="color:#d4af37; margin-left:8px;">【${p.roleName}】</span>
     ${marks}
     ${infoHtml}
+  </div>`;
+}
+
+function formatProbInfo(pi) {
+  if (!pi) return '';
+  const probPct = (pi.probability * 100).toFixed(1);
+  const threshPct = (pi.threshold * 100).toFixed(1);
+  
+  let resultText, resultColor;
+  if (pi.type === 'red_herring' || pi.type === 'balance_favor') {
+    resultText = pi.result ? '✅ 偏袒生效' : '❌ 偏袒未触发';
+  } else if (pi.description && pi.description.includes('中毒正确信息')) {
+    resultText = pi.result ? '✅ 给了正确信息' : '❌ 给了假信息';
+  } else if (pi.type === 'mayor_save') {
+    resultText = pi.result ? '✅ 替死成功' : '❌ 替死失败';
+  } else {
+    resultText = pi.result ? '✅ 命中' : '❌ 未命中';
+  }
+  resultColor = pi.result ? '#2ecc71' : '#e74c3c';
+  
+  let scenarioText = '';
+  if (pi.scenario === 'good_weak') scenarioText = '好人弱势（帮好人）';
+  else if (pi.scenario === 'evil_weak') scenarioText = '邪恶弱势（帮邪恶）';
+  else if (pi.scenario === 'balanced') scenarioText = '局势均衡';
+  else if (pi.scenario === 'disabled') scenarioText = '已禁用';
+  else if (pi.scenario === 'good_weak_favor_minion') scenarioText = '好人弱势（帮好人）→ 红鲱鱼选爪牙';
+  else if (pi.scenario === 'evil_weak_favor_good') scenarioText = '邪恶弱势（帮邪恶）→ 红鲱鱼选强好人';
+  else if (pi.scenario === 'random') scenarioText = '纯随机';
+  else if (pi.scenario && pi.scenario.endsWith('_fallback')) scenarioText = '偏袒未触发 → 回退随机';
+  else scenarioText = pi.scenario || '未知';
+  
+  let extraInfo = '';
+  if (pi.baseProbability !== undefined) {
+    extraInfo += `<div>基础概率：<span style="color:#f0d78c;">${(pi.baseProbability * 100).toFixed(1)}%</span></div>`;
+  }
+  if (pi.goodWeakThreshold !== undefined) {
+    extraInfo += `<div>好人弱势阈值：${(pi.goodWeakThreshold * 100).toFixed(0)}%</div>`;
+  }
+  if (pi.evilWeakThreshold !== undefined) {
+    extraInfo += `<div>邪恶弱势阈值：${(pi.evilWeakThreshold * 100).toFixed(0)}%</div>`;
+  }
+  if (pi.selectedName) {
+    extraInfo += `<div>选中玩家：${pi.selectedName}</div>`;
+  }
+  
+  return `<div style="margin-left:20px; margin-top:4px; padding:6px 10px; background:rgba(0,0,0,0.25); border-radius:4px; border-left:2px solid #d4af37; font-size:12px; color:#ccc; line-height:1.6;">
+    <div><span style="color:#d4af37;">📊 ${pi.description || '概率事件'}</span></div>
+    <div>局势：${scenarioText}（平衡分：${pi.balanceScore !== undefined ? pi.balanceScore.toFixed(3) : 'N/A'}）</div>
+    <div>概率：<span style="color:#f0d78c; font-weight:bold;">${probPct}%</span>（阈值：${threshPct}%）</div>
+    ${extraInfo}
+    <div>结果：<span style="color:${resultColor}; font-weight:bold;">${resultText}</span></div>
   </div>`;
 }
 
@@ -1624,7 +1771,8 @@ function appendGodLogEntry(entry) {
     'EXECUTION': '#e74c3c',
     'GAME_OVER': '#fff',
     'PRIVATE_INFO': '#1abc9c',
-    'ABILITY': '#e67e22'
+    'ABILITY': '#e67e22',
+    'CUSTOM_ASSIGN': '#d4af37'
   };
   const color = typeColors[entry.type] || '#aaa';
   let msg = entry.message;
@@ -1633,9 +1781,18 @@ function appendGodLogEntry(entry) {
   } else {
     msg = escapeHtml(msg);
   }
+
+  let probHtml = '';
+  if (entry.data) {
+    const probInfos = [];
+    if (entry.data.probInfo) probInfos.push(entry.data.probInfo);
+    if (entry.data.correctProbInfo) probInfos.push(entry.data.correctProbInfo);
+    probHtml = probInfos.map(pi => formatProbInfo(pi)).join('');
+  }
+
   const div = document.createElement('div');
-  div.style.cssText = `color:${color}; padding:2px 0;`;
-  div.innerHTML = `<span style="color:#666;">[${entry.time}]</span> ${msg}`;
+  div.style.cssText = `color:${color}; padding:2px 0; line-height:1.5;`;
+  div.innerHTML = `<span style="color:#666;">[${entry.time}]</span> ${msg}${probHtml}`;
   logContainer.appendChild(div);
 }
 
@@ -2519,5 +2676,226 @@ async function resetProbConfig() {
   _probShowAdvanced = false;
   _updateModeButtons();
   socket.emit('room:resetProbConfig');
+}
+
+// ========== 历史记录功能 ==========
+function openHistoryPanel() {
+  const panel = $('historyPanel');
+  if (!panel) return;
+  panel.style.display = 'block';
+  closeHistoryDetail();
+  loadHistoryList();
+}
+
+function closeHistoryPanel() {
+  const panel = $('historyPanel');
+  if (panel) panel.style.display = 'none';
+}
+
+function closeHistoryDetail() {
+  $('historyList').style.display = 'block';
+  $('historyDetail').style.display = 'none';
+  $('historyBackBtn').style.display = 'none';
+  $('historyTitle').textContent = '📜 历史记录';
+}
+
+function formatHistoryTime(date) {
+  if (!date) return '未知时间';
+  const d = new Date(date);
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+async function loadHistoryList() {
+  const container = $('historyListContent');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center; color:#aaa; padding:40px;">加载中...</div>';
+  
+  try {
+    const res = await fetch('/api/history');
+    const data = await res.json();
+    if (!data.success) {
+      container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      return;
+    }
+    const list = data.history || [];
+    if (list.length === 0) {
+      container.innerHTML = '<div style="text-align:center; color:#aaa; padding:60px;">暂无历史记录，完成一局游戏后会显示在这里</div>';
+      return;
+    }
+    
+    let html = '';
+    list.forEach(h => {
+      const winnerColor = h.winner === 'GOOD' ? '#2ecc71' : '#e74c3c';
+      const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
+      const endedTime = formatHistoryTime(h.endedAt);
+      
+      // 计算游戏时长
+      let durationText = '';
+      if (h.startedAt && h.endedAt) {
+        const duration = new Date(h.endedAt) - new Date(h.startedAt);
+        const mins = Math.floor(duration / 60000);
+        if (mins >= 60) {
+          durationText = `${Math.floor(mins/60)}小时${mins%60}分钟`;
+        } else if (mins > 0) {
+          durationText = `${mins}分钟`;
+        }
+      }
+
+      const goodPlayers = h.players.filter(p => p.team === 'GOOD').sort((a,b) => a.seat - b.seat);
+      const evilPlayers = h.players.filter(p => p.team === 'EVIL').sort((a,b) => a.seat - b.seat);
+      const aliveCount = h.players.filter(p => p.isAlive).length;
+      const botCount = h.players.filter(p => p.isBot).length;
+
+      // 按座位排序的所有玩家
+      const allPlayers = [...h.players].sort((a,b) => a.seat - b.seat);
+
+      // 生成玩家标签
+      function playerTag(p) {
+        const color = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
+        const aliveIcon = p.isAlive ? '' : ' <span style="opacity:0.5;">☠</span>';
+        const botIcon = p.isBot ? ' <span style="font-size:10px; color:#888;">🤖</span>' : '';
+        return `<span style="display:inline-block; background:rgba(0,0,0,0.25); border:1px solid ${color}55; border-radius:4px; padding:2px 6px; margin:2px; font-size:12px; color:${color};">${p.seat+1}号 ${escapeHtml(p.name)} <span style="opacity:0.7;">(${escapeHtml(p.roleName)})</span>${aliveIcon}${botIcon}</span>`;
+      }
+      
+      html += `<div style="background:rgba(0,0,0,0.3); border:1px solid rgba(52,152,219,0.3); border-radius:8px; padding:15px; margin-bottom:12px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#3498db';this.style.background='rgba(52,152,219,0.1)'" onmouseout="this.style.borderColor='rgba(52,152,219,0.3)';this.style.background='rgba(0,0,0,0.3)'" onclick="viewHistoryDetail('${h.id}')">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:1.2em; font-weight:bold;">
+            <span style="color:${winnerColor};">${winnerText}</span>
+          </div>
+          <div style="color:#888; font-size:13px;">${endedTime}</div>
+        </div>
+        <div style="color:#aaa; font-size:13px; margin-bottom:8px;">${escapeHtml(h.winReason || '')}</div>
+        <div style="display:flex; gap:15px; flex-wrap:wrap; color:#aaa; font-size:12px; margin-bottom:10px;">
+          <span>👥 ${h.playerCount}人${botCount > 0 ? `（${botCount}AI）` : ''}</span>
+          ${durationText ? `<span>⏱ ${durationText}</span>` : ''}
+          <span>💀 ${aliveCount}人存活</span>
+        </div>
+        <div style="margin-top:6px;">
+          <div style="font-size:12px; margin-bottom:4px;">
+            <span style="color:#2ecc71;">善良阵营</span>
+            <span style="color:#666; margin-left:4px;">（${goodPlayers.length}人）</span>
+          </div>
+          <div>${goodPlayers.map(playerTag).join('')}</div>
+        </div>
+        <div style="margin-top:8px;">
+          <div style="font-size:12px; margin-bottom:4px;">
+            <span style="color:#e74c3c;">邪恶阵营</span>
+            <span style="color:#666; margin-left:4px;">（${evilPlayers.length}人）</span>
+          </div>
+          <div>${evilPlayers.map(playerTag).join('')}</div>
+        </div>
+      </div>`;
+    });
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
+  }
+}
+
+async function viewHistoryDetail(historyId) {
+  const container = $('historyDetailContent');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center; color:#aaa; padding:40px;">加载中...</div>';
+  $('historyList').style.display = 'none';
+  $('historyDetail').style.display = 'block';
+  $('historyBackBtn').style.display = 'inline-block';
+  $('historyTitle').textContent = '📜 游戏详情';
+  
+  try {
+    const res = await fetch(`/api/history/${historyId}`);
+    const data = await res.json();
+    if (!data.success) {
+      container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      return;
+    }
+    const h = data.data;
+    
+    const winnerColor = h.winner === 'GOOD' ? '#2ecc71' : '#e74c3c';
+    const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
+    
+    let html = `
+      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:20px; margin-bottom:20px;">
+        <div style="font-size:1.5em; font-weight:bold; color:${winnerColor}; margin-bottom:10px;">${winnerText}</div>
+        <div style="color:#aaa; margin-bottom:10px;">${h.winReason}</div>
+        <div style="color:#888; font-size:13px;">开始时间：${formatHistoryTime(h.startedAt)} | 结束时间：${formatHistoryTime(h.endedAt)} | 玩家数：${h.playerCount}</div>
+      </div>
+      
+      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px; margin-bottom:20px;">
+        <h3 style="color:#d4af37; margin-bottom:12px;">👥 玩家角色</h3>
+        <table style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.2);">
+              <th style="padding:8px; text-align:left; color:#aaa;">座位</th>
+              <th style="padding:8px; text-align:left; color:#aaa;">昵称</th>
+              <th style="padding:8px; text-align:left; color:#aaa;">角色</th>
+              <th style="padding:8px; text-align:left; color:#aaa;">阵营</th>
+              <th style="padding:8px; text-align:left; color:#aaa;">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${h.players.sort((a,b) => a.seat - b.seat).map(p => {
+              const teamColor = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
+              const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
+              const statusText = p.isAlive ? '存活' : '死亡';
+              const statusColor = p.isAlive ? '#2ecc71' : '#888';
+              const botMark = p.isBot ? ' 🤖' : '';
+              return `<tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                <td style="padding:8px;">${p.seat+1}号</td>
+                <td style="padding:8px;">${p.name}${botMark}</td>
+                <td style="padding:8px; font-weight:bold;">${p.roleName}</td>
+                <td style="padding:8px; color:${teamColor};">${teamText}</td>
+                <td style="padding:8px; color:${statusColor};">${statusText}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      
+      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px;">
+        <h3 style="color:#d4af37; margin-bottom:12px;">📋 行动日志</h3>
+        <div id="historyActionLog" style="max-height:600px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.8; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+          ${(h.actionLog || []).map(entry => {
+            const typeColors = {
+              'ROLE_ASSIGN': '#d4af37',
+              'GAME_START': '#fff',
+              'NIGHT_WAKE': '#9b59b6',
+              'NIGHT_ACTION': '#9b59b6',
+              'NIGHT_END': '#3498db',
+              'DEATH': '#e74c3c',
+              'NOMINATION': '#f39c12',
+              'VOTE_RESULT': '#f39c12',
+              'EXECUTION': '#e74c3c',
+              'GAME_OVER': '#fff',
+              'PRIVATE_INFO': '#1abc9c',
+              'ABILITY': '#e67e22',
+              'CUSTOM_ASSIGN': '#d4af37'
+            };
+            const color = typeColors[entry.type] || '#aaa';
+            let msg = entry.message;
+            if (entry.type === 'PRIVATE_INFO' && entry.data && entry.data.isFalse) {
+              msg = `<span style="color:#e74c3c;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
+            } else {
+              msg = escapeHtml(msg);
+            }
+            
+            let probHtml = '';
+            if (entry.data) {
+              const probInfos = [];
+              if (entry.data.probInfo) probInfos.push(entry.data.probInfo);
+              if (entry.data.correctProbInfo) probInfos.push(entry.data.correctProbInfo);
+              probHtml = probInfos.map(pi => formatProbInfo(pi)).join('');
+            }
+            
+            return `<div style="color:${color}; padding:2px 0;">
+              <span style="color:#666;">[${entry.time}]</span> ${msg}${probHtml}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
+  }
 }
 

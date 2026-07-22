@@ -116,9 +116,20 @@ class Drunk extends Role {
     
     // 给酒鬼一个无意义的确认信息
     let fakeMsg = '你执行了行动';
+    let probInfo = null;
     if (fake.id === 'fortuneteller' && targets.length === 2) {
       // 假信息方向由平衡系统决定：好人弱势→"有恶魔"（帮好人调查），邪恶弱势→"没有恶魔"（误导好人）
-      const helpGood = engine.balanceSystem.favorWeakSide(engine);
+      const favorResult = engine.balanceSystem.favorWeakSide(engine);
+      const helpGood = favorResult.result;
+      probInfo = {
+        type: 'balance_favor',
+        balanceScore: favorResult.balanceScore,
+        probability: favorResult.probability,
+        threshold: favorResult.threshold,
+        scenario: favorResult.scenario,
+        result: helpGood,
+        description: '酒鬼占卜师假信息方向'
+      };
       fakeMsg = helpGood ? '你选择的玩家中有恶魔' : '你选择的玩家中没有恶魔';
     } else if (fake.id === 'monk' && targets.length === 1) {
       fakeMsg = `你守护了 ${targetNames || '某玩家'}`;
@@ -130,7 +141,7 @@ class Drunk extends Role {
       type: 'drunk_action',
       message: fakeMsg,
       isDrunk: true
-    }, true, { realInfo: '酒鬼无技能' });
+    }, true, { realInfo: '酒鬼无技能', probInfo });
     
     return { success: true };
   }

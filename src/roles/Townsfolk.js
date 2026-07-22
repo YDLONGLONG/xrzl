@@ -37,10 +37,12 @@ class Washerwoman extends Role {
     let isFalse = false;
     let realRoleName = townsfolk.role.name;
     
+    let probInfo = null;
     if (player.isPoisoned) {
       const correctInfo = { roleName, pair };
-      const adjusted = engine.balanceSystem.adjustInfo(this, correctInfo, player, engine);
-      if (adjusted === null) {
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, correctInfo, player, engine, '洗衣妇中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info === null) {
         realRoleName = roleName;
         isFalse = true;
         const otherTowns = townsfolkCandidates.filter(p => p.id !== townsfolk.id);
@@ -50,12 +52,13 @@ class Washerwoman extends Role {
       }
     }
     
+    const realData = isFalse ? { realRoleName: realRoleName, realPlayerId: townsfolk.id, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'washerwoman',
       players: pair.map(p => ({ id: p.id, name: p.name, seat: p.seat })),
       roleName: roleName,
       message: `${pair[0].seat+1}号(${pair[0].name})和${pair[1].seat+1}号(${pair[1].name})中，有一位是【${roleName}】`
-    }, isFalse, isFalse ? { realRoleName: realRoleName, realPlayerId: townsfolk.id } : null);
+    }, isFalse, realData);
   }
 }
 
@@ -86,20 +89,22 @@ class Librarian extends Role {
     if (outsiderCandidates.length === 0) {
       let msg = '本局游戏没有外来者';
       let isFalse = false;
+      let probInfo = null;
       if (player.isPoisoned) {
-        const adjusted = engine.balanceSystem.adjustInfo(this, msg, player, engine);
-        if (adjusted === null) {
+        const adjustedResult = engine.balanceSystem.adjustInfo(this, msg, player, engine, '图书管理员中毒正确信息（无外来者）');
+        probInfo = adjustedResult.probInfo;
+        if (adjustedResult.info === null) {
           isFalse = true;
           const fakeOutsider = randomChoice(alive);
           msg = `${fakeOutsider.seat+1}号(${fakeOutsider.name})附近有外来者`;
           engine.setPlayerPrivateInfo(player, {
             type: 'librarian',
             message: msg
-          }, isFalse, { realMessage: '本局游戏没有外来者' });
+          }, isFalse, { realMessage: '本局游戏没有外来者', probInfo });
           return;
         }
       }
-      engine.setPlayerPrivateInfo(player, { type: 'librarian', message: msg }, isFalse, isFalse ? { realMessage: msg } : null);
+      engine.setPlayerPrivateInfo(player, { type: 'librarian', message: msg }, isFalse, probInfo ? { probInfo } : null);
       return;
     }
     
@@ -111,21 +116,24 @@ class Librarian extends Role {
     let roleName = outsider.role.category === 'OUTSIDER' ? outsider.role.name : randomChoice(['圣徒','管家','酒鬼','隐士']);
     let isFalse = false;
     let realRoleName = outsider.role.name;
+    let probInfo = null;
     if (player.isPoisoned) {
-      const adjusted = engine.balanceSystem.adjustInfo(this, roleName, player, engine);
-      if (adjusted === null) {
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, roleName, player, engine, '图书管理员中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info === null) {
         isFalse = true;
         const outNames = ['圣徒','管家','酒鬼','隐士'];
         roleName = randomChoice(outNames.filter(n => n !== roleName));
       }
     }
     
+    const realData = isFalse ? { realRoleName, realPlayerId: outsider.id, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'librarian',
       players: pair.map(p => ({ id: p.id, name: p.name, seat: p.seat })),
       roleName: roleName,
       message: `${pair[0].seat+1}号(${pair[0].name})和${pair[1].seat+1}号(${pair[1].name})中，有一位是【${roleName}】`
-    }, isFalse, isFalse ? { realRoleName, realPlayerId: outsider.id } : null);
+    }, isFalse, realData);
   }
 }
 
@@ -167,21 +175,24 @@ class Investigator extends Role {
     let roleName = minion.role.category === 'MINION' ? minion.role.name : randomChoice(['下毒者','红唇女郎','男爵','间谍']);
     let isFalse = false;
     let realRoleName = minion.role.name;
+    let probInfo = null;
     if (player.isPoisoned) {
-      const adjusted = engine.balanceSystem.adjustInfo(this, roleName, player, engine);
-      if (adjusted === null) {
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, roleName, player, engine, '调查员中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info === null) {
         isFalse = true;
         const allMinionNames = ['下毒者','红唇女郎','男爵','间谍'];
         roleName = randomChoice(allMinionNames.filter(n => n !== roleName));
       }
     }
     
+    const realData = isFalse ? { realRoleName, realPlayerId: minion.id, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'investigator',
       players: pair.map(p => ({ id: p.id, name: p.name, seat: p.seat })),
       roleName: roleName,
       message: `${pair[0].seat+1}号(${pair[0].name})和${pair[1].seat+1}号(${pair[1].name})中，有一位是【${roleName}】`
-    }, isFalse, isFalse ? { realRoleName, realPlayerId: minion.id } : null);
+    }, isFalse, realData);
   }
 }
 
@@ -223,22 +234,25 @@ class Chef extends Role {
     let info = evilPairs;
     let isFalse = false;
     let realInfo = evilPairs;
+    let probInfo = null;
     if (player.isPoisoned) {
       const possible = [0, 1, 2, 3, 4].filter(n => n !== evilPairs);
-      const adjusted = engine.balanceSystem.adjustInfo(this, evilPairs, player, engine);
-      if (adjusted !== null) {
-        info = adjusted;
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, evilPairs, player, engine, '厨师中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info !== null) {
+        info = adjustedResult.info;
       } else {
         isFalse = true;
         info = randomChoice(possible);
       }
     }
     
+    const realData = isFalse ? { realCount: realInfo, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'chef',
       count: info,
       message: `邪恶玩家相邻的对数是：${info}`
-    }, isFalse, isFalse ? { realCount: realInfo } : null);
+    }, isFalse, realData);
   }
 }
 
@@ -271,23 +285,26 @@ class Empath extends Role {
     let info = evilCount;
     let isFalse = false;
     let realInfo = evilCount;
+    let probInfo = null;
     if (player.isPoisoned) {
       const possible = [0, 1, 2].filter(n => n !== evilCount);
-      const adjusted = engine.balanceSystem.adjustInfo(this, evilCount, player, engine);
-      if (adjusted !== null) {
-        info = adjusted;
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, evilCount, player, engine, '共情者中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info !== null) {
+        info = adjustedResult.info;
       } else {
         isFalse = true;
         info = randomChoice(possible);
       }
     }
     
+    const realData = isFalse ? { realCount: realInfo, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'empath',
       count: info,
       neighbors: neighbors.map(n => ({ id: n.id, seat: n.seat, name: n.name })),
       message: `你的存活邻居中有 ${info} 名邪恶玩家`
-    }, isFalse, isFalse ? { realCount: realInfo } : null);
+    }, isFalse, realData);
   }
 }
 
@@ -336,16 +353,19 @@ class Fortuneteller extends Role {
     let result = hasDemon;
     let isFalse = false;
     let realResult = hasDemon;
+    let probInfo = null;
     if (player.isPoisoned) {
-      const adjusted = engine.balanceSystem.adjustInfo(this, hasDemon, player, engine);
-      if (adjusted !== null) {
-        result = adjusted;
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, hasDemon, player, engine, '占卜师中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info !== null) {
+        result = adjustedResult.info;
       } else {
         isFalse = true;
         result = !hasDemon;
       }
     }
     
+    const realData = isFalse ? { realResult, redHerringId: redHerring, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'fortuneteller',
       targets: targets.map(id => {
@@ -354,7 +374,7 @@ class Fortuneteller extends Role {
       }),
       result: result,
       message: result ? '你选择的玩家中有恶魔' : '你选择的玩家中没有恶魔'
-    }, isFalse, isFalse ? { realResult, redHerringId: redHerring } : null);
+    }, isFalse, realData);
     
     return { success: true };
   }
@@ -518,8 +538,32 @@ class Mayor extends Role {
 
   onDeath(gameState, player, cause, engine) {
     if (cause === 'DEMON' && !player.isPoisoned) {
+      const score = engine.balanceSystem.calculateBalanceScore(engine.room, engine);
       const prob = engine.balanceSystem.getMayorSaveProbability(engine);
-      if (Math.random() < prob) {
+      const cfg = engine.probConfig;
+      const goodWeakTh = cfg && cfg.balance ? cfg.balance.goodWeakThreshold : -0.2;
+      const evilWeakTh = cfg && cfg.balance ? cfg.balance.evilWeakThreshold : 0.3;
+      const base = cfg && cfg.balance ? cfg.balance.mayorSaveBase : 0.5;
+      
+      let scenario = 'balanced';
+      if (score < goodWeakTh) scenario = 'good_weak';
+      else if (score > evilWeakTh) scenario = 'evil_weak';
+      
+      const saved = Math.random() < prob;
+      const probInfo = {
+        type: 'mayor_save',
+        balanceScore: score,
+        probability: prob,
+        threshold: prob,
+        scenario,
+        result: saved,
+        goodWeakThreshold: goodWeakTh,
+        evilWeakThreshold: evilWeakTh,
+        baseProbability: base,
+        description: '市长替死概率'
+      };
+      
+      if (saved) {
         const others = getAlivePlayers(engine.room).filter(p => p.id !== player.id);
         if (others.length > 0) {
           const sacrifice = randomChoice(others);
@@ -528,10 +572,14 @@ class Mayor extends Role {
           player.deathNight = -1;
           engine.deathManager.killPlayerDirect(sacrifice.id, 'MAYOR_SAVE', gameState.nightCount, gameState.dayCount);
           engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的死亡被 ${sacrifice.seat+1}号 ${sacrifice.name} 代替`, {
-            playerId: player.id, sacrificeId: sacrifice.id
+            playerId: player.id, sacrificeId: sacrifice.id, probInfo
           });
           return { revived: true, sacrifice: sacrifice.id };
         }
+      } else {
+        engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）替死失败，正常死亡`, {
+          playerId: player.id, probInfo
+        });
       }
     }
     return {};
@@ -577,15 +625,18 @@ class Undertaker extends Role {
     let roleName = executed.role.name;
     let isFalse = false;
     let realRoleName = roleName;
+    let probInfo = null;
     if (player.isPoisoned) {
-      const adjusted = engine.balanceSystem.adjustInfo(this, { roleName }, player, engine);
-      if (adjusted === null) {
+      const adjustedResult = engine.balanceSystem.adjustInfo(this, { roleName }, player, engine, '掘墓人中毒正确信息');
+      probInfo = adjustedResult.probInfo;
+      if (adjustedResult.info === null) {
         isFalse = true;
         const otherRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','僧侣','守鸦人','圣女','杀手','士兵','市长','掘墓人','圣徒','管家','酒鬼','隐士','下毒者','红唇女郎','男爵','间谍'];
         roleName = otherRoles[Math.floor(Math.random() * otherRoles.length)];
       }
     }
     
+    const realData = isFalse ? { realRoleName, probInfo } : (probInfo ? { probInfo } : null);
     engine.setPlayerPrivateInfo(player, {
       type: 'undertaker',
       executedId: executed.id,
@@ -593,7 +644,7 @@ class Undertaker extends Role {
       executedName: executed.name,
       roleName: roleName,
       message: `今天白天被处决的 ${executed.seat+1}号 ${executed.name} 是【${roleName}】`
-    }, isFalse, isFalse ? { realRoleName } : null);
+    }, isFalse, realData);
   }
 }
 
