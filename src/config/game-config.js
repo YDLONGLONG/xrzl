@@ -1,7 +1,7 @@
-// 游戏配置 - 灾祸之酿剧本
+// 游戏配置 - 多剧本支持
 
 // 人数配置：[玩家数, 村民, 外来者, 爪牙, 恶魔]
-// 注意：如果有男爵在场，外来者+2、村民-2（在allocate时动态调整）
+// 注意：如果有男爵(TB)在场，外来者+2、村民-2；如果有教父(BMR)在场，外来者+1或-1
 const ROLE_COMPOSITION = [
   [5, 3, 0, 1, 1],
   [6, 3, 1, 1, 1],
@@ -16,19 +16,26 @@ const ROLE_COMPOSITION = [
   [15, 9, 2, 3, 1]
 ];
 
-function getRoleComposition(playerCount, hasBaron) {
+function getRoleComposition(playerCount, hasSetupChar, setupType = 'baron') {
   const entry = ROLE_COMPOSITION.find(c => c[0] === playerCount);
   if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
   let townsfolk = entry[1];
   let outsider = entry[2];
-  if (hasBaron) {
-    townsfolk -= 2;
-    outsider += 2;
+  if (hasSetupChar) {
+    if (setupType === 'baron') {
+      townsfolk -= 2;
+      outsider += 2;
+    } else if (setupType === 'godfather') {
+      // 教父：外来者+1或-1
+      const delta = Math.random() < 0.5 ? 1 : -1;
+      outsider = Math.max(0, outsider + delta);
+      townsfolk = Math.max(0, townsfolk - delta);
+    }
   }
   return { townsfolk, outsider, minion: entry[3], demon: entry[4] };
 }
 
-// 角色ID定义
+// ==================== 灾祸之酿 (TB) ====================
 const ROLE_IDS = {
   // 村民
   WASHERWOMAN: 'washerwoman',
@@ -58,91 +65,157 @@ const ROLE_IDS = {
   IMP: 'imp'
 };
 
-// 所有村民角色
 const TOWNSFOLK_ROLES = [
-  ROLE_IDS.WASHERWOMAN,
-  ROLE_IDS.LIBRARIAN,
-  ROLE_IDS.INVESTIGATOR,
-  ROLE_IDS.CHEF,
-  ROLE_IDS.EMPATH,
-  ROLE_IDS.FORTUNETELLER,
-  ROLE_IDS.MONK,
-  ROLE_IDS.RAVENKEEPER,
-  ROLE_IDS.VIRGIN,
-  ROLE_IDS.SLAYER,
-  ROLE_IDS.SOLDIER,
-  ROLE_IDS.MAYOR,
-  ROLE_IDS.UNDERTAKER
+  ROLE_IDS.WASHERWOMAN, ROLE_IDS.LIBRARIAN, ROLE_IDS.INVESTIGATOR,
+  ROLE_IDS.CHEF, ROLE_IDS.EMPATH, ROLE_IDS.FORTUNETELLER,
+  ROLE_IDS.MONK, ROLE_IDS.RAVENKEEPER, ROLE_IDS.VIRGIN,
+  ROLE_IDS.SLAYER, ROLE_IDS.SOLDIER, ROLE_IDS.MAYOR, ROLE_IDS.UNDERTAKER
 ];
 
-// 所有外来者角色
-const OUTSIDER_ROLES = [
-  ROLE_IDS.SAINT,
-  ROLE_IDS.BUTLER,
-  ROLE_IDS.DRUNK,
-  ROLE_IDS.RECLUSE
-];
-
-// 所有爪牙角色
-const MINION_ROLES = [
-  ROLE_IDS.POISONER,
-  ROLE_IDS.SCARLETWOMAN,
-  ROLE_IDS.BARON,
-  ROLE_IDS.SPY
-];
-
-// 所有恶魔角色
-const DEMON_ROLES = [
-  ROLE_IDS.IMP
-];
-
+const OUTSIDER_ROLES = [ROLE_IDS.SAINT, ROLE_IDS.BUTLER, ROLE_IDS.DRUNK, ROLE_IDS.RECLUSE];
+const MINION_ROLES = [ROLE_IDS.POISONER, ROLE_IDS.SCARLETWOMAN, ROLE_IDS.BARON, ROLE_IDS.SPY];
+const DEMON_ROLES = [ROLE_IDS.IMP];
 const ALL_ROLES = [...TOWNSFOLK_ROLES, ...OUTSIDER_ROLES, ...MINION_ROLES, ...DEMON_ROLES];
 
-// 第一夜行动顺序（角色ID）
 const FIRST_NIGHT_ORDER = [
-  ROLE_IDS.POISONER,
-  ROLE_IDS.BUTLER,
-  ROLE_IDS.SPY,
-  ROLE_IDS.IMP, // 恶魔得知信息
-  ROLE_IDS.WASHERWOMAN,
-  ROLE_IDS.LIBRARIAN,
-  ROLE_IDS.INVESTIGATOR,
-  ROLE_IDS.CHEF,
-  ROLE_IDS.EMPATH,
-  ROLE_IDS.FORTUNETELLER,
-  ROLE_IDS.UNDERTAKER
+  ROLE_IDS.POISONER, ROLE_IDS.BUTLER, ROLE_IDS.SPY, ROLE_IDS.IMP,
+  ROLE_IDS.WASHERWOMAN, ROLE_IDS.LIBRARIAN, ROLE_IDS.INVESTIGATOR,
+  ROLE_IDS.CHEF, ROLE_IDS.EMPATH, ROLE_IDS.FORTUNETELLER, ROLE_IDS.UNDERTAKER
 ];
 
-// 其他夜晚行动顺序
 const OTHER_NIGHT_ORDER = [
-  ROLE_IDS.POISONER,
-  ROLE_IDS.MONK,
-  ROLE_IDS.BUTLER,
-  ROLE_IDS.SPY,
-  ROLE_IDS.IMP, // 恶魔杀人
-  ROLE_IDS.RAVENKEEPER,
-  ROLE_IDS.EMPATH,
-  ROLE_IDS.FORTUNETELLER,
-  ROLE_IDS.UNDERTAKER
+  ROLE_IDS.POISONER, ROLE_IDS.MONK, ROLE_IDS.BUTLER, ROLE_IDS.SPY,
+  ROLE_IDS.IMP, ROLE_IDS.RAVENKEEPER, ROLE_IDS.EMPATH, ROLE_IDS.FORTUNETELLER, ROLE_IDS.UNDERTAKER
 ];
+
+// ==================== 黯月初升 (BMR) ====================
+const BMR_ROLE_IDS = {
+  // 村民
+  GRANDMOTHER: 'grandmother',
+  SAILOR: 'sailor',
+  MAID: 'maid',
+  EXORCIST: 'exorcist',
+  INNKEEPER: 'innkeeper',
+  GAMBLER: 'gambler',
+  GOSSIP: 'gossip',
+  COURTIER: 'courtier',
+  PROFESSOR: 'professor',
+  BARD: 'bard',
+  TEALADY: 'tealady',
+  PACIFIST: 'pacifist',
+  FOOL: 'fool',
+  // 外来者
+  TINKER: 'tinker',
+  MOONCHILD: 'moonchild',
+  LUNATIC: 'lunatic',
+  MADMAN: 'madman',
+  // 爪牙
+  GODFATHER: 'godfather',
+  DEVILSADVOCATE: 'devilsadvocate',
+  ASSASSIN: 'assassin',
+  MASTERMIND: 'mastermind',
+  // 恶魔
+  ZOMBUUL: 'zombuul',
+  PUKKA: 'pukka',
+  SHABALOTH: 'shabaloth',
+  PO: 'po'
+};
+
+const BMR_TOWNSFOLK_ROLES = [
+  BMR_ROLE_IDS.GRANDMOTHER, BMR_ROLE_IDS.SAILOR, BMR_ROLE_IDS.MAID,
+  BMR_ROLE_IDS.EXORCIST, BMR_ROLE_IDS.INNKEEPER, BMR_ROLE_IDS.GAMBLER,
+  BMR_ROLE_IDS.GOSSIP, BMR_ROLE_IDS.COURTIER, BMR_ROLE_IDS.PROFESSOR,
+  BMR_ROLE_IDS.BARD, BMR_ROLE_IDS.TEALADY, BMR_ROLE_IDS.PACIFIST, BMR_ROLE_IDS.FOOL
+];
+
+const BMR_OUTSIDER_ROLES = [BMR_ROLE_IDS.TINKER, BMR_ROLE_IDS.MOONCHILD, BMR_ROLE_IDS.LUNATIC, BMR_ROLE_IDS.MADMAN];
+const BMR_MINION_ROLES = [BMR_ROLE_IDS.GODFATHER, BMR_ROLE_IDS.DEVILSADVOCATE, BMR_ROLE_IDS.ASSASSIN, BMR_ROLE_IDS.MASTERMIND];
+const BMR_DEMON_ROLES = [BMR_ROLE_IDS.ZOMBUUL, BMR_ROLE_IDS.PUKKA, BMR_ROLE_IDS.SHABALOTH, BMR_ROLE_IDS.PO];
+const BMR_ALL_ROLES = [...BMR_TOWNSFOLK_ROLES, ...BMR_OUTSIDER_ROLES, ...BMR_MINION_ROLES, ...BMR_DEMON_ROLES];
+
+const BMR_FIRST_NIGHT_ORDER = [
+  BMR_ROLE_IDS.GODFATHER,
+  BMR_ROLE_IDS.MADMAN,   // 恶魔得知疯子信息
+  BMR_ROLE_IDS.LUNATIC,  // 莽夫以为自己是恶魔
+  BMR_ROLE_IDS.GODFATHER, // 教父得知外来者
+  BMR_ROLE_IDS.GRANDMOTHER,
+  BMR_ROLE_IDS.SAILOR,
+  BMR_ROLE_IDS.EXORCIST,
+  BMR_ROLE_IDS.COURTIER,
+  BMR_ROLE_IDS.MAID
+];
+
+const BMR_OTHER_NIGHT_ORDER = [
+  BMR_ROLE_IDS.GODFATHER,
+  BMR_ROLE_IDS.DEVILSADVOCATE,
+  BMR_ROLE_IDS.ASSASSIN,
+  BMR_ROLE_IDS.SAILOR,
+  BMR_ROLE_IDS.EXORCIST,
+  BMR_ROLE_IDS.GRANDMOTHER,
+  BMR_ROLE_IDS.INNKEEPER,
+  BMR_ROLE_IDS.GAMBLER,
+  BMR_ROLE_IDS.COURTIER,
+  BMR_ROLE_IDS.MAID
+];
+
+// ==================== 剧本注册表 ====================
+const SCRIPTS = {
+  tb: {
+    id: 'tb',
+    name: '灾祸之酿',
+    nameEn: 'Trouble Brewing',
+    roleIds: ROLE_IDS,
+    townsfolkRoles: TOWNSFOLK_ROLES,
+    outsiderRoles: OUTSIDER_ROLES,
+    minionRoles: MINION_ROLES,
+    demonRoles: DEMON_ROLES,
+    allRoles: ALL_ROLES,
+    firstNightOrder: FIRST_NIGHT_ORDER,
+    otherNightOrder: OTHER_NIGHT_ORDER,
+    setupCharacterId: 'baron',
+    setupType: 'baron'
+  },
+  bmr: {
+    id: 'bmr',
+    name: '黯月初升',
+    nameEn: 'Bad Moon Rising',
+    roleIds: BMR_ROLE_IDS,
+    townsfolkRoles: BMR_TOWNSFOLK_ROLES,
+    outsiderRoles: BMR_OUTSIDER_ROLES,
+    minionRoles: BMR_MINION_ROLES,
+    demonRoles: BMR_DEMON_ROLES,
+    allRoles: BMR_ALL_ROLES,
+    firstNightOrder: BMR_FIRST_NIGHT_ORDER,
+    otherNightOrder: BMR_OTHER_NIGHT_ORDER,
+    setupCharacterId: 'godfather',
+    setupType: 'godfather'
+  }
+};
+
+function getScriptConfig(scriptId) {
+  return SCRIPTS[scriptId] || SCRIPTS.tb;
+}
 
 // 阶段枚举
 const PHASES = {
   LOBBY: 'LOBBY',
   FIRST_NIGHT: 'FIRST_NIGHT',
-  NIGHT_WAKE: 'NIGHT_WAKE',     // 夜晚唤醒单个角色
-  DAY_DAWN: 'DAY_DAWN',         // 天亮公布死亡
-  DAY_DISCUSSION: 'DAY_DISCUSSION', // 白天讨论
-  NOMINATION_PHASE: 'NOMINATION_PHASE', // 提名阶段
-  DEFENSE: 'DEFENSE',           // 辩护阶段
-  VOTING: 'VOTING',             // 投票阶段
-  EXECUTION: 'EXECUTION',       // 处决阶段
-  NIGHT: 'NIGHT',               // 常规夜晚
+  NIGHT_WAKE: 'NIGHT_WAKE',
+  DAY_DAWN: 'DAY_DAWN',
+  DAY_DISCUSSION: 'DAY_DISCUSSION',
+  NOMINATION_PHASE: 'NOMINATION_PHASE',
+  DEFENSE: 'DEFENSE',
+  VOTING: 'VOTING',
+  EXECUTION: 'EXECUTION',
+  NIGHT: 'NIGHT',
   GAME_OVER: 'GAME_OVER'
 };
 
 module.exports = {
   getRoleComposition,
+  getScriptConfig,
+  SCRIPTS,
+  // TB 剧本（向后兼容）
   ROLE_IDS,
   TOWNSFOLK_ROLES,
   OUTSIDER_ROLES,
@@ -151,5 +224,14 @@ module.exports = {
   ALL_ROLES,
   FIRST_NIGHT_ORDER,
   OTHER_NIGHT_ORDER,
+  // BMR 剧本
+  BMR_ROLE_IDS,
+  BMR_TOWNSFOLK_ROLES,
+  BMR_OUTSIDER_ROLES,
+  BMR_MINION_ROLES,
+  BMR_DEMON_ROLES,
+  BMR_ALL_ROLES,
+  BMR_FIRST_NIGHT_ORDER,
+  BMR_OTHER_NIGHT_ORDER,
   PHASES
 };

@@ -64,21 +64,25 @@ class BalanceSystem {
     const score = this.calculateBalanceScore(room, engine);
     const prob = this.getFavorProbability(score, engine);
     const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
 
     let result = false;
     let scenario = 'balanced';
     let threshold = 0;
 
-    // 配置禁用时，中毒/醉酒永远获得假信息
-    if (cfg && cfg.balance && cfg.balance.poisonedCorrectInfo === false) {
-      scenario = 'disabled';
-      threshold = 0;
-      result = false;
-    } else if (player.role.team === 'GOOD' && score < goodWeakTh) {
+    // 中毒/醉酒信息真伪由平衡系统自动决定（内置启用，不可关闭）
+    if (player.role.team === 'GOOD' && score < goodWeakTh) {
+      // 好人弱势：按偏袒概率给真信息（帮好人调查）
       scenario = 'good_weak';
       threshold = prob;
       result = Math.random() < prob;
+    } else if (player.role.team === 'GOOD' && score > evilWeakTh) {
+      // 邪恶弱势：保持假信息（误导好人，帮邪恶）
+      scenario = 'evil_weak';
+      threshold = 0;
+      result = false;
     } else {
+      // 局势均衡：假信息
       scenario = 'balanced';
       threshold = 0;
       result = false;
@@ -91,6 +95,7 @@ class BalanceSystem {
       threshold,
       scenario,
       goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
       description
     };
   }
@@ -228,6 +233,82 @@ class BalanceSystem {
       return Math.max(base - this.getFavorProbability(score, engine) * (penalty / 0.2), base - penalty);
     }
     return base;
+  }
+
+  // 修补匠夜晚死亡概率（由平衡系统控制）
+  // 修补匠是善良外来者，其死亡削弱好人：好人弱势时降低死亡概率，邪恶弱势时提高死亡概率
+  static getTinkerDeathProbability(engine) {
+    const room = engine.room;
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(room, engine);
+    const base = cfg && cfg.balance && cfg.balance.tinkerDeathBase !== undefined ? cfg.balance.tinkerDeathBase : 0.15;
+    const bonus = cfg && cfg.balance && cfg.balance.tinkerDeathBonus !== undefined ? cfg.balance.tinkerDeathBonus : 0.15;
+    const penalty = cfg && cfg.balance && cfg.balance.tinkerDeathPenalty !== undefined ? cfg.balance.tinkerDeathPenalty : 0.15;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+    const prob = this.getFavorProbability(score, engine);
+
+    let scenario = 'balanced';
+    let probability = base;
+
+    if (score < goodWeakTh) {
+      // 好人弱势：降低修补匠死亡概率（帮好人保人）
+      scenario = 'good_weak';
+      probability = Math.max(base - prob * (penalty / 0.2), 0);
+    } else if (score > evilWeakTh) {
+      // 邪恶弱势：提高修补匠死亡概率（帮邪恶削减好人）
+      scenario = 'evil_weak';
+      probability = Math.min(base + prob * (bonus / 0.2), 1);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      description: '修补匠夜晚死亡概率'
+    };
+  }
+
+  // 和平主义者拯救善良被处决者概率（由平衡系统控制）
+  // 和平主义者是善良村民，能阻止善良玩家被处决：好人弱势时提高拯救概率，邪恶弱势时降低拯救概率
+  static getPacifistSaveProbability(engine) {
+    const room = engine.room;
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(room, engine);
+    const base = cfg && cfg.balance && cfg.balance.pacifistSaveBase !== undefined ? cfg.balance.pacifistSaveBase : 0.5;
+    const bonus = cfg && cfg.balance && cfg.balance.pacifistSaveBonus !== undefined ? cfg.balance.pacifistSaveBonus : 0.3;
+    const penalty = cfg && cfg.balance && cfg.balance.pacifistSavePenalty !== undefined ? cfg.balance.pacifistSavePenalty : 0.3;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+    const prob = this.getFavorProbability(score, engine);
+
+    let scenario = 'balanced';
+    let probability = base;
+
+    if (score < goodWeakTh) {
+      // 好人弱势：提高拯救概率（帮好人保人）
+      scenario = 'good_weak';
+      probability = Math.min(base + prob * (bonus / 0.2), 1);
+    } else if (score > evilWeakTh) {
+      // 邪恶弱势：降低拯救概率（帮邪恶处决好人）
+      scenario = 'evil_weak';
+      probability = Math.max(base - prob * (penalty / 0.2), 0);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      description: '和平主义者拯救概率'
+    };
   }
 }
 

@@ -1,7 +1,7 @@
 // 游戏引擎 - 状态机核心
 const { PHASES } = require('../config/game-config');
 const { getSeatedPlayers, getAlivePlayers } = require('../utils/helpers');
-const { getStandardProbConfig, PROB_CONFIG_META } = require('../config/prob-config');
+const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('../config/prob-config');
 const RoleAllocator = require('./RoleAllocator');
 const NightResolver = require('./NightResolver');
 const VoteManager = require('./VoteManager');
@@ -110,7 +110,7 @@ class GameEngine {
   // 设置概率配置（房主使用）
   setProbConfig(newConfig) {
     // 简单合并：只更新已有key，防止注入
-    const meta = require('../config/prob-config').PROB_CONFIG_META;
+    const meta = getProbConfigMeta(this.room.script || 'tb');
     const rangeMap = {};
     meta.forEach(cat => cat.items.forEach(item => {
       rangeMap[item.key] = { min: item.min, max: item.max };
@@ -142,7 +142,7 @@ class GameEngine {
 
   // 重置概率配置为默认值
   resetProbConfig() {
-    this.probConfig = getStandardProbConfig();
+    this.probConfig = getStandardProbConfig(this.room.script || 'tb');
     this.broadcastState();
     return true;
   }
@@ -400,13 +400,21 @@ class GameEngine {
     if (this.room.confirmations.has(playerId)) return; // 已确认过
     this.room.confirmations.add(playerId);
     
-    // 检查是否全员确认（bot视为始终在线，活人玩家需在线）
-    const seatedPlayers = getSeatedPlayers(this.room).filter(p => p.isBot || p.isConnected);
-    if (this.room.confirmations.size >= seatedPlayers.length) {
-      this.onAllConfirmed();
-    }
+    this.checkConfirmations();
 
     this.broadcastState();
+  }
+
+  // 主动检查确认进度（玩家断线等情况导致需要确认人数变化时调用）
+  checkConfirmations() {
+    const gs = this.room.gameState;
+    const needConfirmPhases = ['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'EXECUTION'];
+    if (!needConfirmPhases.includes(gs.phase)) return;
+
+    const seatedPlayers = getSeatedPlayers(this.room).filter(p => p.isBot || p.isConnected);
+    if (this.room.confirmations.size >= seatedPlayers.length && seatedPlayers.length > 0) {
+      this.onAllConfirmed();
+    }
   }
 
   // 处理夜晚行动
@@ -425,7 +433,24 @@ class GameEngine {
         this.nightResolver.pendingRavenkeeper = null;
         this.room.gameState.currentWakePlayerId = null;
         this.io.to(playerId).emit('night:actionAck', { success: true });
-        // 继续完成夜晚结算
+        this.nightResolver.finalizeNight();
+        this.broadcastState();
+        return { success: true };
+      }
+      return { success: false, message: '请选择一名玩家' };
+    }
+
+    // 处理月之子特殊情况
+    if (this.nightResolver.pendingMoonchild === playerId) {
+      const targets = action.targets || [];
+      if (targets.length === 1) {
+        const target = this.room.players.get(targets[0]);
+        this.logAction('NIGHT_ACTION', `${player.seat+1}号 ${player.name}（月之子）选择了 ${target ? target.seat+1+'号 '+target.name : '?'}`, {
+          playerId, role: 'moonchild', targetId: targets[0]
+        });
+        this.nightResolver.processMoonchildAction(playerId, targets[0]);
+        this.room.gameState.currentWakePlayerId = null;
+        this.io.to(playerId).emit('night:actionAck', { success: true });
         this.nightResolver.finalizeNight();
         this.broadcastState();
         return { success: true };
@@ -551,6 +576,7 @@ class GameEngine {
       phase: gs.phase,
       dayCount: gs.dayCount,
       nightCount: gs.nightCount,
+      script: room.script || 'tb',
       isNight: gs.phase === PHASES.FIRST_NIGHT || gs.phase === PHASES.NIGHT || gs.phase === PHASES.NIGHT_WAKE,
       currentWakePlayerId: gs.currentWakePlayerId,
       currentDefensePlayerId: gs.currentDefensePlayerId,
@@ -568,19 +594,22 @@ class GameEngine {
       todaysDeaths: gs.todaysDeaths,
       winner: gs.winner,
       winReason: gs.winReason,
+      mastermindExtraRound: !!gs.mastermindExtraRound,
       confirmedCount: room.confirmations.size,
       confirmedIds: Array.from(room.confirmations),
       totalNeeded: neededConfirm,
       yourRole: viewer.role ? (() => {
-        // 酒鬼看到的是假身份
-        if (viewer.role.id === 'drunk' && viewer.fakeRole) {
+        // 酒鬼/疯子/莽夫看到的是假身份
+        const fakeRoleIds = ['drunk', 'madman', 'lunatic'];
+        if (fakeRoleIds.includes(viewer.role.id) && viewer.fakeRole) {
+          const isOutsiderFake = viewer.role.id === 'drunk';
           return {
             name: viewer.fakeRole.name,
             id: viewer.fakeRole.id,
-            team: 'GOOD',
-            category: 'TOWNSFOLK',
+            team: isOutsiderFake ? 'GOOD' : viewer.fakeRole.team,
+            category: isOutsiderFake ? 'TOWNSFOLK' : viewer.fakeRole.category,
             abilityDesc: viewer.fakeRole.abilityDesc,
-            isDrunk: true
+            isDrunk: isOutsiderFake
           };
         }
         return {
@@ -591,19 +620,35 @@ class GameEngine {
           abilityDesc: viewer.role.abilityDesc
         };
       })() : null,
-      evilTeam: viewer.role && viewer.role.team === 'EVIL' ?
-        Array.from(room.players.values())
-          .filter(p => p.role && p.role.team === 'EVIL' && p.seat !== -1)
-          .map(p => ({ id: p.id, name: p.name, seat: p.seat, roleName: p.role.name })) : null,
-      notInPlay: viewer.role && viewer.role.category === 'DEMON' ? gs.rolesNotInPlay.slice(0, 3).map(rid => {
-        const role = this.roleAllocator.createRoleInstance(rid);
-        return role ? role.name : rid;
-      }) : null,
+      evilTeam: (() => {
+        const isFakeDemon = viewer.fakeRole && viewer.fakeRole.category === 'DEMON';
+        const seesEvilTeam = (viewer.role && viewer.role.team === 'EVIL') || isFakeDemon;
+        if (!seesEvilTeam) return null;
+        return Array.from(room.players.values())
+          .filter(p => {
+            if (!p.role || p.seat === -1) return false;
+            if (isFakeDemon) {
+              // 假恶魔只能看到爪牙（看不到真恶魔和自己）
+              return p.role.category === 'MINION';
+            }
+            return p.role.team === 'EVIL';
+          })
+          .map(p => ({ id: p.id, name: p.name, seat: p.seat, roleName: p.role.name }));
+      })(),
+      notInPlay: (() => {
+        const isFakeDemon = viewer.fakeRole && viewer.fakeRole.category === 'DEMON';
+        const seesNotInPlay = (viewer.role && viewer.role.category === 'DEMON') || isFakeDemon;
+        if (!seesNotInPlay) return null;
+        return gs.rolesNotInPlay.slice(0, 3).map(rid => {
+          const role = this.roleAllocator.createRoleInstance(rid);
+          return role ? role.name : rid;
+        });
+      })(),
       privateInfo: viewer.privateInfo,
       privateInfoHistory: viewer.privateInfoHistory || [],
       isHost: viewerId === room.hostId,
       probConfig: viewerId === room.hostId ? this.getProbConfig() : null,
-      probConfigMeta: viewerId === room.hostId ? PROB_CONFIG_META : null,
+      probConfigMeta: viewerId === room.hostId ? getProbConfigMeta(room.script || 'tb') : null,
       probMode: viewerId === room.hostId ? room.probMode : null,
       allRoles: gs.winner ? Array.from(room.players.values())
         .filter(p => p.seat !== -1)

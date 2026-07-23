@@ -23,7 +23,12 @@ class DeathManager {
       'VIRGIN': '提名圣女而死',
       'SLAYER': '被杀手击杀',
       'MAYOR_SAVE': '替市长而死',
-      'POISON': '中毒而死'
+      'POISON': '中毒而死',
+      'GODFATHER': '被教父杀害',
+      'ASSASSIN': '被刺客刺杀',
+      'MOONCHILD': '被月之子诅咒而死',
+      'TINKER': '夜晚死亡',
+      'GAMBLER': '赌徒猜错而死'
     }[cause] || '死亡';
 
     this.engine.logAction('DEATH', `${player.seat+1}号 ${player.name} ${causeText}，身份是【${player.role ? player.role.name : '?'}】`, {
@@ -81,20 +86,22 @@ class DeathManager {
     const gs = room.gameState;
     const alive = getAlivePlayers(room);
 
-    // 检查是否有存活恶魔
-    const demonAlive = alive.some(p => p.role.category === 'DEMON');
+    const demonAlive = alive.some(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     if (demonAlive) return;
 
-    // 找红唇女郎
     const sw = alive.find(p => p.role.id === 'scarletwoman');
     if (sw && alive.length >= 5) {
-      // 红唇女郎变成新恶魔
-      const { Imp } = require('../roles/Demon');
-      sw.role = new Imp();
-      // 通知红唇女郎
+      // 红唇女郎变成新恶魔（保持同剧本的恶魔类型）
+      const { getScriptConfig } = require('../config/game-config');
+      const sc = getScriptConfig(room.script || 'tb');
+      const { shuffle } = require('../utils/helpers');
+      const RoleAllocator = require('./RoleAllocator');
+      const allocator = new RoleAllocator(this.engine);
+      const newDemonId = shuffle(sc.demonRoles)[0];
+      sw.role = allocator.createRoleInstance(newDemonId);
       this.engine.setPlayerPrivateInfo(sw, {
         type: 'scarletwoman',
-        message: '恶魔已死，你成为了新的小恶魔！'
+        message: `恶魔已死，你成为了新的${sw.role.name}！`
       });
     }
   }

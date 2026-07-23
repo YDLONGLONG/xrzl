@@ -1,16 +1,13 @@
-// 身份分配器
-const { 
-  getRoleComposition, 
-  TOWNSFOLK_ROLES, 
-  OUTSIDER_ROLES, 
-  MINION_ROLES, 
-  DEMON_ROLES, 
-  ALL_ROLES,
-  ROLE_IDS 
+// 身份分配器 - 支持多剧本
+const {
+  getRoleComposition,
+  getScriptConfig,
+  ROLE_IDS,
+  BMR_ROLE_IDS
 } = require('../config/game-config');
 const { shuffle } = require('../utils/helpers');
 
-// 导入角色类
+// TB 角色类
 const {
   Washerwoman, Librarian, Investigator, Chef, Empath, Fortuneteller,
   Monk, Ravenkeeper, Virgin, Slayer, Soldier, Mayor, Undertaker
@@ -18,9 +15,21 @@ const {
 const { Saint, Butler, Drunk, Recluse } = require('../roles/Outsider');
 const { Poisoner, ScarletWoman, Baron, Spy } = require('../roles/Minion');
 const { Imp } = require('../roles/Demon');
+
+// BMR 角色类
+const {
+  Grandmother, Sailor, Maid, Exorcist, Innkeeper, Gambler,
+  Gossip, Courtier, Professor, Bard, Tealady, Pacifist, Fool
+} = require('../roles/Townsfolk2');
+const { Tinker, Moonchild, Lunatic, Madman } = require('../roles/Outsider2');
+const { Godfather, DevilsAdvocate, Assassin, Mastermind } = require('../roles/Minion2');
+const { Zombuul, Pukka, Shabaloth, Po } = require('../roles/Demon2');
+
 const BalanceSystem = require('./BalanceSystem');
 
+// 合并所有角色实例映射
 const ROLE_INSTANCES = {
+  // TB
   [ROLE_IDS.WASHERWOMAN]: Washerwoman,
   [ROLE_IDS.LIBRARIAN]: Librarian,
   [ROLE_IDS.INVESTIGATOR]: Investigator,
@@ -42,7 +51,33 @@ const ROLE_INSTANCES = {
   [ROLE_IDS.SCARLETWOMAN]: ScarletWoman,
   [ROLE_IDS.BARON]: Baron,
   [ROLE_IDS.SPY]: Spy,
-  [ROLE_IDS.IMP]: Imp
+  [ROLE_IDS.IMP]: Imp,
+  // BMR
+  [BMR_ROLE_IDS.GRANDMOTHER]: Grandmother,
+  [BMR_ROLE_IDS.SAILOR]: Sailor,
+  [BMR_ROLE_IDS.MAID]: Maid,
+  [BMR_ROLE_IDS.EXORCIST]: Exorcist,
+  [BMR_ROLE_IDS.INNKEEPER]: Innkeeper,
+  [BMR_ROLE_IDS.GAMBLER]: Gambler,
+  [BMR_ROLE_IDS.GOSSIP]: Gossip,
+  [BMR_ROLE_IDS.COURTIER]: Courtier,
+  [BMR_ROLE_IDS.PROFESSOR]: Professor,
+  [BMR_ROLE_IDS.BARD]: Bard,
+  [BMR_ROLE_IDS.TEALADY]: Tealady,
+  [BMR_ROLE_IDS.PACIFIST]: Pacifist,
+  [BMR_ROLE_IDS.FOOL]: Fool,
+  [BMR_ROLE_IDS.TINKER]: Tinker,
+  [BMR_ROLE_IDS.MOONCHILD]: Moonchild,
+  [BMR_ROLE_IDS.LUNATIC]: Lunatic,
+  [BMR_ROLE_IDS.MADMAN]: Madman,
+  [BMR_ROLE_IDS.GODFATHER]: Godfather,
+  [BMR_ROLE_IDS.DEVILSADVOCATE]: DevilsAdvocate,
+  [BMR_ROLE_IDS.ASSASSIN]: Assassin,
+  [BMR_ROLE_IDS.MASTERMIND]: Mastermind,
+  [BMR_ROLE_IDS.ZOMBUUL]: Zombuul,
+  [BMR_ROLE_IDS.PUKKA]: Pukka,
+  [BMR_ROLE_IDS.SHABALOTH]: Shabaloth,
+  [BMR_ROLE_IDS.PO]: Po
 };
 
 class RoleAllocator {
@@ -50,50 +85,54 @@ class RoleAllocator {
     this.engine = engine;
   }
 
+  get scriptConfig() {
+    const scriptId = this.engine.room.script || 'tb';
+    return getScriptConfig(scriptId);
+  }
+
   createRoleInstance(roleId) {
     const RoleClass = ROLE_INSTANCES[roleId];
     return RoleClass ? new RoleClass() : null;
   }
 
+  // 获取假身份候选角色（TB: 不在场的村民；BMR: 不在场的恶魔给疯子/莽夫）
+  getFakeRolePool(scriptConfig, selectedRoles, category) {
+    const pool = category === 'TOWNSFOLK' ? scriptConfig.townsfolkRoles : scriptConfig.demonRoles;
+    return pool.filter(r => !selectedRoles.includes(r));
+  }
+
   allocate(seatedPlayers) {
     const playerCount = seatedPlayers.length;
-    
-    // 先随机选择爪牙，检查是否有男爵
-    // 策略：先按默认人数配比选角色，再根据男爵调整
-    const defaultComp = getRoleComposition(playerCount, false);
+    const sc = this.scriptConfig;
 
-    // 先选一轮不含男爵的角色，判断是否可能有男爵
-    // 简化实现：随机决定是否有男爵，若有男爵则调整配比
-    // 先临时选爪牙
-    let selectedMinions = shuffle(MINION_ROLES).slice(0, defaultComp.minion);
+    // 检查是否有影响配置的爪牙（TB:男爵, BMR:教父）
+    const setupCharId = sc.setupCharacterId;
+    const setupType = sc.setupType;
 
-    // 如果选到了男爵，需要多2个外来者少2个村民
-    const hasBaron = selectedMinions.includes(ROLE_IDS.BARON);
-    const composition = getRoleComposition(playerCount, hasBaron);
+    // 先临时选爪牙判断是否有setup角色
+    const defaultComp = getRoleComposition(playerCount, false, setupType);
+    let selectedMinions = shuffle(sc.minionRoles).slice(0, defaultComp.minion);
+    const hasSetupChar = selectedMinions.includes(setupCharId);
+    const composition = getRoleComposition(playerCount, hasSetupChar, setupType);
 
     // 重新选角色
-    let selectedTownsfolk = shuffle(TOWNSFOLK_ROLES).slice(0, composition.townsfolk);
-    let selectedOutsiders = shuffle(OUTSIDER_ROLES).slice(0, composition.outsider);
+    let selectedTownsfolk = shuffle(sc.townsfolkRoles).slice(0, composition.townsfolk);
+    let selectedOutsiders = shuffle(sc.outsiderRoles).slice(0, composition.outsider);
 
-    // 确保酒鬼不在外来者中时，酒鬼"以为"自己是某个不在场的村民
-    // 男爵存在时重新选爪牙（保证男爵被选中）
-    if (hasBaron) {
-      // 选爪牙：男爵 + 其他爪牙
-      const otherMinions = MINION_ROLES.filter(r => r !== ROLE_IDS.BARON);
-      selectedMinions = [ROLE_IDS.BARON, ...shuffle(otherMinions).slice(0, composition.minion - 1)];
+    if (hasSetupChar) {
+      const otherMinions = sc.minionRoles.filter(r => r !== setupCharId);
+      selectedMinions = [setupCharId, ...shuffle(otherMinions).slice(0, composition.minion - 1)];
     } else {
-      selectedMinions = shuffle(MINION_ROLES.filter(r => r !== ROLE_IDS.BARON)).slice(0, composition.minion);
+      selectedMinions = shuffle(sc.minionRoles.filter(r => r !== setupCharId)).slice(0, composition.minion);
     }
 
-    const selectedDemons = shuffle(DEMON_ROLES).slice(0, composition.demon);
+    const selectedDemons = shuffle(sc.demonRoles).slice(0, composition.demon);
     const selectedRoles = [...selectedTownsfolk, ...selectedOutsiders, ...selectedMinions, ...selectedDemons];
-    
-    // 计算不在场角色
-    const notInPlay = ALL_ROLES.filter(r => !selectedRoles.includes(r));
-    
-    // 打乱玩家顺序分配角色
+
+    const notInPlay = sc.allRoles.filter(r => !selectedRoles.includes(r));
+
     const shuffledPlayers = shuffle([...seatedPlayers]);
-    
+
     shuffledPlayers.forEach((player, i) => {
       player.role = this.createRoleInstance(selectedRoles[i]);
       player.isAlive = true;
@@ -106,59 +145,68 @@ class RoleAllocator {
       player.hasUsedDayAbility = false;
       player.abilityState = {};
       player.privateInfo = null;
+      player.privateInfoHistory = [];
       player.deathNight = -1;
       player.deathDay = -1;
+      player.drunkRole = null;
+      player.fakeRole = null;
     });
 
-    // 酒鬼处理：酒鬼以为自己是一个不在场的村民角色
-    const drunkPlayers = shuffledPlayers.filter(p => p.role.id === ROLE_IDS.DRUNK);
-    drunkPlayers.forEach(drunk => {
-      // 选一个不在场的村民角色作为酒鬼"以为"的角色
-      const notInPlayTownsfolk = TOWNSFOLK_ROLES.filter(r => !selectedTownsfolk.includes(r));
-      if (notInPlayTownsfolk.length > 0) {
-        const fakeRoleId = shuffle(notInPlayTownsfolk)[0];
-        const fakeRole = this.createRoleInstance(fakeRoleId);
-        drunk.drunkRole = fakeRoleId;
-        // 酒鬼以为自己的身份
-        drunk.fakeRole = fakeRole;
-      }
-    });
+    // 假身份处理
+    this.assignFakeRoles(shuffledPlayers, sc, selectedTownsfolk, selectedDemons);
 
     // 记录在场/不在场角色
     this.engine.room.gameState.rolesInPlay = selectedRoles;
     this.engine.room.gameState.rolesNotInPlay = shuffle(notInPlay);
-    this.engine.room.gameState.hasBaron = hasBaron;
+    this.engine.room.gameState.hasBaron = hasSetupChar;
+    this.engine.room.gameState.setupCharId = hasSetupChar ? setupCharId : null;
 
-    // 设置占卜师red herring（不产生日志）
-    const fortuneteller = shuffledPlayers.find(p => p.role.id === 'fortuneteller');
-    if (fortuneteller) {
-      this.setupRedHerring(fortuneteller);
+    // TB: 设置占卜师red herring
+    if (scriptId_or_tb(this.engine.room) === 'tb') {
+      const fortuneteller = shuffledPlayers.find(p => p.role.id === 'fortuneteller');
+      if (fortuneteller) this.setupRedHerring(fortuneteller);
     }
   }
 
-  // 自定义角色分配（测试用）：customRoles 是 { seatNumber: roleId } 映射
-  allocateCustom(seatedPlayers, customRoles) {
-    const playerCount = seatedPlayers.length;
-
-    // 1. 初始化所有玩家状态
-    seatedPlayers.forEach(p => {
-      p.isAlive = true;
-      p.isDead = false;
-      p.voteToken = 0;
-      p.isPoisoned = false;
-      p.isProtected = false;
-      p.hasNominated = false;
-      p.wasNominatedToday = false;
-      p.hasUsedDayAbility = false;
-      p.abilityState = {};
-      p.privateInfo = null;
-      p.deathNight = -1;
-      p.deathDay = -1;
-      p.drunkRole = null;
-      p.fakeRole = null;
+  // 分配假身份（TB:酒鬼→假村民；BMR:疯子/莽夫→假恶魔）
+  assignFakeRoles(players, sc, selectedTownsfolk, selectedDemons) {
+    // TB: 酒鬼
+    const drunkPlayers = players.filter(p => p.role.id === 'drunk');
+    drunkPlayers.forEach(drunk => {
+      const notInPlayTownsfolk = sc.townsfolkRoles.filter(r => !selectedTownsfolk.includes(r));
+      if (notInPlayTownsfolk.length > 0) {
+        const fakeRoleId = shuffle(notInPlayTownsfolk)[0];
+        drunk.drunkRole = fakeRoleId;
+        drunk.fakeRole = this.createRoleInstance(fakeRoleId);
+      }
     });
 
-    // 2. 为已指定座位的玩家分配角色
+    // BMR: 疯子和莽夫以为自己是不在场的恶魔
+    const fakeDemonPlayers = players.filter(p => p.role.id === 'madman' || p.role.id === 'lunatic');
+    fakeDemonPlayers.forEach(player => {
+      const notInPlayDemons = sc.demonRoles.filter(r => !selectedDemons.includes(r));
+      const pool = notInPlayDemons.length > 0 ? notInPlayDemons : sc.demonRoles;
+      const fakeRoleId = shuffle(pool)[0];
+      player.fakeRole = this.createRoleInstance(fakeRoleId);
+    });
+  }
+
+  allocateCustom(seatedPlayers, customRoles) {
+    const playerCount = seatedPlayers.length;
+    const sc = this.scriptConfig;
+    const setupCharId = sc.setupCharacterId;
+    const setupType = sc.setupType;
+
+    seatedPlayers.forEach(p => {
+      p.isAlive = true; p.isDead = false; p.voteToken = 0;
+      p.isPoisoned = false; p.isProtected = false;
+      p.hasNominated = false; p.wasNominatedToday = false;
+      p.hasUsedDayAbility = false; p.abilityState = {};
+      p.privateInfo = null; p.privateInfoHistory = [];
+      p.deathNight = -1; p.deathDay = -1;
+      p.drunkRole = null; p.fakeRole = null;
+    });
+
     const assignedRoleIds = [];
     seatedPlayers.forEach(p => {
       if (customRoles[p.seat]) {
@@ -168,19 +216,16 @@ class RoleAllocator {
       }
     });
 
-    // 3. 根据是否有男爵确定目标配比
-    const hasBaron = assignedRoleIds.includes(ROLE_IDS.BARON);
-    const composition = getRoleComposition(playerCount, hasBaron);
+    const hasSetupChar = assignedRoleIds.includes(setupCharId);
+    const composition = getRoleComposition(playerCount, hasSetupChar, setupType);
 
-    // 4. 统计已指定角色中的各类型数量
     const counts = {
-      townsfolk: assignedRoleIds.filter(r => TOWNSFOLK_ROLES.includes(r)).length,
-      outsider: assignedRoleIds.filter(r => OUTSIDER_ROLES.includes(r)).length,
-      minion: assignedRoleIds.filter(r => MINION_ROLES.includes(r)).length,
-      demon: assignedRoleIds.filter(r => DEMON_ROLES.includes(r)).length
+      townsfolk: assignedRoleIds.filter(r => sc.townsfolkRoles.includes(r)).length,
+      outsider: assignedRoleIds.filter(r => sc.outsiderRoles.includes(r)).length,
+      minion: assignedRoleIds.filter(r => sc.minionRoles.includes(r)).length,
+      demon: assignedRoleIds.filter(r => sc.demonRoles.includes(r)).length
     };
 
-    // 5. 计算各类型还需分配的数量（精确补全到配比）
     const needs = {
       demon: Math.max(0, composition.demon - counts.demon),
       minion: Math.max(0, composition.minion - counts.minion),
@@ -188,10 +233,8 @@ class RoleAllocator {
       townsfolk: Math.max(0, composition.townsfolk - counts.townsfolk)
     };
 
-    // 6. 未指定座位的玩家（打乱）
     const unassignedPlayers = shuffle(seatedPlayers.filter(p => !customRoles[p.seat]));
 
-    // 辅助函数：从可用角色池中选取指定数量分配给未指定玩家
     const fillFromPool = (pool, need) => {
       const available = shuffle(pool.filter(r => !assignedRoleIds.includes(r)));
       const toAdd = available.slice(0, Math.min(need, available.length, unassignedPlayers.length));
@@ -204,16 +247,14 @@ class RoleAllocator {
       });
     };
 
-    // 7. 按优先级精确补齐：恶魔 → 爪牙 → 村民 → 外来者
-    fillFromPool(DEMON_ROLES, needs.demon);
-    fillFromPool(MINION_ROLES, needs.minion);
-    fillFromPool(TOWNSFOLK_ROLES, needs.townsfolk);
-    fillFromPool(OUTSIDER_ROLES, needs.outsider);
+    fillFromPool(sc.demonRoles, needs.demon);
+    fillFromPool(sc.minionRoles, needs.minion);
+    fillFromPool(sc.townsfolkRoles, needs.townsfolk);
+    fillFromPool(sc.outsiderRoles, needs.outsider);
 
-    // 8. 兜底：如果还有剩余玩家（前端验证通过后不应出现），从未使用角色中随机补齐，不产生重复
     if (unassignedPlayers.length > 0) {
-      const remaining = ALL_ROLES.filter(r => !assignedRoleIds.includes(r));
-      const fallbackPool = remaining.length > 0 ? remaining : TOWNSFOLK_ROLES;
+      const remaining = sc.allRoles.filter(r => !assignedRoleIds.includes(r));
+      const fallbackPool = remaining.length > 0 ? remaining : sc.townsfolkRoles;
       unassignedPlayers.forEach(p => {
         const shuffled = shuffle(fallbackPool);
         const roleId = shuffled[0];
@@ -224,90 +265,108 @@ class RoleAllocator {
       });
     }
 
-    // 9. 酒鬼假身份处理：酒鬼以为自己是一个不在场的村民角色
-    const drunkPlayers = seatedPlayers.filter(p => p.role && p.role.id === ROLE_IDS.DRUNK);
-    const assignedTownsfolk = assignedRoleIds.filter(r => TOWNSFOLK_ROLES.includes(r));
-    drunkPlayers.forEach(drunk => {
-      const notInPlayTownsfolk = TOWNSFOLK_ROLES.filter(r => !assignedTownsfolk.includes(r));
-      const fakeRoleId = notInPlayTownsfolk.length > 0
-        ? shuffle(notInPlayTownsfolk)[0]
-        : shuffle(TOWNSFOLK_ROLES)[0];
-      drunk.drunkRole = fakeRoleId;
-      drunk.fakeRole = this.createRoleInstance(fakeRoleId);
-    });
+    // 假身份处理
+    const assignedTownsfolk = assignedRoleIds.filter(r => sc.townsfolkRoles.includes(r));
+    const assignedDemons = assignedRoleIds.filter(r => sc.demonRoles.includes(r));
+    this.assignFakeRoles(seatedPlayers, sc, assignedTownsfolk, assignedDemons);
 
-    // 10. 记录在场/不在场角色
     const allAssigned = [...new Set(assignedRoleIds)];
     this.engine.room.gameState.rolesInPlay = allAssigned;
-    this.engine.room.gameState.rolesNotInPlay = shuffle(ALL_ROLES.filter(r => !allAssigned.includes(r)));
-    this.engine.room.gameState.hasBaron = hasBaron;
+    this.engine.room.gameState.rolesNotInPlay = shuffle(sc.allRoles.filter(r => !allAssigned.includes(r)));
+    this.engine.room.gameState.hasBaron = hasSetupChar;
+    this.engine.room.gameState.setupCharId = hasSetupChar ? setupCharId : null;
 
-    // 11. 设置占卜师 red herring
-    const fortuneteller = seatedPlayers.find(p => p.role && p.role.id === ROLE_IDS.FORTUNETELLER);
-    if (fortuneteller) {
-      this.setupRedHerring(fortuneteller);
+    // TB: 设置占卜师 red herring
+    if ((this.engine.room.script || 'tb') === 'tb') {
+      const fortuneteller = seatedPlayers.find(p => p.role && p.role.id === ROLE_IDS.FORTUNETELLER);
+      if (fortuneteller) this.setupRedHerring(fortuneteller);
     }
 
-    // 12. 日志
     const customAssigned = Object.entries(customRoles).map(([seat, rid]) => {
       const role = this.createRoleInstance(rid);
       return `${Number(seat)+1}号→${role ? role.name : rid}`;
     }).join(', ');
-    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；男爵=${hasBaron ? '是' : '否'}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
+    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；${setupCharId}=${hasSetupChar ? '是' : '否'}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
   }
 
-  // 设置邪恶阵营信息（在ROLE_ASSIGN日志之后调用）
+  // 设置邪恶阵营信息
   setupEvilTeamInfo(players) {
     this.setupDemonInfo(players);
     this.setupMinionInfo(players);
-    // 设置酒鬼的假身份信息（酒鬼以为自己是某村民）
     this.setupDrunkInfo(players);
-    // 设置间谍首夜看到魔典（间谍通过夜晚行动自动获取，这里不需要额外设置）
+    this.setupFakeDemonInfo(players);
   }
 
   setupDrunkInfo(players) {
-    const drunkPlayers = players.filter(p => p.role && p.role.id === ROLE_IDS.DRUNK);
+    const drunkPlayers = players.filter(p => p.role && p.role.id === 'drunk');
     drunkPlayers.forEach(drunk => {
       if (drunk.fakeRole) {
-        // 酒鬼看到的是假身份信息（玩家视角显示为假角色，上帝视角会标注）
         const fakeMsg = `你的身份是【${drunk.fakeRole.name}】（善良阵营·村民）\n技能：${drunk.fakeRole.abilityDesc}`;
         drunk.privateInfo = {
           type: 'role_info',
-          role: {
-            name: drunk.fakeRole.name,
-            id: drunk.fakeRole.id,
-            team: 'GOOD',
-            category: 'TOWNSFOLK',
-            abilityDesc: drunk.fakeRole.abilityDesc
-          },
-          message: fakeMsg,
-          isDrunk: true,
-          isFalse: true,
-          realInfo: { realRole: '酒鬼' },
-          day: 0,
-          phase: 'FIRST_NIGHT',
-          id: 'info_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
+          role: { name: drunk.fakeRole.name, id: drunk.fakeRole.id, team: 'GOOD', category: 'TOWNSFOLK', abilityDesc: drunk.fakeRole.abilityDesc },
+          message: fakeMsg, isDrunk: true, isFalse: true, realInfo: { realRole: '酒鬼' },
+          day: 0, phase: 'FIRST_NIGHT', id: 'info_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
         };
         drunk.privateInfoHistory = [drunk.privateInfo];
         this.engine.io.to(drunk.id).emit('game:privateInfo', drunk.privateInfo);
-        this.engine.logAction('PRIVATE_INFO', `${drunk.seat+1}号 ${drunk.name}（酒鬼）以为自己是【${drunk.fakeRole.name}】⚠️【假信息/酒鬼】`, {
-          playerId: drunk.id,
-          info: fakeMsg,
-          isFalse: true,
-          realInfo: { realRole: '酒鬼' }
+        this.engine.logAction('PRIVATE_INFO', `${drunk.seat+1}号 ${drunk.name}（酒鬼）以为自己是【${drunk.fakeRole.name}】⚠️`, {
+          playerId: drunk.id, info: fakeMsg, isFalse: true, realInfo: { realRole: '酒鬼' }
         });
       }
     });
   }
 
+  // BMR: 疯子/莽夫以为自己是恶魔
+  setupFakeDemonInfo(players) {
+    const fakeDemonPlayers = players.filter(p => p.role && (p.role.id === 'madman' || p.role.id === 'lunatic'));
+    const realDemon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
+
+    fakeDemonPlayers.forEach(player => {
+      if (!player.fakeRole) return;
+      const fakeName = player.fakeRole.name;
+      const fakeMsg = `你的身份是【${fakeName}】（邪恶阵营·恶魔）\n技能：${player.fakeRole.abilityDesc}`;
+
+      // 给假恶魔发恶魔信息（爪牙 + 不在场角色）
+      const minions = players.filter(p => p.role.category === 'MINION');
+      const notInPlay = this.engine.room.gameState.rolesNotInPlay.slice(0, 3);
+      const minionInfo = minions.map(m => `${m.seat+1}号(${m.name})【${m.role.name}】`).join('、');
+      const notInPlayNames = notInPlay.map(rid => {
+        const r = this.createRoleInstance(rid);
+        return r ? r.name : rid;
+      }).join('、');
+
+      player.privateInfo = {
+        type: 'role_info',
+        role: { name: fakeName, id: player.fakeRole.id, team: 'EVIL', category: 'DEMON', abilityDesc: player.fakeRole.abilityDesc },
+        message: `${fakeMsg}\n你的爪牙是：${minionInfo}。不在场身份：${notInPlayNames}`,
+        isFalse: true, realInfo: { realRole: player.role.name },
+        day: 0, phase: 'FIRST_NIGHT', id: 'info_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
+      };
+      player.privateInfoHistory = [player.privateInfo];
+      this.engine.io.to(player.id).emit('game:privateInfo', player.privateInfo);
+      this.engine.logAction('PRIVATE_INFO', `${player.seat+1}号 ${player.name}（${player.role.name}）以为自己是【${fakeName}】⚠️`, {
+        playerId: player.id, info: fakeMsg, isFalse: true, realInfo: { realRole: player.role.name }
+      });
+    });
+
+    // 通知真恶魔关于疯子/莽夫的存在
+    if (realDemon && fakeDemonPlayers.length > 0) {
+      const fakeDemonInfo = fakeDemonPlayers.map(p => `${p.seat+1}号 ${p.name}（${p.role.name}，以为是${p.fakeRole ? p.fakeRole.name : '恶魔'}）`).join('、');
+      this.engine.setPlayerPrivateInfo(realDemon, {
+        type: 'fake_demon_info',
+        message: `以下玩家以为自己是恶魔，但实际不是：${fakeDemonInfo}`
+      });
+    }
+  }
+
   setupDemonInfo(players) {
-    const demon = players.find(p => p.role.category === 'DEMON');
+    const demon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     if (!demon) return;
 
     const minions = players.filter(p => p.role.category === 'MINION');
     const notInPlay = this.engine.room.gameState.rolesNotInPlay.slice(0, 3);
 
-    // 恶魔看到的爪牙（间谍可能被看成好人，但此处给恶魔真实信息）
     this.engine.setPlayerPrivateInfo(demon, {
       type: 'demon_info',
       minions: minions.map(m => ({ id: m.id, name: m.name, seat: m.seat, roleName: m.role.name })),
@@ -323,11 +382,10 @@ class RoleAllocator {
   }
 
   setupMinionInfo(players) {
-    const demon = players.find(p => p.role.category === 'DEMON');
+    const demon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     const minions = players.filter(p => p.role.category === 'MINION');
 
     minions.forEach(m => {
-      // 酒鬼/隐士/间谍的干扰信息暂不在此处处理
       const otherMinions = minions.filter(x => x.id !== m.id);
       this.engine.setPlayerPrivateInfo(m, {
         type: 'minion_info',
@@ -338,20 +396,22 @@ class RoleAllocator {
     });
   }
 
-  // 设置占卜师red herring
   setupRedHerring(fortuneteller) {
     const players = Array.from(this.engine.room.players.values()).filter(p => p.seat !== -1);
-    const demon = players.find(p => p.role.category === 'DEMON');
+    const demon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     if (!demon) return;
 
     const result = BalanceSystem.selectRedHerring(players, demon, this.engine);
     fortuneteller.abilityState.redHerring = result.player.id;
     this.engine.logAction('ABILITY', `占卜师红鲱鱼设置为 ${result.player.seat+1}号 ${result.player.name}（${result.player.role.name}）`, {
-      playerId: fortuneteller.id,
-      redHerringId: result.player.id,
-      probInfo: result.probInfo
+      playerId: fortuneteller.id, redHerringId: result.player.id, probInfo: result.probInfo
     });
   }
+}
+
+// 辅助函数
+function scriptId_or_tb(room) {
+  return room.script || 'tb';
 }
 
 module.exports = RoleAllocator;

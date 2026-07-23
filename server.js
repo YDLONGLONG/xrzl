@@ -3,7 +3,8 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
-const { getStandardProbConfig, PROB_CONFIG_META } = require('./src/config/prob-config');
+const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
+const { SCRIPTS } = require('./src/config/game-config');
 
 const app = express();
 const server = http.createServer(app);
@@ -124,6 +125,7 @@ function createPlayer(socketId, name) {
     role: null,
     isAlive: true,
     isDead: false,
+    isBot: false,
     deathNight: -1,
     deathDay: -1,
     hasNominated: false,
@@ -247,8 +249,10 @@ function broadcastRoomState(roomId) {
         seats: room.seats.map(s => s ? s.id : null),
         gameStarted: false, phase: 'LOBBY',
         isHost: pid === room.hostId,
+        script: room.script || 'tb',
+        scriptList: Object.values(SCRIPTS).map(s => ({ id: s.id, name: s.name })),
         probConfig: pid === room.hostId ? JSON.parse(JSON.stringify(room.probConfig)) : null,
-        probConfigMeta: pid === room.hostId ? PROB_CONFIG_META : null,
+        probConfigMeta: pid === room.hostId ? getProbConfigMeta(room.script || 'tb') : null,
         probMode: pid === room.hostId ? room.probMode : null
       });
     }
@@ -389,6 +393,11 @@ function handleDisconnect(socket) {
       engine.botManager.notifyAllBots();
     }
 
+    // 玩家断线后，检查确认进度是否已满足（防止最后一个未确认的人断线后卡住）
+    if (engine && engine.checkConfirmations) {
+      engine.checkConfirmations();
+    }
+
     broadcastRoomState(roomId);
   } else {
     // 大厅中断线：立即移除（大厅重连意义不大，保留座位会导致座位被占）
@@ -428,8 +437,9 @@ io.on('connection', (socket) => {
       id: roomId, players: new Map(), seats: new Array(15).fill(null),
       hostId: socket.id, gameStarted: false, gameState: null,
       maxPlayers: 15, minPlayers: 5, confirmations: new Set(), createdAt: new Date(),
-      probConfig: getStandardProbConfig(),
-      probMode: 'standard'
+      probConfig: getStandardProbConfig('tb'),
+      probMode: 'standard',
+      script: 'tb'
     };
     const player = createPlayer(socket.id, playerName);
     room.players.set(socket.id, player);
@@ -545,6 +555,24 @@ io.on('connection', (socket) => {
     broadcastRoomState(roomId);
   });
 
+  // 切换剧本（仅房主，游戏未开始时）
+  socket.on('room:setScript', ({ scriptId }) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId, room } = result;
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以切换剧本' }); return; }
+    if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法切换剧本' }); return; }
+    if (!SCRIPTS[scriptId]) { socket.emit('room:error', { message: '无效的剧本' }); return; }
+    if (room.script === scriptId) return;
+    room.script = scriptId;
+    // 切换剧本时重置概率配置为对应剧本的默认值
+    room.probConfig = getStandardProbConfig(scriptId);
+    room.probMode = 'standard';
+    const engine = gameEngines.get(roomId);
+    if (engine) engine.probConfig = room.probConfig;
+    broadcastRoomState(roomId);
+  });
+
   // 添加AI机器人（仅房主）
   socket.on('room:addBot', () => {
     const result = getPlayerRoom(socket.id);
@@ -630,15 +658,61 @@ io.on('connection', (socket) => {
   socket.on('room:leave', () => {
     const result = getPlayerRoom(socket.id);
     if (!result) return;
-    // 主动离开：立即移除（不走断线重连流程）
-    const { roomId } = result;
-    const player = result.room.players.get(socket.id);
-    if (player && disconnectTimers.has(socket.id)) {
-      clearTimeout(disconnectTimers.get(socket.id));
-      disconnectTimers.delete(socket.id);
+    const { roomId, room } = result;
+    const player = room.players.get(socket.id);
+    if (!player || player.isBot) return;
+
+    if (player.isConnected === false) {
+      // 已经是断线状态（可能正在等待重连超时），直接彻底移除
+      removePlayerFromRoom(roomId, socket.id);
+      socket.leave(roomId);
+      return;
     }
-    removePlayerFromRoom(roomId, socket.id);
-    socket.leave(roomId);
+
+    if (room.gameStarted) {
+      const engine = gameEngines.get(roomId);
+      const gs = engine ? engine.room.gameState : null;
+      // 游戏结束时离开，直接移除（不需要重连）
+      if (gs && gs.phase === 'GAME_OVER') {
+        if (disconnectTimers.has(socket.id)) {
+          clearTimeout(disconnectTimers.get(socket.id));
+          disconnectTimers.delete(socket.id);
+        }
+        removePlayerFromRoom(roomId, socket.id);
+        socket.leave(roomId);
+        return;
+      }
+      // 游戏中主动离开：视同断线，保留数据允许重连
+      player.isConnected = false;
+      player.disconnectedAt = Date.now();
+
+      io.to(roomId).emit('room:playerDisconnected', { playerId: socket.id, name: player.name });
+
+      const timer = setTimeout(() => {
+        actuallyRemovePlayer(socket.id);
+      }, RECONNECT_TIMEOUT);
+      disconnectTimers.set(socket.id, timer);
+
+      if (engine && engine.botManager) {
+        engine.botManager.notifyAllBots();
+      }
+
+      // 玩家离开后，检查确认进度是否已满足（防止最后一个未确认的人离开后卡住）
+      if (engine && engine.checkConfirmations) {
+        engine.checkConfirmations();
+      }
+
+      broadcastRoomState(roomId);
+      socket.leave(roomId);
+    } else {
+      // 大厅阶段离开：立即移除
+      if (disconnectTimers.has(socket.id)) {
+        clearTimeout(disconnectTimers.get(socket.id));
+        disconnectTimers.delete(socket.id);
+      }
+      removePlayerFromRoom(roomId, socket.id);
+      socket.leave(roomId);
+    }
   });
 
   socket.on('disconnect', () => handleDisconnect(socket));
@@ -683,13 +757,13 @@ io.on('connection', (socket) => {
   });
 
   // 夜晚行动
-  socket.on('night:action', ({ targets }) => {
+  socket.on('night:action', (data = {}) => {
     const result = getPlayerRoom(socket.id);
     if (!result || !result.room.gameStarted) return;
     const { roomId } = result;
     const engine = gameEngines.get(roomId);
     if (engine) {
-      const res = engine.processNightAction(socket.id, { targets });
+      const res = engine.processNightAction(socket.id, data);
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
@@ -866,7 +940,7 @@ io.on('connection', (socket) => {
     if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以修改设置' }); return; }
     socket.emit('room:probConfig', {
       config: JSON.parse(JSON.stringify(room.probConfig)),
-      meta: PROB_CONFIG_META,
+      meta: getProbConfigMeta(room.script || 'tb'),
       mode: room.probMode
     });
   });
@@ -885,9 +959,10 @@ io.on('connection', (socket) => {
       room.probMode = mode;
     }
 
-    // 校验并合并
+    // 校验并合并（使用当前剧本的 META 限制范围）
+    const scriptMeta = getProbConfigMeta(room.script || 'tb');
     const rangeMap = {};
-    PROB_CONFIG_META.forEach(cat => cat.items.forEach(item => {
+    scriptMeta.forEach(cat => cat.items.forEach(item => {
       rangeMap[item.key] = { min: item.min, max: item.max };
     }));
     const getRange = (key) => rangeMap[key] || { min: -2, max: 2 };
@@ -920,7 +995,7 @@ io.on('connection', (socket) => {
     if (!room) return;
     if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以修改设置' }); return; }
     if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法修改设置' }); return; }
-    room.probConfig = getStandardProbConfig();
+    room.probConfig = getStandardProbConfig(room.script || 'tb');
     room.probMode = 'standard';
     // 同步给engine（如果已存在）
     const engine = gameEngines.get(roomId);

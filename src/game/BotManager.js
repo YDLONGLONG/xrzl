@@ -199,9 +199,9 @@ class BotManager {
       }
     }
 
-    // 确认阶段 - 自动确认（天亮/讨论/提名/处决）
+    // 确认阶段 - 自动确认（天亮/讨论/提名/处决）—— 仅bot自动确认，断线真人不计入需要确认人数，不应自动确认
     if (['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'EXECUTION'].includes(gs.phase)) {
-      if (!room.confirmations.has(botId) && !bot._botConfirmed) {
+      if (bot.isBot && !room.confirmations.has(botId) && !bot._botConfirmed) {
         if (bot._botTimer) return;
         bot._botConfirmed = true;
         this._scheduleBot(botId, 600 + Math.random() * 2000, (b) => {
@@ -210,6 +210,7 @@ class BotManager {
           }
         });
       }
+      return;
     }
   }
 

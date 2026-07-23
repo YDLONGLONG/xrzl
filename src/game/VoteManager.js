@@ -77,6 +77,7 @@ class VoteManager {
     // 进入辩护阶段
     gs.phase = PHASES.DEFENSE;
     gs.currentDefensePlayerId = nomineeId;
+    this.engine.room.confirmations.clear();
 
     this.engine.io.to(this.engine.room.id).emit('game:nominationStarted', {
       nominator: { id: nominator.id, name: nominator.name, seat: nominator.seat },
@@ -100,6 +101,7 @@ class VoteManager {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.VOTING;
     gs.currentDefensePlayerId = null;
+    this.engine.room.confirmations.clear();
 
     const nomination = gs.nominations[gs.currentNominationIndex];
     nomination.votes = new Set();
@@ -252,9 +254,9 @@ class VoteManager {
       passed: nomination.passed
     });
 
-    // 回到提名阶段
+    // 回到提名阶段，重置确认状态
     gs.phase = PHASES.NOMINATION_PHASE;
-    this.engine.broadcastState();
+    this.engine.waitForConfirmation();
   }
 
   closeNominations() {
@@ -274,6 +276,10 @@ class VoteManager {
         executedId: null,
         message: '无人达到处决线，平安日'
       });
+      // 主谋额外白天无人被处决：清除额外回合标记，让checkVictory正常结束游戏
+      if (gs.mastermindExtraRound) {
+        gs.mastermindExtraRound = false;
+      }
       this.engine.waitForConfirmation();
       this.engine.broadcastState();
       return;
@@ -289,6 +295,10 @@ class VoteManager {
         executedId: null,
         message: '平票，平安日'
       });
+      // 主谋额外白天平票：清除额外回合标记，让checkVictory正常结束游戏
+      if (gs.mastermindExtraRound) {
+        gs.mastermindExtraRound = false;
+      }
       this.engine.waitForConfirmation();
       this.engine.broadcastState();
       return;
@@ -296,25 +306,52 @@ class VoteManager {
 
     const toExecute = this.engine.room.players.get(tied[0].nomineeId);
     if (toExecute) {
-      this.engine.deathManager.killPlayer(toExecute.id, 'EXECUTION', gs.nightCount, gs.dayCount);
-      gs.todaysDeaths.push({ playerId: toExecute.id, cause: 'EXECUTION' });
+      // 检查和平主义者拯救（处决前判断，拯救则不执行处决）
+      let pacifistSaved = false;
+      try {
+        const Pacifist = require('../roles/Townsfolk2').Pacifist;
+        pacifistSaved = Pacifist.checkPacifistSave(toExecute, this.engine);
+      } catch (e) { /* BMR 角色未加载时忽略 */ }
 
-      this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 被处决，身份是【${toExecute.role.name}】`, {
-        playerId: toExecute.id, role: toExecute.role.id
-      });
+      if (pacifistSaved) {
+        // 和平主义者阻止了处决：玩家不死
+        this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 被和平主义者拯救，未被执行处决`, {
+          playerId: toExecute.id, saved: true
+        });
+        this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
+          executedId: null,
+          seat: toExecute.seat,
+          name: toExecute.name,
+          votes: maxVotes,
+          message: `${toExecute.seat+1}号(${toExecute.name})被和平主义者拯救`
+        });
+      } else {
+        this.engine.deathManager.killPlayer(toExecute.id, 'EXECUTION', gs.nightCount, gs.dayCount);
+        gs.todaysDeaths.push({ playerId: toExecute.id, cause: 'EXECUTION' });
 
-      this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
-        executedId: toExecute.id,
-        seat: toExecute.seat,
-        name: toExecute.name,
-        votes: maxVotes,
-        message: `${toExecute.seat+1}号(${toExecute.name})被处决`
-      });
+        this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 被处决，身份是【${toExecute.role.name}】`, {
+          playerId: toExecute.id, role: toExecute.role.id
+        });
 
-      // 检查圣徒
-      const saintResult = this.engine.victoryChecker.checkSaintExecution(toExecute.id);
-      if (saintResult) {
-        return;
+        this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
+          executedId: toExecute.id,
+          seat: toExecute.seat,
+          name: toExecute.name,
+          votes: maxVotes,
+          message: `${toExecute.seat+1}号(${toExecute.name})被处决`
+        });
+
+        // 检查圣徒
+        const saintResult = this.engine.victoryChecker.checkSaintExecution(toExecute.id);
+        if (saintResult) {
+          return;
+        }
+
+        // 检查主谋额外白天处决：被处决的玩家阵营落败
+        const mastermindResult = this.engine.victoryChecker.checkMastermindExecution(toExecute);
+        if (mastermindResult) {
+          return;
+        }
       }
     }
 

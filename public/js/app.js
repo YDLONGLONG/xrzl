@@ -19,6 +19,7 @@ let hasLeftRoom = false;
 window.addEventListener('DOMContentLoaded', () => {
   socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: 30 });
   initSocketEvents();
+  checkReconnectInfo();
   
   // 回车提交
   $('createName').addEventListener('keydown', e => { if (e.key === 'Enter') createRoom(); });
@@ -117,6 +118,7 @@ function initSocketEvents() {
     hasLeftRoom = false;
     myId = playerId;
     myRoomId = roomId;
+    clearReconnectInfo();
     saveSession();
     showGameView();
   });
@@ -126,6 +128,7 @@ function initSocketEvents() {
     hasLeftRoom = false;
     myId = playerId;
     myRoomId = roomId;
+    clearReconnectInfo();
     saveSession();
     showGameView();
   });
@@ -135,6 +138,7 @@ function initSocketEvents() {
     myId = playerId;
     myRoomId = roomId;
     isReconnecting = false;
+    clearReconnectInfo();
     saveSession();
     showGameView();
     showToast('重新连接成功！');
@@ -155,6 +159,7 @@ function initSocketEvents() {
 
   socket.on('room:stateUpdate', (state) => {
     if (hasLeftRoom) return;
+    const prevScript = currentState && currentState.script;
     currentState = state;
     // 房主才显示设置按钮
     const settingsBtn = $('settingsBtn');
@@ -162,6 +167,19 @@ function initSocketEvents() {
       settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
     }
     renderGameState(state);
+    // 如果角色总览面板已打开，重新渲染以反映剧本切换
+    const roPanel = document.getElementById('roleOverviewPanel');
+    if (roPanel && roPanel.style.display !== 'none') openRoleOverview();
+    // 剧本切换时：概率面板若已打开，重载配置和 META（服务端会重置 probConfig）
+    if (prevScript && prevScript !== state.script) {
+      const probPanel = document.getElementById('probSettingsPanel');
+      if (probPanel && probPanel.style.display !== 'none' && state.probConfig) {
+        _probConfigDraft = JSON.parse(JSON.stringify(state.probConfig));
+        _probConfigMeta = state.probConfigMeta;
+        _probBackupAdvanced = null;
+        _renderProbSettingsUI();
+      }
+    }
   });
 
   socket.on('game:stateUpdate', (state) => {
@@ -173,11 +191,22 @@ function initSocketEvents() {
       settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
     }
     renderGameState(state);
+    // 如果角色总览面板已打开，重新渲染以反映剧本切换
+    const roPanel = document.getElementById('roleOverviewPanel');
+    if (roPanel && roPanel.style.display !== 'none') openRoleOverview();
   });
 
   socket.on('room:error', ({ message }) => {
     if (hasLeftRoom) return;
     showToast(message);
+    // 重连失败时清除失效的重连信息
+    if (message.includes('房间不存在') || message.includes('游戏已开始')) {
+      const card = $('reconnectCard');
+      if (card && card.style.display !== 'none') {
+        clearReconnectInfo();
+        checkReconnectInfo();
+      }
+    }
   });
 
   // 概率设置相关事件
@@ -349,9 +378,23 @@ function backToHome() {
   if (hasLeftRoom) return;
   hasLeftRoom = true;
 
+  const wasInGame = currentState && currentState.gameStarted && currentState.phase !== 'GAME_OVER';
+  const savedRoomId = myRoomId;
+  const savedName = myName;
+
   if (myRoomId && socket && socket.connected) {
     socket.emit('room:leave');
   }
+
+  // 游戏中离开：保存重连信息
+  if (wasInGame && savedRoomId && savedName) {
+    try {
+      sessionStorage.setItem('reconnect_room', savedRoomId);
+      sessionStorage.setItem('reconnect_name', savedName);
+      sessionStorage.setItem('reconnect_time', Date.now().toString());
+    } catch(e) {}
+  }
+
   clearSession();
   myId = null;
   myRoomId = null;
@@ -376,12 +419,61 @@ function backToHome() {
   $('joinRoomId').value = '';
   $('joinName').value = '';
 
+  checkReconnectInfo();
+
   setTimeout(() => {
     hasLeftRoom = false;
   }, 300);
 }
 
 // ========== 首页操作 ==========
+function checkReconnectInfo() {
+  const card = $('reconnectCard');
+  if (!card) return;
+  try {
+    const roomId = sessionStorage.getItem('reconnect_room');
+    const name = sessionStorage.getItem('reconnect_name');
+    const time = sessionStorage.getItem('reconnect_time');
+    if (!roomId || !name) {
+      card.style.display = 'none';
+      return;
+    }
+    // 重连信息过期（服务端RECONNECT_TIMEOUT是3分钟，这里留5分钟余量）
+    if (time && Date.now() - parseInt(time) > 5 * 60 * 1000) {
+      clearReconnectInfo();
+      card.style.display = 'none';
+      return;
+    }
+    $('reconnectInfo').innerHTML = `房间码：<b style="color:#f39c12;">${roomId}</b>　昵称：<b style="color:#f39c12;">${escapeHtml(name)}</b>`;
+    card.style.display = 'block';
+  } catch(e) {
+    card.style.display = 'none';
+  }
+}
+
+function clearReconnectInfo() {
+  try {
+    sessionStorage.removeItem('reconnect_room');
+    sessionStorage.removeItem('reconnect_name');
+    sessionStorage.removeItem('reconnect_time');
+  } catch(e) {}
+}
+
+function reconnectRoom() {
+  const roomId = sessionStorage.getItem('reconnect_room');
+  const name = sessionStorage.getItem('reconnect_name');
+  if (!roomId || !name) {
+    clearReconnectInfo();
+    checkReconnectInfo();
+    return;
+  }
+  hasLeftRoom = false;
+  myName = name;
+  myRoomId = roomId;
+  $('joinError').textContent = '';
+  socket.emit('room:join', { roomId, playerName: name, isReconnect: true });
+}
+
 function createRoom() {
   const name = $('createName').value.trim();
   if (!name) {
@@ -432,7 +524,7 @@ function startGame() {
   const seatedPlayers = (currentState.players || []).filter(p => p.seat !== -1);
   if (customRoleMode) {
     // 使用统一的验证函数
-    const v = validateCustomRoles(customRoleMap, seatedPlayers.length);
+    const v = validateCustomRoles(customRoleMap, seatedPlayers.length, currentState.script || 'tb');
     if (!v.valid) {
       showToast('自定义角色配置有误：' + v.errors[0]);
       return;
@@ -451,6 +543,10 @@ function startGame() {
 
 function addBot() {
   socket.emit('room:addBot');
+}
+
+function setScript(scriptId) {
+  socket.emit('room:setScript', { scriptId });
 }
 
 async function kickPlayer(pid) {
@@ -616,16 +712,38 @@ function renderCenter(state) {
     const me = state.players?.find(p => p.id === myId);
     const seatedCount = (state.players || []).filter(p => p.seat !== -1).length;
     const isHost = state.hostId === myId;
-    
+    const currentScript = state.script || 'tb';
+    const scriptList = state.scriptList || [{ id: 'tb', name: '灾祸之酿' }, { id: 'bmr', name: '黯月初升' }];
+
+    // 构建剧本卡片
+    const scriptCardsHtml = scriptList.map(s => {
+      const info = SCRIPT_INFO[s.id] || { icon: '📜', desc: '', color: '#888', nameEn: '' };
+      const isActive = s.id === currentScript;
+      const cardStyle = isActive
+        ? `border:2px solid ${info.color}; background:linear-gradient(135deg, ${info.color}33, ${info.color}11); box-shadow:0 0 12px ${info.color}55;`
+        : `border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.03);`;
+      const cursor = isHost ? 'cursor:pointer;' : 'cursor:default; opacity:0.85;';
+      const onClickAttr = isHost ? `onclick="setScript('${s.id}')"` : '';
+      return `<div ${onClickAttr} style="flex:1; min-width:0; padding:10px 12px; border-radius:8px; ${cardStyle} ${cursor} transition:all 0.2s; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:1.6em; line-height:1;">${info.icon}</span>
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:bold; color:${isActive ? info.color : '#e0e0e0'}; font-size:14px;">${s.name}</div>
+          <div style="font-size:11px; color:#888;">${info.nameEn}${info.desc ? ' · ' + info.desc : ''}</div>
+        </div>
+        ${isActive ? '<span style="color:' + info.color + '; font-size:1.1em;">✓</span>' : ''}
+      </div>`;
+    }).join('');
+
     html = `<div style="text-align:center;">
-      <h2 style="color:#d4af37; margin-bottom:20px;">游戏大厅</h2>
+      <h2 style="color:#d4af37; margin-bottom:14px;">游戏大厅</h2>
+      <div style="display:flex; gap:10px; margin-bottom:14px; max-width:520px; margin-left:auto; margin-right:auto;">${scriptCardsHtml}</div>
       <p>入座玩家: ${seatedCount}/15（至少需要5人）</p>
       <p style="margin-top:10px; color:#aaa;">点击左侧空座位入座，准备后房主开始游戏</p>
     </div>`;
-    
+
     showAction = true;
     $('actionTitle').textContent = '操作';
-    
+
     let buttons = '';
     if (me && me.seat !== -1) {
       buttons += `<button class="btn btn-sm ${me.isReady ? 'btn-secondary' : 'btn-success'}" onclick="toggleReady()">${me.isReady ? '取消准备' : '准备'}</button>`;
@@ -640,7 +758,7 @@ function renderCenter(state) {
       const canStart = seatedCount >= 5 && allReady;
       buttons += `<button class="btn btn-sm btn-primary" ${canStart ? '' : 'disabled'} onclick="startGame()">开始游戏</button>`;
     }
-    
+
     $('selectedTargets').innerHTML = '';
     $('actionButtons').innerHTML = buttons;
   } else {
@@ -899,6 +1017,7 @@ function renderCenter(state) {
     const confirmList = $('confirmPlayers');
     const chips = players
       .filter(p => p.seat >= 0)
+      .sort((a, b) => a.seat - b.seat)
       .map(p => {
         const isConfirmed = confirmedIds.includes(p.id);
         const isYou = p.id === myId;
@@ -1798,82 +1917,181 @@ function appendGodLogEntry(entry) {
 
 // ========== 角色总览 ==========
 const ALL_ROLE_INFO = [
-  // 村民
-  { id: 'washerwoman', name: '洗衣妇', team: 'GOOD', category: '村民',
+  // TB 村民
+  { id: 'washerwoman', name: '洗衣妇', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的村民角色。',
     color: '#2ecc71' },
-  { id: 'librarian', name: '图书管理员', team: 'GOOD', category: '村民',
+  { id: 'librarian', name: '图书管理员', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的外来者角色（若无外来者则获知此信息）。',
     color: '#2ecc71' },
-  { id: 'investigator', name: '调查员', team: 'GOOD', category: '村民',
+  { id: 'investigator', name: '调查员', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的爪牙角色。',
     color: '#2ecc71' },
-  { id: 'chef', name: '厨师', team: 'GOOD', category: '村民',
+  { id: 'chef', name: '厨师', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知邪恶玩家相邻的对数。',
     color: '#2ecc71' },
-  { id: 'empath', name: '共情者', team: 'GOOD', category: '村民',
+  { id: 'empath', name: '共情者', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚，你得知你的左右存活邻居中有多少名邪恶玩家。',
     color: '#2ecc71' },
-  { id: 'fortuneteller', name: '占卜师', team: 'GOOD', category: '村民',
+  { id: 'fortuneteller', name: '占卜师', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚，选择两名玩家：你得知他们之中是否有恶魔。有一名善良玩家会被你当作恶魔（红鲱鱼）。',
     color: '#2ecc71' },
-  { id: 'monk', name: '僧侣', team: 'GOOD', category: '村民',
+  { id: 'monk', name: '僧侣', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚（首个夜晚除外），选择除你以外的一名玩家：该玩家今晚不会被恶魔杀害。',
     color: '#2ecc71' },
-  { id: 'ravenkeeper', name: '守鸦人', team: 'GOOD', category: '村民',
+  { id: 'ravenkeeper', name: '守鸦人', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果你在夜晚死亡，你被唤醒并选择一名玩家：你得知他的角色。',
     color: '#2ecc71' },
-  { id: 'virgin', name: '圣女', team: 'GOOD', category: '村民',
+  { id: 'virgin', name: '圣女', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果你首次被提名，提名你的玩家若是村民则立即死亡。',
     color: '#2ecc71' },
-  { id: 'slayer', name: '杀手', team: 'GOOD', category: '村民',
+  { id: 'slayer', name: '杀手', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每局限一次，白天时可以公开选择一名玩家，如果是恶魔则恶魔死亡。',
     color: '#2ecc71' },
-  { id: 'soldier', name: '士兵', team: 'GOOD', category: '村民',
+  { id: 'soldier', name: '士兵', team: 'GOOD', category: '村民', script: 'tb',
     ability: '你不会被恶魔杀害。',
     color: '#2ecc71' },
-  { id: 'mayor', name: '市长', team: 'GOOD', category: '村民',
+  { id: 'mayor', name: '市长', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果只剩三名玩家存活且你未被处决，你的阵营获胜。如果你在夜晚死亡，可能有其他玩家替你死去。',
     color: '#2ecc71' },
-  { id: 'undertaker', name: '掘墓人', team: 'GOOD', category: '村民',
+  { id: 'undertaker', name: '掘墓人', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚（首个夜晚除外），你得知今天白天被处决玩家的角色。',
     color: '#2ecc71' },
-  // 外来者
-  { id: 'saint', name: '圣徒', team: 'GOOD', category: '外来者',
+  // TB 外来者
+  { id: 'saint', name: '圣徒', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '如果你被处决，邪恶阵营获胜。',
     color: '#f39c12' },
-  { id: 'butler', name: '管家', team: 'GOOD', category: '外来者',
+  { id: 'butler', name: '管家', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '每个夜晚，选择一名玩家（非自己）：明天你只能在该玩家投赞成票时投赞成票。',
     color: '#f39c12' },
-  { id: 'drunk', name: '酒鬼', team: 'GOOD', category: '外来者',
+  { id: 'drunk', name: '酒鬼', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '你不知道自己是酒鬼。你以为自己是一个村民角色，但实际上你没有技能，你的信息是不可靠的。',
     color: '#f39c12' },
-  { id: 'recluse', name: '隐士', team: 'GOOD', category: '外来者',
+  { id: 'recluse', name: '隐士', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '你可能被登记为邪恶阵营、爪牙或恶魔。你可能在夜晚死亡，即使没人想杀你。',
     color: '#f39c12' },
-  // 爪牙
-  { id: 'poisoner', name: '下毒者', team: 'EVIL', category: '爪牙',
+  // TB 爪牙
+  { id: 'poisoner', name: '下毒者', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '每个夜晚，选择一名玩家：该玩家今晚和明天中毒，技能异常或失效。',
     color: '#e74c3c' },
-  { id: 'scarletwoman', name: '红唇女郎', team: 'EVIL', category: '爪牙',
+  { id: 'scarletwoman', name: '红唇女郎', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '如果恶魔死亡时存活玩家数≥5，你成为新恶魔。',
     color: '#e74c3c' },
-  { id: 'baron', name: '男爵', team: 'EVIL', category: '爪牙',
+  { id: 'baron', name: '男爵', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '有两名额外的外来者在场（因此少两名村民）。',
     color: '#e74c3c' },
-  { id: 'spy', name: '间谍', team: 'EVIL', category: '爪牙',
+  { id: 'spy', name: '间谍', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '每个夜晚，你查看恶魔魔典（得知所有玩家身份）。你可能被登记为善良阵营、村民或外来者。',
     color: '#e74c3c' },
-  // 恶魔
-  { id: 'imp', name: '小恶魔', team: 'EVIL', category: '恶魔',
+  // TB 恶魔
+  { id: 'imp', name: '小恶魔', team: 'EVIL', category: '恶魔', script: 'tb',
     ability: '每个夜晚（除首夜），选择一名玩家将其杀害。首夜得知爪牙和3个不在场身份。',
-    color: '#e74c3c' }
+    color: '#e74c3c' },
+  // BMR 村民
+  { id: 'grandmother', name: '祖母', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '首夜得知一名善良玩家及其角色（作为你的"孙子"）；若孙子被恶魔杀死，你也会死亡。',
+    color: '#2ecc71' },
+  { id: 'sailor', name: '水手', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '每个夜晚，选择一名存活玩家，你或该玩家醉酒直到下一个黄昏；水手不会死亡。',
+    color: '#2ecc71' },
+  { id: 'maid', name: '侍女', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '每个夜晚，选择除自己外的两名存活玩家，得知他们中有几人在当晚因自身能力被唤醒。',
+    color: '#2ecc71' },
+  { id: 'exorcist', name: '驱魔人', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '每个夜晚，选择一名玩家（不能与上夜相同），若选中恶魔：恶魔得知驱魔人是谁，该恶魔能力失效。',
+    color: '#2ecc71' },
+  { id: 'innkeeper', name: '旅店老板', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '第二夜起，选择两名玩家，他们当晚不会死亡，但其中一人会醉酒到下一个黄昏。',
+    color: '#2ecc71' },
+  { id: 'gambler', name: '赌徒', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '第二夜起，选择一名玩家并猜测其角色，猜错则赌徒死亡。',
+    color: '#2ecc71' },
+  { id: 'gossip', name: '造谣者', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '每个白天可公开发表一个声明，若声明为真，当晚一名玩家死亡。',
+    color: '#2ecc71' },
+  { id: 'courtier', name: '侍臣', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '每局游戏限一次在夜晚时，选择一个角色：如果该角色在场，该角色之一从当晚开始醉酒三天三夜。',
+    color: '#2ecc71' },
+  { id: 'professor', name: '教授', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '选择一名死亡玩家，若该玩家是镇民则复活（一次性能力）。',
+    color: '#2ecc71' },
+  { id: 'bard', name: '吟游诗人', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '当一名爪牙死于处决时，除了你以外的所有其他玩家醉酒直到明天黄昏。',
+    color: '#2ecc71' },
+  { id: 'tealady', name: '茶艺师', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '如果与你邻近的两名存活的玩家是善良的，他们不会死亡。',
+    color: '#2ecc71' },
+  { id: 'pacifist', name: '和平主义者', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '被处决的善良玩家可能不会死亡。',
+    color: '#2ecc71' },
+  { id: 'fool', name: '弄臣', team: 'GOOD', category: '村民', script: 'bmr',
+    ability: '当你首次将要死亡时，你不会死亡。',
+    color: '#2ecc71' },
+  // BMR 外来者
+  { id: 'tinker', name: '修补匠', team: 'GOOD', category: '外来者', script: 'bmr',
+    ability: '可能会在夜晚死亡（由说书人决定）。',
+    color: '#f39c12' },
+  { id: 'moonchild', name: '月之子', team: 'GOOD', category: '外来者', script: 'bmr',
+    ability: '当你得知你死亡时，你要公开选择一名存活的玩家。如果他是善良的，在当晚他会死亡。',
+    color: '#f39c12' },
+  { id: 'lunatic', name: '莽夫', team: 'GOOD', category: '外来者', script: 'bmr',
+    ability: '每个夜晚，首个使用其自身能力选择了你的玩家会醉酒直到下个黄昏。你会转变为他的阵营。',
+    color: '#f39c12' },
+  { id: 'madman', name: '疯子', team: 'GOOD', category: '外来者', script: 'bmr',
+    ability: '你以为你是一个恶魔，但其实你不是。恶魔知道你是疯子以及你在每个夜晚选择了哪些玩家。',
+    color: '#f39c12' },
+  // BMR 爪牙
+  { id: 'godfather', name: '教父', team: 'EVIL', category: '爪牙', script: 'bmr',
+    ability: '在你的首个夜晚，你会得知有哪些外来者角色在场。如果有外来者在白天死亡，你会在当晚被唤醒并且你要选择一名玩家：他死亡。在场时人数配置会变动外来者+1或-1。',
+    color: '#e74c3c' },
+  { id: 'devilsadvocate', name: '魔鬼代言人', team: 'EVIL', category: '爪牙', script: 'bmr',
+    ability: '每个夜晚，选择一名存活玩家（与上个夜晚不同）：如果该玩家明天白天被处决则不会死。',
+    color: '#e74c3c' },
+  { id: 'assassin', name: '刺客', team: 'EVIL', category: '爪牙', script: 'bmr',
+    ability: '在夜晚时，选择一名玩家杀死（一次性能力），无论什么情况选择的玩家都会死亡。',
+    color: '#e74c3c' },
+  { id: 'mastermind', name: '主谋', team: 'EVIL', category: '爪牙', script: 'bmr',
+    ability: '如果恶魔因为死于处决而因此导致游戏结束时，再额外进行一个夜晚和一个白天。在那个白天如果有玩家被处决，他的阵营落败。',
+    color: '#e74c3c' },
+  // BMR 恶魔
+  { id: 'zombuul', name: '僵怖', team: 'EVIL', category: '恶魔', script: 'bmr',
+    ability: '每个夜晚，若白天无人死亡，选择一名玩家杀死。当你首次死亡后，你仍存活，但是会被当作死亡。',
+    color: '#c0392b' },
+  { id: 'pukka', name: '普卡', team: 'EVIL', category: '恶魔', script: 'bmr',
+    ability: '每个夜晚，选择一名玩家中毒，上一夜被毒的玩家在当晚死亡并恢复健康。',
+    color: '#c0392b' },
+  { id: 'shabaloth', name: '沙巴洛斯', team: 'EVIL', category: '恶魔', script: 'bmr',
+    ability: '每个夜晚，选择两名玩家杀死；你上个夜晚选择过且当前死亡的玩家之一可能会被你反刍（复活）。',
+    color: '#c0392b' },
+  { id: 'po', name: '珀', team: 'EVIL', category: '恶魔', script: 'bmr',
+    ability: '每个夜晚，你可以选择一名玩家：他死亡。如果你上次选择时没有选择任何玩家，当晚你要选择三名玩家：他们死亡。',
+    color: '#c0392b' }
 ];
+
+// 剧本信息映射（用于卡片显示和角色总览标题）
+const SCRIPT_INFO = {
+  tb: { id: 'tb', name: '灾祸之酿', nameEn: 'Trouble Brewing', icon: '🍺', color: '#d4af37',
+        desc: '新手友好，推荐入门' },
+  bmr: { id: 'bmr', name: '黯月初升', nameEn: 'Bad Moon Rising', icon: '🌑', color: '#9b59b6',
+         desc: '进阶剧本，更多恶魔' }
+};
 
 function openRoleOverview() {
   const panel = document.getElementById('roleOverviewPanel');
   if (!panel) return;
   panel.style.display = 'block';
+
+  // 根据当前剧本过滤角色
+  const scriptId = (currentState && currentState.script) || 'tb';
+  const info = SCRIPT_INFO[scriptId] || { icon: '📜', name: '角色总览', nameEn: '', color: '#3498db' };
+  const rolesForScript = ALL_ROLE_INFO.filter(r => r.script === scriptId);
+
+  // 更新标题
+  const titleEl = document.getElementById('roleOverviewTitle');
+  if (titleEl) {
+    titleEl.innerHTML = `<span style="font-size:1.1em;">${info.icon}</span> ${info.name} <span style="font-size:0.75em; color:#888; font-weight:normal;">${info.nameEn}</span>`;
+    titleEl.style.color = info.color;
+  }
 
   // 按分类渲染
   const categories = {
@@ -1886,7 +2104,11 @@ function openRoleOverview() {
   for (const [cat, containerId] of Object.entries(categories)) {
     const container = document.getElementById(containerId);
     if (!container) continue;
-    const roles = ALL_ROLE_INFO.filter(r => r.category === cat);
+    const roles = rolesForScript.filter(r => r.category === cat);
+    if (roles.length === 0) {
+      container.innerHTML = '<div style="color:#666; font-size:12px; padding:8px; text-align:center;">本剧本无此类角色</div>';
+      continue;
+    }
     container.innerHTML = roles.map(r => {
       const teamLabel = r.team === 'GOOD' ? '善良阵营' : '邪恶阵营';
       const teamBg = r.team === 'GOOD' ? 'rgba(46,204,113,0.2)' : 'rgba(231,76,60,0.2)';
@@ -1906,17 +2128,43 @@ function closeRoleOverview() {
 // ========== 自定义角色分配（测试用） ==========
 // 角色分类（与服务端 game-config.js 保持一致）
 const ROLE_CATEGORY = {
-  // 村民
+  // TB 村民
   washerwoman: 'townsfolk', librarian: 'townsfolk', investigator: 'townsfolk', chef: 'townsfolk',
   empath: 'townsfolk', fortuneteller: 'townsfolk', monk: 'townsfolk', ravenkeeper: 'townsfolk',
   virgin: 'townsfolk', slayer: 'townsfolk', soldier: 'townsfolk', mayor: 'townsfolk',
   undertaker: 'townsfolk',
-  // 外来者
+  // TB 外来者
   saint: 'outsider', butler: 'outsider', drunk: 'outsider', recluse: 'outsider',
-  // 爪牙
+  // TB 爪牙
   poisoner: 'minion', scarletwoman: 'minion', baron: 'minion', spy: 'minion',
-  // 恶魔
-  imp: 'demon'
+  // TB 恶魔
+  imp: 'demon',
+  // BMR 村民
+  grandmother: 'townsfolk', sailor: 'townsfolk', maid: 'townsfolk', exorcist: 'townsfolk',
+  innkeeper: 'townsfolk', gambler: 'townsfolk', gossip: 'townsfolk', courtier: 'townsfolk',
+  professor: 'townsfolk', bard: 'townsfolk', tealady: 'townsfolk', pacifist: 'townsfolk',
+  fool: 'townsfolk',
+  // BMR 外来者
+  tinker: 'outsider', moonchild: 'outsider', lunatic: 'outsider', madman: 'outsider',
+  // BMR 爪牙
+  godfather: 'minion', devilsadvocate: 'minion', assassin: 'minion', mastermind: 'minion',
+  // BMR 恶魔
+  zombuul: 'demon', pukka: 'demon', shabaloth: 'demon', po: 'demon'
+};
+
+// 角色所属剧本映射（用于按剧本过滤角色选项）
+const ROLE_SCRIPT_MAP = {
+  // TB
+  washerwoman: 'tb', librarian: 'tb', investigator: 'tb', chef: 'tb', empath: 'tb',
+  fortuneteller: 'tb', monk: 'tb', ravenkeeper: 'tb', virgin: 'tb', slayer: 'tb',
+  soldier: 'tb', mayor: 'tb', undertaker: 'tb', saint: 'tb', butler: 'tb', drunk: 'tb',
+  recluse: 'tb', poisoner: 'tb', scarletwoman: 'tb', baron: 'tb', spy: 'tb', imp: 'tb',
+  // BMR
+  grandmother: 'bmr', sailor: 'bmr', maid: 'bmr', exorcist: 'bmr', innkeeper: 'bmr',
+  gambler: 'bmr', gossip: 'bmr', courtier: 'bmr', professor: 'bmr', bard: 'bmr',
+  tealady: 'bmr', pacifist: 'bmr', fool: 'bmr', tinker: 'bmr', moonchild: 'bmr',
+  lunatic: 'bmr', madman: 'bmr', godfather: 'bmr', devilsadvocate: 'bmr', assassin: 'bmr',
+  mastermind: 'bmr', zombuul: 'bmr', pukka: 'bmr', shabaloth: 'bmr', po: 'bmr'
 };
 
 // 人数配置表：[玩家数, 村民, 外来者, 爪牙, 恶魔]
@@ -1926,16 +2174,27 @@ const ROLE_COMPOSITION_TABLE = [
   [13, 9, 0, 3, 1], [14, 9, 1, 3, 1], [15, 9, 2, 3, 1]
 ];
 
-function getComp(playerCount, hasBaron) {
+function getComp(playerCount, hasSetupChar, scriptId) {
   const entry = ROLE_COMPOSITION_TABLE.find(c => c[0] === playerCount);
   if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
   let t = entry[1], o = entry[2];
-  if (hasBaron) { t -= 2; o += 2; }
-  return { townsfolk: t, outsider: o, minion: entry[3], demon: entry[4] };
+  const setupType = (scriptId === 'bmr') ? 'godfather' : 'baron';
+  if (hasSetupChar) {
+    if (setupType === 'baron') {
+      t -= 2; o += 2;
+    } else if (setupType === 'godfather') {
+      // 教父：外来者±1（服务端随机），前端使用基准值显示
+      // 验证时单独允许 ±1 的容差
+    }
+  }
+  return { townsfolk: t, outsider: o, minion: entry[3], demon: entry[4], setupType };
 }
 
 // 验证自定义角色配置，返回 { valid: boolean, errors: string[], comp: object, counts: object }
-function validateCustomRoles(customRoleMap, playerCount) {
+function validateCustomRoles(customRoleMap, playerCount, scriptId) {
+  const script = scriptId || 'tb';
+  const setupCharId = (script === 'bmr') ? 'godfather' : 'baron';
+  const setupCharName = (script === 'bmr') ? '教父' : '男爵';
   const assigned = Object.values(customRoleMap).filter(r => r);
   const errors = [];
 
@@ -1948,9 +2207,9 @@ function validateCustomRoles(customRoleMap, playerCount) {
     errors.push(`存在重复角色：${dupNames}`);
   }
 
-  // 2. 确定是否有男爵
-  const hasBaron = assigned.includes('baron');
-  const comp = getComp(playerCount, hasBaron);
+  // 2. 确定是否有 setup 角色（TB:男爵 / BMR:教父）
+  const hasSetupChar = assigned.includes(setupCharId);
+  const comp = getComp(playerCount, hasSetupChar, script);
 
   // 3. 按类别统计已指定角色
   const counts = { townsfolk: 0, outsider: 0, minion: 0, demon: 0 };
@@ -1960,25 +2219,30 @@ function validateCustomRoles(customRoleMap, playerCount) {
   });
 
   // 4. 检查各类别是否超限
+  // 对于教父，允许 ±1 容差（实际由服务端随机决定）
+  const outsiderTolerance = (hasSetupChar && comp.setupType === 'godfather') ? 1 : 0;
+  const maxOutsider = comp.outsider + outsiderTolerance;
+  const maxTownsfolk = comp.townsfolk + outsiderTolerance;
+
   if (counts.demon > comp.demon) {
     errors.push(`恶魔最多 ${comp.demon} 名，已指定 ${counts.demon} 名`);
   }
   if (counts.minion > comp.minion) {
-    errors.push(`爪牙最多 ${comp.minion} 名${hasBaron ? '' : '（不含男爵）'}，已指定 ${counts.minion} 名`);
+    errors.push(`爪牙最多 ${comp.minion} 名${hasSetupChar ? '' : `（不含${setupCharName}）`}，已指定 ${counts.minion} 名`);
   }
-  if (counts.outsider > comp.outsider) {
-    errors.push(`外来者最多 ${comp.outsider} 名${hasBaron ? '（含男爵加成）' : ''}，已指定 ${counts.outsider} 名`);
+  if (counts.outsider > maxOutsider) {
+    errors.push(`外来者最多 ${maxOutsider} 名${hasSetupChar ? `（含${setupCharName}${comp.setupType === 'godfather' ? '±1' : '加成'}）` : ''}，已指定 ${counts.outsider} 名`);
   }
-  if (counts.townsfolk > comp.townsfolk) {
-    errors.push(`村民最多 ${comp.townsfolk} 名${hasBaron ? '（男爵-2）' : ''}，已指定 ${counts.townsfolk} 名`);
+  if (counts.townsfolk > maxTownsfolk) {
+    errors.push(`村民最多 ${maxTownsfolk} 名${hasSetupChar ? `（${setupCharName}${comp.setupType === 'godfather' ? '±1' : '-2'}）` : ''}，已指定 ${counts.townsfolk} 名`);
   }
 
   // 5. 检查剩余空位是否足够填充必选角色
   const remaining = playerCount - assigned.length;
   const needDemon = Math.max(0, comp.demon - counts.demon);
   const needMinion = Math.max(0, comp.minion - counts.minion);
-  const needOutsider = Math.max(0, comp.outsider - counts.outsider);
-  const needTownsfolk = Math.max(0, comp.townsfolk - counts.townsfolk);
+  const needOutsider = Math.max(0, maxOutsider - counts.outsider);
+  const needTownsfolk = Math.max(0, maxTownsfolk - counts.townsfolk);
   const totalNeed = needDemon + needMinion + needOutsider + needTownsfolk;
   if (totalNeed > remaining) {
     errors.push(`剩余 ${remaining} 个空位不足以填满配置（还需 ${totalNeed} 个角色位置）`);
@@ -1991,13 +2255,15 @@ function validateCustomRoles(customRoleMap, playerCount) {
     counts,
     needs: { demon: needDemon, minion: needMinion, outsider: needOutsider, townsfolk: needTownsfolk, total: totalNeed },
     remaining,
-    hasBaron
+    hasSetupChar,
+    setupCharId,
+    setupCharName
   };
 }
 
 const CUSTOM_ROLE_OPTIONS = [
   { id: '', name: '随机分配', color: '#888' },
-  // 村民
+  // TB 村民
   { id: 'washerwoman', name: '洗衣妇（村民）', color: '#2ecc71' },
   { id: 'librarian', name: '图书管理员（村民）', color: '#2ecc71' },
   { id: 'investigator', name: '调查员（村民）', color: '#2ecc71' },
@@ -2011,18 +2277,47 @@ const CUSTOM_ROLE_OPTIONS = [
   { id: 'soldier', name: '士兵（村民）', color: '#2ecc71' },
   { id: 'mayor', name: '市长（村民）', color: '#2ecc71' },
   { id: 'undertaker', name: '掘墓人（村民）', color: '#2ecc71' },
-  // 外来者
+  // TB 外来者
   { id: 'saint', name: '圣徒（外来者）', color: '#f39c12' },
   { id: 'butler', name: '管家（外来者）', color: '#f39c12' },
   { id: 'drunk', name: '酒鬼（外来者）', color: '#f39c12' },
   { id: 'recluse', name: '隐士（外来者）', color: '#f39c12' },
-  // 爪牙
+  // TB 爪牙
   { id: 'poisoner', name: '下毒者（爪牙）', color: '#e74c3c' },
   { id: 'scarletwoman', name: '红唇女郎（爪牙）', color: '#e74c3c' },
   { id: 'baron', name: '男爵（爪牙）', color: '#e74c3c' },
   { id: 'spy', name: '间谍（爪牙）', color: '#e74c3c' },
-  // 恶魔
-  { id: 'imp', name: '小恶魔（恶魔）', color: '#c0392b' }
+  // TB 恶魔
+  { id: 'imp', name: '小恶魔（恶魔）', color: '#c0392b' },
+  // BMR 村民
+  { id: 'grandmother', name: '祖母（村民）', color: '#2ecc71' },
+  { id: 'sailor', name: '水手（村民）', color: '#2ecc71' },
+  { id: 'maid', name: '侍女（村民）', color: '#2ecc71' },
+  { id: 'exorcist', name: '驱魔人（村民）', color: '#2ecc71' },
+  { id: 'innkeeper', name: '旅店老板（村民）', color: '#2ecc71' },
+  { id: 'gambler', name: '赌徒（村民）', color: '#2ecc71' },
+  { id: 'gossip', name: '造谣者（村民）', color: '#2ecc71' },
+  { id: 'courtier', name: '侍臣（村民）', color: '#2ecc71' },
+  { id: 'professor', name: '教授（村民）', color: '#2ecc71' },
+  { id: 'bard', name: '吟游诗人（村民）', color: '#2ecc71' },
+  { id: 'tealady', name: '茶艺师（村民）', color: '#2ecc71' },
+  { id: 'pacifist', name: '和平主义者（村民）', color: '#2ecc71' },
+  { id: 'fool', name: '弄臣（村民）', color: '#2ecc71' },
+  // BMR 外来者
+  { id: 'tinker', name: '修补匠（外来者）', color: '#f39c12' },
+  { id: 'moonchild', name: '月之子（外来者）', color: '#f39c12' },
+  { id: 'lunatic', name: '莽夫（外来者）', color: '#f39c12' },
+  { id: 'madman', name: '疯子（外来者）', color: '#f39c12' },
+  // BMR 爪牙
+  { id: 'godfather', name: '教父（爪牙）', color: '#e74c3c' },
+  { id: 'devilsadvocate', name: '魔鬼代言人（爪牙）', color: '#e74c3c' },
+  { id: 'assassin', name: '刺客（爪牙）', color: '#e74c3c' },
+  { id: 'mastermind', name: '主谋（爪牙）', color: '#e74c3c' },
+  // BMR 恶魔
+  { id: 'zombuul', name: '僵怖（恶魔）', color: '#c0392b' },
+  { id: 'pukka', name: '普卡（恶魔）', color: '#c0392b' },
+  { id: 'shabaloth', name: '沙巴洛斯（恶魔）', color: '#c0392b' },
+  { id: 'po', name: '珀（恶魔）', color: '#c0392b' }
 ];
 
 function openCustomRolePanel() {
@@ -2046,6 +2341,7 @@ function renderCustomRoleList() {
   }
 
   const playerCount = seated.length;
+  const scriptId = currentState.script || 'tb';
 
   // 统计已选角色，标注重复
   const usedRoles = {};
@@ -2055,18 +2351,24 @@ function renderCustomRoleList() {
   });
 
   // 实时验证
-  const v = validateCustomRoles(customRoleMap, playerCount);
+  const v = validateCustomRoles(customRoleMap, playerCount, scriptId);
+
+  // 按剧本过滤角色选项
+  const filteredOptions = CUSTOM_ROLE_OPTIONS.filter(opt => !opt.id || ROLE_SCRIPT_MAP[opt.id] === scriptId);
 
   let html = '';
   seated.forEach(p => {
     const currentVal = customRoleMap[p.seat] || '';
+    // 如果当前选中的角色不属于当前剧本，保留显示但标记
+    const currentOpt = CUSTOM_ROLE_OPTIONS.find(o => o.id === currentVal);
+    const isWrongScript = currentVal && currentOpt && ROLE_SCRIPT_MAP[currentVal] !== scriptId;
     const isDuplicate = currentVal && usedRoles[currentVal] > 1;
-    const borderColor = isDuplicate ? '#e74c3c' : (currentVal ? '#2ecc71' : 'rgba(255,255,255,0.1)');
+    const borderColor = isDuplicate ? '#e74c3c' : (currentVal ? (isWrongScript ? '#f39c12' : '#2ecc71') : 'rgba(255,255,255,0.1)');
     html += `<div style="display:flex; align-items:center; padding:8px 12px; margin-bottom:6px; background:rgba(0,0,0,0.3); border-radius:6px; border-left:3px solid ${borderColor};">
       <span style="width:50px; color:#d4af37; font-weight:bold;">${p.seat+1}号</span>
       <span style="flex:1; color:#fff; margin-right:10px;">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</span>
       <select onchange="setCustomRole(${p.seat}, this.value)" style="background:#1a1a2e; color:#fff; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:4px 8px; min-width:180px; font-size:13px;">
-        ${CUSTOM_ROLE_OPTIONS.map(opt =>
+        ${filteredOptions.map(opt =>
           `<option value="${opt.id}" ${currentVal === opt.id ? 'selected' : ''} style="color:${opt.color};">${opt.name}</option>`
         ).join('')}
       </select>
@@ -2074,9 +2376,9 @@ function renderCustomRoleList() {
   });
 
   // 配置概览面板
-  const baronTag = v.hasBaron ? ' <span style="color:#e74c3c;">(男爵在场: 村民-2, 外来者+2)</span>' : '';
+  const setupTag = v.hasSetupChar ? ` <span style="color:#e74c3c;">(${v.setupCharName}在场${v.comp.setupType === 'godfather' ? ': 外来者±1' : ': 村民-2, 外来者+2'})</span>` : '';
   html += `<div style="margin-top:10px; padding:10px; background:rgba(52,73,94,0.4); border-radius:6px; font-size:12px;">
-    <div style="color:#d4af37; font-weight:bold; margin-bottom:6px;">当前人数配置 (${playerCount}人)${baronTag}</div>
+    <div style="color:#d4af37; font-weight:bold; margin-bottom:6px;">当前人数配置 (${playerCount}人)${setupTag}</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
       <span style="color:#2ecc71;">村民: ${v.counts.townsfolk}/${v.comp.townsfolk}</span>
       <span style="color:#f39c12;">外来者: ${v.counts.outsider}/${v.comp.outsider}</span>
@@ -2132,7 +2434,7 @@ function applyCustomRoles() {
   }
 
   // 验证配置
-  const v = validateCustomRoles(customRoleMap, playerCount);
+  const v = validateCustomRoles(customRoleMap, playerCount, currentState.script || 'tb');
   if (!v.valid) {
     showToast('配置有误：' + v.errors[0]);
     return;
@@ -2183,7 +2485,7 @@ let _probConfigDraft = null;
 let _probConfigMeta = null;
 let _probBackupAdvanced = null; // 切到标准模式前备份高级模式的配置
 let _probMode = 'standard'; // 'standard' | 'advanced'
-let _probShowAdvanced = false; // 高级模式下是否展开高级参数
+let _probShowAdvanced = false; // 已废弃（高级权重面板已移除），保留声明以兼容
 
 // 偏袒强度映射（前端版，与后端 prob-config.js 中 applyFavorStrength 逻辑一致）
 function applyFavorStrength(cfg, strength) {
@@ -2200,33 +2502,38 @@ function applyFavorStrength(cfg, strength) {
   b.favorStrength = s;
 }
 
-// 获取标准模式配置（前端版，与后端 getStandardProbConfig 一致）
-function getStandardConfig() {
-  return {
-    recluse_evil: 0.5,
-    recluse_minion: 0.5,
-    recluse_demon: 0.5,
-    recluse_outsider: 0.5,
-    spy_good_chef: 0.5,
-    spy_good_empath: 0.5,
-    spy_not_minion: 0.5,
-    spy_as_townsfolk: 0.5,
-    spy_as_outsider: 0.5,
-    bot_nominate: 0.30,
-    bot_evil_vote_yes: 0.7,
-    bot_good_vote_yes: 0.5,
+// 获取标准模式配置（前端版，与后端 getStandardProbConfig(scriptId) 一致）
+function getStandardConfig(scriptId) {
+  const script = scriptId || (currentState && currentState.script) || 'tb';
+  const TB_FIXED = {
+    recluse_evil: 0.5, recluse_minion: 0.5, recluse_demon: 0.5, recluse_outsider: 0.5,
+    spy_good_chef: 0.5, spy_good_empath: 0.5, spy_not_minion: 0.5,
+    spy_as_townsfolk: 0.5, spy_as_outsider: 0.5
+  };
+  const BMR_FIXED = {
+    // 修补匠夜晚死亡概率、和平主义者拯救概率已由平衡系统自动控制，不再在此配置
+    // 疯子/莽夫获得假恶魔身份为角色固有机制，已移除
+    gossip_true_statement: 0.4
+  };
+  const BOT = { bot_nominate: 0.30, bot_evil_vote_yes: 0.7, bot_good_vote_yes: 0.5 };
+  const scriptFixed = (script === 'bmr') ? BMR_FIXED : TB_FIXED;
+  const cfg = {
+    ...BOT,
+    ...scriptFixed,
     balance: {
       baseFavor: 1.0, maxFavor: 1.0, favorMultiplier: 1.0,
       mayorSaveBase: 0.5, mayorSaveBonus: 0.5, mayorSavePenalty: 0.5,
       goodWeakThreshold: -0.2, evilWeakThreshold: 0.3,
       redHerringFavorMinion: true, redHerringFavorGood: true,
-      poisonedCorrectInfo: false, favorStrength: 1.0
+      favorStrength: 1.0
     },
     balanceWeights: {
       numbersAdvantage: 0.3, deadEvil: 0.2, deadGood: -0.15,
       keyRolesAlive: 0.15, demonSafety: 0.1
     }
   };
+  applyFavorStrength(cfg, 1.0);
+  return cfg;
 }
 
 // 按点路径取值
@@ -2298,15 +2605,14 @@ function setProbMode(mode) {
       _probConfigDraft = JSON.parse(JSON.stringify(_probBackupAdvanced));
     } else {
       _probConfigDraft = getStandardConfig();
-      _probConfigDraft.balance.favorStrength = 0.7;
-      applyFavorStrength(_probConfigDraft, 0.7);
     }
   }
   _probMode = mode;
-  _probShowAdvanced = false;
   _updateModeButtons();
   _renderProbSettingsUI();
 }
+
+// resetProbConfig 中的 _probShowAdvanced 重置已移除（高级权重面板不再显示）
 
 function _updateModeButtons() {
   const btnS = $('probModeStandard');
@@ -2319,7 +2625,7 @@ function _updateModeButtons() {
     btnA.style.background = 'rgba(255,255,255,0.08)';
     btnA.style.color = '#ccc';
     btnA.style.fontWeight = 'normal';
-    desc.innerHTML = '<b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统<b>必帮弱方</b>，中毒/醉酒/酒鬼<b>必出假信息</b>，适合快速开始游戏。';
+    desc.innerHTML = '<b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统<b>必帮弱方</b>，中毒/醉酒/酒鬼信息与BMR修补匠/和平主义者概率<b>由平衡系统自动处理</b>，适合快速开始游戏。';
   } else {
     btnS.style.background = 'rgba(255,255,255,0.08)';
     btnS.style.color = '#ccc';
@@ -2327,7 +2633,7 @@ function _updateModeButtons() {
     btnA.style.background = 'linear-gradient(135deg,#3498db,#2980b9)';
     btnA.style.color = '#fff';
     btnA.style.fontWeight = 'bold';
-    desc.innerHTML = '<b style="color:#85c1e9;">🔧 高级模式：</b>可自由调节各项概率。核心通过"偏袒强度"滑块控制平衡系统，还可展开高级参数微调权重。适合想自定义体验的玩家。';
+    desc.innerHTML = '<b style="color:#85c1e9;">🔧 高级模式：</b>可自由调节固定概率与Bot行为。平衡偏袒系统<b>始终内置启用</b>（偏袒强度、权重、信息真伪判断均不可调），适合想自定义概率体验的玩家。';
   }
 }
 
@@ -2380,16 +2686,32 @@ function _renderProbSettingsUI() {
     });
     html += `</div></div>`;
 
+    // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
+    if ((currentState && currentState.script === 'bmr')) {
+      html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+        <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
+        <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
+          <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#f9e79f;">由平衡系统自动决定</b></div>
+          <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 概率随平衡分数自动调整：</div>
+          <div style="padding-left:20px; color:#aaa; font-size:12px;">
+            · 好人弱势时 → 修补匠<b style="color:#2ecc71;">降低死亡</b>，和平主义者<b style="color:#2ecc71;">提高拯救</b>（帮好人保人）<br>
+            · 邪恶弱势时 → 修补匠<b style="color:#e74c3c;">提高死亡</b>，和平主义者<b style="color:#e74c3c;">降低拯救</b>（帮邪恶削减好人）<br>
+            · 局势均衡时 → 使用基础概率
+          </div>
+        </div>
+      </div>`;
+    }
+
     // 酒鬼/中毒信息
     html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
       <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
       <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息<b style="color:#e74c3c;">100%为假</b></div>
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 假信息的内容方向由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#f9e79f;">由平衡系统自动判断</b></div>
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 信息真伪与方向均由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
         <div style="padding-left:20px; color:#aaa; font-size:12px;">
-          · 好人弱势时 → 假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b>（帮好人调查）<br>
-          · 邪恶弱势时 → 假信息指向<b style="color:#2ecc71;">善良/无恶魔</b>（误导好人）<br>
-          · 局势均衡时 → 假信息方向随机
+          · 好人弱势时 → <b style="color:#2ecc71;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b><br>
+          · 邪恶弱势时 → <b style="color:#e74c3c;">保持假信息</b>（误导好人），假信息指向<b style="color:#2ecc71;">善良/无恶魔</b><br>
+          · 局势均衡时 → 假信息，方向随机
         </div>
       </div>
     </div>`;
@@ -2410,29 +2732,34 @@ function _renderProbSettingsUI() {
     });
     html += `</div></div>`;
 
-    // 偏袒规则（核心特色）
-    const ws = config.balanceWeights;
-    html += `<div style="background:rgba(231,76,60,0.1); border:2px solid rgba(231,76,60,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#e74c3c; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒规则（100%生效）</h3>
-      <div style="padding:12px; background:rgba(231,76,60,0.15); border:2px solid #e74c3c; border-radius:8px; text-align:center;">
-        <div style="font-size:1.2em; font-weight:bold; color:#f1948a;">必帮弱方</div>
-        <div style="color:#ccc; font-size:12px; margin-top:6px; line-height:1.5;">偏袒系统100%触发 · 干扰项偏向弱方 · 市长替死按弱势调整 · 假信息方向自动偏向弱方</div>
+    // 平衡偏袒系统（全部内置启用，仅展示说明）
+    html += `<div style="background:rgba(52,152,219,0.1); border:2px solid rgba(52,152,219,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
+
+      <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
+        <div style="color:#2ecc71; font-size:12px; line-height:1.6;">
+          <b>✓ 内置启用（不可调节）：</b><br>
+          · 偏袒强度 = 100%（必帮弱方）<br>
+          · 中毒/醉酒信息真伪由平衡系统自动判断<br>
+          · 干扰项偏向弱势方<br>
+          · 平衡权重自动计算
+        </div>
       </div>
-      <div style="background:rgba(0,0,0,0.2); border-radius:6px; padding:12px; margin-top:12px;">
+
+      <div style="background:rgba(0,0,0,0.15); border-radius:6px; padding:12px; margin-top:12px;">
         <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
         <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
-          分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × ${(ws.numbersAdvantage*3).toFixed(2)}<br>
-          &emsp;+ 已死邪恶 × ${ws.deadEvil.toFixed(2)} − 已死好人 × ${(-ws.deadGood).toFixed(2)}<br>
+          分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × 0.90<br>
+          &emsp;+ 已死邪恶 × 0.20 − 已死好人 × 0.15<br>
           &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
           <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
         </div>
-        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（标准模式：偏袒强度100%）</div>
+        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
         <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
-          baseFavor=1, favorMultiplier=1, maxFavor=1<br>
-          偏袒概率 = min(|分数| × 1 + 1, 1) = <b style="color:#e74c3c;">100%</b><br>
-          <span style="color:#888;">→ 好人弱势(分数&lt;-0.2)：100%触发偏袒帮好人</span><br>
-          <span style="color:#888;">→ 邪恶弱势(分数&gt;0.3)：100%触发偏袒帮邪恶（误导好人）</span><br>
-          <span style="color:#888;">→ 局势均衡(-0.2≤分数≤0.3)：50%概率偏向任一方向</span>
+          偏袒概率 = min(|分数| × 1.0 + 1.0, 1.0) = 100%<br>
+          <span style="color:#888;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
+          <span style="color:#888;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
+          <span style="color:#888;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
         </div>
       </div>
     </div>`;
@@ -2464,16 +2791,32 @@ function _renderProbSettingsUI() {
   });
   html += `</div>`;
 
+  // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
+  if ((currentState && currentState.script === 'bmr')) {
+    html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
+      <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#f9e79f;">由平衡系统自动决定</b></div>
+        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 概率随平衡分数自动调整：</div>
+        <div style="padding-left:20px; color:#aaa; font-size:12px;">
+          · 好人弱势时 → 修补匠<b style="color:#2ecc71;">降低死亡</b>，和平主义者<b style="color:#2ecc71;">提高拯救</b>（帮好人保人）<br>
+          · 邪恶弱势时 → 修补匠<b style="color:#e74c3c;">提高死亡</b>，和平主义者<b style="color:#e74c3c;">降低拯救</b>（帮邪恶削减好人）<br>
+          · 局势均衡时 → 使用基础概率
+        </div>
+      </div>
+    </div>`;
+  }
+
   // 酒鬼/中毒信息（说明，无滑块）
   html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
     <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
-    <div style="color:#ccc; font-size:13px; line-height:1.8;">
-      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息是否为假，由"中毒/醉酒可能获得真信息"开关控制</div>
-      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 当需要给出假信息时，<b style="color:#f9e79f;">假信息的内容方向由偏袒强度自动决定</b>：</div>
+    <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
+      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#f9e79f;">由平衡系统自动判断</b></div>
+      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 信息真伪与方向均由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
       <div style="padding-left:20px; color:#aaa; font-size:12px;">
-        · 偏袒强度越高，假信息越倾向于帮助弱方<br>
-        · 好人弱势 → 假信息指向邪恶/恶魔（帮好人调查）<br>
-        · 邪恶弱势 → 假信息指向善良/无恶魔（误导好人）
+        · 好人弱势时 → <b style="color:#2ecc71;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b><br>
+        · 邪恶弱势时 → <b style="color:#e74c3c;">保持假信息</b>（误导好人），假信息指向<b style="color:#2ecc71;">善良/无恶魔</b><br>
+        · 局势均衡时 → 假信息，方向随机
       </div>
     </div>
   </div>`;
@@ -2498,126 +2841,39 @@ function _renderProbSettingsUI() {
   });
   html += `</div>`;
 
-  // 平衡偏袒系统（简化：核心滑块 + 开关 + 公式说明）
-  const wsAdv = config.balanceWeights;
-  const favorS = config.balance.favorStrength !== undefined ? config.balance.favorStrength : 0.7;
-  const strengthPct = Math.round(favorS * 100);
-  let strengthDesc = '';
-  if (favorS >= 0.95) strengthDesc = '<span style="color:#e74c3c;">必帮弱方</span>';
-  else if (favorS >= 0.6) strengthDesc = '<span style="color:#f39c12;">偏向弱方</span>';
-  else if (favorS >= 0.3) strengthDesc = '<span style="color:#f1c40f;">轻微偏袒</span>';
-  else strengthDesc = '<span style="color:#95a5a6;">几乎不偏袒</span>';
-
-  const baseF = favorS.toFixed(2);
-  const multF = favorS.toFixed(2);
-  const maxF = '1.00';
-  const goodWeakThF = config.balance.goodWeakThreshold !== undefined ? config.balance.goodWeakThreshold.toFixed(2) : '-0.20';
-  const evilWeakThF = config.balance.evilWeakThreshold !== undefined ? config.balance.evilWeakThreshold.toFixed(2) : '0.30';
-
+  // 平衡偏袒系统（全部内置启用，仅展示说明）
   html += `<div style="background:rgba(52,152,219,0.1); border:2px solid rgba(52,152,219,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
     <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
 
-    <div style="background:rgba(0,0,0,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
-        <label style="color:#eee; font-size:14px; font-weight:bold; min-width:100px;">偏袒强度</label>
-        <input type="range" data-pkey="balance.favorStrength" min="0" max="1" step="0.05" value="${favorS}"
-          oninput="onFavorStrengthInput(this)" onchange="onFavorStrengthChanged(this)"
-          style="flex:1; accent-color:#3498db;" />
-        <span class="prob-val-label" data-pkey-label="balance.favorStrength" style="color:#85c1e9; font-weight:bold; min-width:80px; text-align:right; font-size:14px;">${strengthPct}%</span>
+    <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
+      <div style="color:#2ecc71; font-size:12px; line-height:1.6;">
+        <b>✓ 内置启用（不可调节）：</b><br>
+        · 偏袒强度 = 100%（必帮弱方）<br>
+        · 中毒/醉酒信息真伪由平衡系统自动判断<br>
+        · 干扰项偏向弱势方<br>
+        · 平衡权重自动计算
       </div>
-      <div style="display:flex; justify-content:space-between; font-size:11px; color:#888; padding:0 112px 0 100px;">
-        <span>不偏袒</span>
-        <span id="favorStrengthDesc" style="font-weight:bold;">${strengthDesc}</span>
-        <span>必帮弱方</span>
-      </div>
-    </div>
-
-    <div style="display:flex; gap:15px; flex-wrap:wrap;">
-      <label style="display:flex; align-items:center; gap:8px; color:#ddd; font-size:13px; cursor:pointer;">
-        <input type="checkbox" data-pkey="balance.poisonedCorrectInfo" ${config.balance.poisonedCorrectInfo ? 'checked' : ''} onchange="onProbChanged(this)" style="width:16px; height:16px; cursor:pointer;" />
-        中毒/醉酒可能获得真信息
-      </label>
-      <label style="display:flex; align-items:center; gap:8px; color:#ddd; font-size:13px; cursor:pointer;">
-        <input type="checkbox" data-pkey="balance.redHerringFavorMinion" ${config.balance.redHerringFavorMinion !== false ? 'checked' : ''} onchange="onProbChanged(this)" style="width:16px; height:16px; cursor:pointer;" />
-        干扰项偏向弱势方
-      </label>
     </div>
 
     <div style="background:rgba(0,0,0,0.15); border-radius:6px; padding:12px; margin-top:12px;">
       <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
       <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
-        分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × ${(wsAdv.numbersAdvantage*3).toFixed(2)}<br>
-        &emsp;+ 已死邪恶 × ${wsAdv.deadEvil.toFixed(2)} − 已死好人 × ${(-wsAdv.deadGood).toFixed(2)}<br>
+        分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × 0.90<br>
+        &emsp;+ 已死邪恶 × 0.20 − 已死好人 × 0.15<br>
         &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
         <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
       </div>
-      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（当前偏袒强度=${strengthPct}%）</div>
+      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
       <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
-        baseFavor=${baseF}, favorMultiplier=${multF}, maxFavor=${maxF}<br>
-        偏袒概率 = min(|分数| × ${multF} + ${baseF}, ${maxF})<br>
-        <span style="color:#888;">→ 好人弱势(分数&lt;${goodWeakThF})：概率触发偏袒帮好人</span><br>
-        <span style="color:#888;">→ 邪恶弱势(分数&gt;${evilWeakThF})：概率触发偏袒帮邪恶（误导好人）</span><br>
-        <span style="color:#888;">→ 局势均衡(${goodWeakThF}≤分数≤${evilWeakThF})：50%概率偏向任一方向</span>
+        偏袒概率 = min(|分数| × 1.0 + 1.0, 1.0) = 100%<br>
+        <span style="color:#888;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
+        <span style="color:#888;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
+        <span style="color:#888;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
       </div>
     </div>
   </div>`;
 
-  // 高级参数（可折叠）
-  html += `<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1); border-radius:8px; margin-bottom:12px; overflow:hidden;">
-    <div onclick="toggleProbAdvanced()" style="padding:10px 15px; cursor:pointer; display:flex; align-items:center; justify-content:space-between; user-select:none;">
-      <span style="color:#888; font-size:13px;">🔧 高级参数（平衡权重）${_probShowAdvanced ? '' : ' — 点击展开'}</span>
-      <span style="color:#666; font-size:12px;">${_probShowAdvanced ? '▲ 收起' : '▼ 展开'}</span>
-    </div>`;
-  if (_probShowAdvanced) {
-    html += `<div style="padding:0 15px 15px;">
-      <p style="color:#777; font-size:11px; margin-bottom:10px;">这些参数控制平衡分数的计算方式，通常不需要修改。</p>`;
-    meta.forEach(cat => {
-      if (cat.advanced) {
-        cat.items.forEach(item => {
-          const val = _getCfgVal(config, item.key);
-          const v = (val !== undefined) ? val : item.default;
-          html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
-            <label style="color:#999; min-width:180px; flex:1; font-size:12px;">${item.label}</label>
-            <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
-              oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
-              style="flex:2; min-width:150px; accent-color:#7f8c8d;" />
-            <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#999; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${v.toFixed(2)}</span>
-          </div>`;
-        });
-      }
-    });
-    html += `</div>`;
-  }
-  html += `</div>`;
-
   container.innerHTML = html;
-}
-
-function toggleProbAdvanced() {
-  _probShowAdvanced = !_probShowAdvanced;
-  _renderProbSettingsUI();
-}
-
-function onFavorStrengthInput(el) {
-  const val = parseFloat(el.value);
-  const pct = Math.round(val * 100);
-  const label = document.querySelector('[data-pkey-label="balance.favorStrength"]');
-  if (label) label.textContent = pct + '%';
-  // 更新描述
-  const desc = document.getElementById('favorStrengthDesc');
-  if (desc) {
-    if (val >= 0.95) desc.innerHTML = '<span style="color:#e74c3c;">必帮弱方</span>';
-    else if (val >= 0.6) desc.innerHTML = '<span style="color:#f39c12;">偏向弱方</span>';
-    else if (val >= 0.3) desc.innerHTML = '<span style="color:#f1c40f;">轻微偏袒</span>';
-    else desc.innerHTML = '<span style="color:#95a5a6;">几乎不偏袒</span>';
-  }
-}
-
-function onFavorStrengthChanged(el) {
-  const strength = parseFloat(el.value);
-  _setCfgVal(_probConfigDraft, 'balance.favorStrength', strength);
-  applyFavorStrength(_probConfigDraft, strength);
-  // 不需要重新渲染（滑块已经在正确位置）
 }
 
 function onProbSliderInput(el) {
@@ -2625,11 +2881,7 @@ function onProbSliderInput(el) {
   const val = parseFloat(el.value);
   const label = document.querySelector(`[data-pkey-label="${key}"]`);
   if (label) {
-    if (key.startsWith('balanceWeights')) {
-      label.textContent = val.toFixed(2);
-    } else {
-      label.textContent = Math.round(val * 100) + '%';
-    }
+    label.textContent = Math.round(val * 100) + '%';
   }
 }
 
@@ -2642,10 +2894,6 @@ function onProbChanged(el) {
     val = parseFloat(el.value);
   }
   _setCfgVal(_probConfigDraft, key, val);
-  // 干扰项两个开关联动（同开同关）
-  if (key === 'balance.redHerringFavorMinion') {
-    _setCfgVal(_probConfigDraft, 'balance.redHerringFavorGood', val);
-  }
 }
 
 function saveProbConfig() {
@@ -2656,10 +2904,6 @@ function saveProbConfig() {
   }
   if (_probMode === 'standard') {
     _applyStandardPreset();
-  } else {
-    // 确保favorStrength已应用到其他参数
-    const s = _probConfigDraft.balance.favorStrength;
-    if (s !== undefined) applyFavorStrength(_probConfigDraft, s);
   }
   socket.emit('room:setProbConfig', { config: _probConfigDraft, mode: _probMode });
 }
@@ -2673,7 +2917,6 @@ async function resetProbConfig() {
   if (!ok) return;
   _probMode = 'standard';
   _probBackupAdvanced = null;
-  _probShowAdvanced = false;
   _updateModeButtons();
   socket.emit('room:resetProbConfig');
 }

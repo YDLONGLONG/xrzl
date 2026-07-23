@@ -23,8 +23,28 @@ class VictoryChecker {
     }
 
     // 检查恶魔存活情况
-    const demon = alive.find(p => p.role.category === 'DEMON');
+    const demon = alive.find(p => p.role.category === 'DEMON' && !p.isFakeDemon);
     if (!demon) {
+      // 主谋额外回合中：不因恶魔死亡而结束游戏（等待额外白天结束）
+      if (gs.mastermindExtraRound) {
+        return null;
+      }
+      // 检查主谋触发：恶魔死于处决且主谋存活且尚未触发
+      if (!gs.mastermindTriggered) {
+        const mastermind = alive.find(p => p.role.id === 'mastermind' && !p.isPoisoned);
+        if (mastermind) {
+          const demonExecuted = gs.todaysDeaths.find(d => {
+            const p = room.players.get(d.playerId);
+            return p && p.role && p.role.category === 'DEMON' && !p.isFakeDemon && d.cause === 'EXECUTION';
+          });
+          if (demonExecuted) {
+            gs.mastermindTriggered = true;
+            gs.mastermindExtraRound = true;
+            this.engine.logAction('MASTERMIND', `主谋触发！${mastermind.seat+1}号${mastermind.name}（主谋）存活，恶魔被处决但游戏继续，额外进行一个夜晚和一个白天`);
+            return null;
+          }
+        }
+      }
       return this.endGame('GOOD', '恶魔已死亡，善良阵营获胜！');
     }
 
@@ -43,6 +63,21 @@ class VictoryChecker {
     }
 
     return null;
+  }
+
+  // 主谋额外白天处决检查：被处决的玩家阵营落败
+  checkMastermindExecution(executedPlayer) {
+    const gs = this.engine.room.gameState;
+    if (!gs.mastermindExtraRound) return null;
+    if (!executedPlayer || !executedPlayer.role) return null;
+
+    gs.mastermindExtraRound = false;
+    const losingTeam = executedPlayer.role.team;
+    const winningTeam = losingTeam === 'GOOD' ? 'EVIL' : 'GOOD';
+    return this.endGame(
+      winningTeam,
+      `主谋额外白天：${executedPlayer.seat+1}号${executedPlayer.name}（${losingTeam === 'GOOD' ? '善良' : '邪恶'}阵营）被处决，其阵营落败！`
+    );
   }
 
   checkSaintExecution(playerId) {
