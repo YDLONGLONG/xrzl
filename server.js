@@ -902,6 +902,95 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ========== AI 小助手 ==========
+  // AI 对话系统提示词
+  const AI_SYSTEM_PROMPT = `你是血染钟楼游戏的AI小助手，名叫"小染"。你可以帮助玩家：
+1. 解答血染钟楼游戏规则问题（包括灾祸之酿TB和黯月初升BMR两个剧本）
+2. 解释角色技能和互动方式
+3. 提供游戏策略建议
+4. 闲聊和回答通用问题
+
+注意事项：
+- 回答要简洁友好，避免过长
+- 涉及游戏角色时，可适当给出建议但不要破坏游戏体验
+- 使用中文回复
+- 不要透露具体玩家的角色信息`;
+
+  socket.on('ai:chat', async ({ message, history }) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId } = result;
+    const playerName = (result.room.players.get(socket.id) || {}).name || '玩家';
+
+    try {
+      const messages = [
+        { role: 'system', content: AI_SYSTEM_PROMPT },
+        ...(Array.isArray(history) ? history.slice(-10).map(h => ({
+          role: h.role === 'assistant' ? 'assistant' : 'user',
+          content: h.content
+        })) : []),
+        { role: 'user', content: `[${playerName}]: ${message}` }
+      ];
+
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer 8e7f57d3813947d9a96fa4e08804769a.xZAqoIHV2cev1hTw'
+        },
+        body: JSON.stringify({
+          model: 'glm-4.7-flash',
+          messages: messages,
+          stream: true
+        })
+      });
+
+      if (!response.ok) {
+        socket.emit('ai:error', { message: `AI请求失败: ${response.status}` });
+        return;
+      }
+
+      const msgId = 'ai_' + Date.now() + '_' + Math.random();
+      // 通知前端开始接收 AI 消息
+      socket.emit('ai:start', { id: msgId, playerName });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const json = JSON.parse(data);
+            const delta = json.choices?.[0]?.delta?.content;
+            if (delta) {
+              socket.emit('ai:chunk', { id: msgId, chunk: delta });
+            }
+          } catch(e) {
+            // 忽略解析错误
+          }
+        }
+      }
+
+      socket.emit('ai:done', { id: msgId });
+    } catch(err) {
+      console.error('AI对话错误:', err.message);
+      socket.emit('ai:error', { message: 'AI服务暂时不可用' });
+    }
+  });
+
   // ========== 上帝视角 ==========
   const GOD_PASSWORD = '0';
   socket.on('god:login', ({ password }) => {

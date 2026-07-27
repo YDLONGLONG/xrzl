@@ -313,6 +313,180 @@ class BotManager {
     }
     return Math.random() < this.engine.prob('bot_good_vote_yes');
   }
+
+  triggerDayChat() {
+    const gs = this.engine.room.gameState;
+    const bots = Array.from(this.engine.room.players.values())
+      .filter(p => p.isBot && p.isAlive && p.seat !== -1);
+    
+    bots.forEach((bot, idx) => {
+      console.log('[BotDayChat]', bot.name, 'role:', bot.role?.name, 'privateInfo:', bot.privateInfo ? { type: bot.privateInfo.type, msg: bot.privateInfo.message } : null);
+      const msg = this._generateBotSpeech(bot);
+      console.log('[BotDayChat] generated msg:', msg);
+      if (msg) {
+        setImmediate(() => {
+          if (this.engine.room.gameState.phase === 'DAY_DISCUSSION') {
+            this.engine.sendChat(bot.id, msg, 'public');
+          }
+        });
+      }
+    });
+  }
+
+  _getPlayerBySeat(seat) {
+    return Array.from(this.engine.room.players.values()).find(p => p.seat === seat);
+  }
+
+  _seatToName(seat) {
+    const p = this._getPlayerBySeat(seat);
+    return p ? `${p.name}(${seat+1}号)` : `${seat+1}号`;
+  }
+
+  _extractTargetInfo(info) {
+    if (!info) return null;
+    let targets = [];
+    if (info.targets && Array.isArray(info.targets)) {
+      targets = info.targets.map(t => {
+        if (t.seat !== undefined) return `${this._seatToName(t.seat)}`;
+        if (t.name) return t.name;
+        return '?';
+      });
+    } else if (info.players && Array.isArray(info.players)) {
+      targets = info.players.map(t => {
+        if (t.seat !== undefined) return `${this._seatToName(t.seat)}`;
+        if (t.name) return t.name;
+        return '?';
+      });
+    } else if (info.targetId) {
+      const p = this.engine.room.players.get(info.targetId);
+      if (p) targets = [`${this._seatToName(p.seat)}`];
+    } else if (info.protectedId) {
+      const p = this.engine.room.players.get(info.protectedId);
+      if (p) targets = [`${this._seatToName(p.seat)}`];
+    }
+    return targets.length > 0 ? targets.join('和') : null;
+  }
+
+  _generateBotSpeech(bot) {
+    if (!bot.role) return null;
+    const role = bot.role;
+    const info = bot.privateInfo;
+    const seat = bot.seat + 1;
+    const name = bot.name;
+
+    const goodRoleNames = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','守鸦人','圣女','市长','僧侣','士兵','送葬者'];
+
+    let roleName = role.name;
+    let team = role.team;
+    let category = role.category;
+
+    if (info && info.isDrunk && info.role && info.role.name) {
+      roleName = info.role.name;
+      team = info.role.team || 'GOOD';
+      category = info.role.category || 'TOWNSFOLK';
+    }
+    if (bot.fakeRole && role.id === 'drunk') {
+      roleName = bot.fakeRole.name;
+      team = 'GOOD';
+      category = 'TOWNSFOLK';
+    }
+
+    let intro;
+    let infoMsg = '';
+
+    if (team === 'GOOD') {
+      const templates = [
+        `我是${roleName}，坐在${seat}号，好人阵营。`,
+        `各位好，${seat}号${name}，身份${roleName}，好人。`,
+        `${seat}号${name}报到，${roleName}，好人一枚。`
+      ];
+      intro = templates[Math.floor(Math.random() * templates.length)];
+
+      if (info && info.message && info.type !== 'role_info') {
+        const msg = info.message;
+        if (roleName === '洗衣妇' || roleName === '图书管理员' || roleName === '调查员') {
+          infoMsg = msg;
+        } else if (roleName === '厨师') {
+          infoMsg = msg;
+        } else if (roleName === '共情者') {
+          infoMsg = msg;
+        } else if (roleName === '占卜师') {
+          const targetInfo = this._extractTargetInfo(info);
+          const resultText = msg.includes('有恶魔') ? '结果显示有恶魔嫌疑' : '结果显示没有恶魔';
+          infoMsg = targetInfo ? `昨晚我查了${targetInfo}，${resultText}` : msg;
+        } else if (roleName === '送葬者') {
+          infoMsg = msg;
+        } else if (roleName === '僧侣') {
+          infoMsg = msg;
+        } else if (roleName === '守鸦人') {
+          infoMsg = msg;
+        } else if (roleName === '圣女') {
+          infoMsg = `如果提名我的玩家会立刻死亡，大家提名需谨慎。`;
+        } else if (roleName === '士兵') {
+          infoMsg = `恶魔杀不死我。`;
+        } else if (roleName === '市长') {
+          infoMsg = `平票时由我决定处决谁，只剩三人无人处决则好人胜利。`;
+        } else if (roleName === '隐士') {
+          infoMsg = `我可能会被信息位误登记为邪恶阵营，大家看到关于我的信息注意分辨。`;
+        } else if (roleName === '圣徒') {
+          infoMsg = `如果我被处决好人直接失败，大家千万别出我！`;
+        } else {
+          const targetInfo = this._extractTargetInfo(info);
+          infoMsg = targetInfo ? `昨晚我选择了${targetInfo}，${msg}` : msg;
+        }
+      } else if (category === 'TOWNSFOLK') {
+        if (roleName === '圣女') infoMsg = `如果提名我的玩家会立刻死亡，大家提名需谨慎。`;
+        else if (roleName === '士兵') infoMsg = `恶魔杀不死我。`;
+        else if (roleName === '市长') infoMsg = `平票时由我决定处决谁。`;
+        else if (roleName === '守鸦人') infoMsg = `我死后可以查看一名玩家的身份。`;
+        else if (roleName === '僧侣') infoMsg = `每晚可以保护一名玩家不被恶魔杀害。`;
+      }
+    } else {
+      const fakeRole = goodRoleNames[Math.floor(Math.random() * goodRoleNames.length)];
+      const evilTemplates = [
+        `我是${fakeRole}，${seat}号，铁好人一个，大家可以信任我。`,
+        `${seat}号${name}报到，${fakeRole}，好人阵营，绝不撒谎。`,
+        `各位好，${seat}号${name}，${fakeRole}，站好人这边。`
+      ];
+      intro = evilTemplates[Math.floor(Math.random() * evilTemplates.length)];
+
+      const alivePlayers = Array.from(this.engine.room.players.values())
+        .filter(p => p.isAlive && p.seat !== -1 && p.id !== bot.id);
+      const goodPlayers = alivePlayers.filter(p => p.role && p.role.team === 'GOOD');
+
+      if (fakeRole === '洗衣妇' || fakeRole === '图书管理员') {
+        if (goodPlayers.length >= 2) {
+          const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
+          const t1 = shuffled[0], t2 = shuffled[1];
+          const rn = goodRoleNames[Math.floor(Math.random() * 6)];
+          infoMsg = `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是${rn}。`;
+        }
+      } else if (fakeRole === '调查员') {
+        if (goodPlayers.length >= 2) {
+          const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
+          const t1 = shuffled[0], t2 = shuffled[1];
+          infoMsg = `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是爪牙，大家注意！`;
+        }
+      } else if (fakeRole === '厨师') {
+        const cnt = Math.floor(Math.random() * 2);
+        infoMsg = cnt === 0 ? `我得到的信息是邪恶阵营没有相邻坐的。` : `我得到的信息是有${cnt}对邪恶玩家是邻座。`;
+      } else if (fakeRole === '共情者') {
+        const fake = Math.floor(Math.random() * 3);
+        if (fake === 0) infoMsg = `我的邻居都是好人，可以信任。`;
+        else if (fake === 1) infoMsg = `我的邻居里有一个是邪恶的。`;
+        else infoMsg = `我的邻居都是邪恶的，这轮一定要从他们里面出！`;
+      } else if (fakeRole === '占卜师' && goodPlayers.length > 0) {
+        const target = goodPlayers[Math.floor(Math.random() * goodPlayers.length)];
+        infoMsg = `我昨晚查了${this._seatToName(target.seat)}，结果显示有恶魔嫌疑，大家重点关注！`;
+      } else if (fakeRole === '僧侣' || fakeRole === '士兵' || fakeRole === '守鸦人' || fakeRole === '圣女' || fakeRole === '市长') {
+        infoMsg = `我这个身份好好发挥，大家听我归票。`;
+      } else if (fakeRole === '送葬者') {
+        infoMsg = `今晚我会关注被处决的人身份。`;
+      }
+    }
+
+    return intro + (infoMsg ? ' ' + infoMsg : '');
+  }
 }
 
 module.exports = BotManager;

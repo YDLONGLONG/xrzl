@@ -344,6 +344,9 @@ class GameEngine {
 
   handleDayDiscussion() {
     // 进入自由讨论阶段，等待提名或全员确认结束讨论
+    if (this.botManager) {
+      this.botManager.triggerDayChat();
+    }
     this.waitForConfirmation();
   }
 

@@ -92,6 +92,9 @@
     <!-- 左侧座位列表 -->
     <div class="seats-area" id="seatsArea"></div>
 
+    <!-- 左侧拖拽分隔条 -->
+    <div class="resizer resizer-left" id="resizerLeft" title="拖拽调整宽度"></div>
+
     <!-- 中央信息区 -->
     <div class="center-area" id="centerArea">
       <div class="center-scroll" id="centerScroll">
@@ -116,6 +119,9 @@
       </div>
     </div>
 
+    <!-- 右侧拖拽分隔条 -->
+    <div class="resizer resizer-right" id="resizerRight" title="拖拽调整宽度"></div>
+
     <!-- 右侧聊天区 -->
     <div class="chat-area">
       <div class="chat-tabs">
@@ -135,7 +141,8 @@
         <span class="whisper-change" onclick="showWhisperPanel()">切换</span>
       </div>
       <div class="chat-input-area">
-        <input type="text" id="chatInput" placeholder="输入消息..." maxlength="500" onkeydown="if(event.key==='Enter')sendChat()">
+        <button class="btn btn-sm ai-trigger-btn" onclick="insertAiTrigger()" title="@小染 AI助手">🤖</button>
+        <input type="text" id="chatInput" placeholder="输入消息... @小染 可问AI" maxlength="500" onkeydown="if(event.key==='Enter')sendChat()">
         <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
       </div>
     </div>

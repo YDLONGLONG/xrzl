@@ -40,6 +40,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // 尝试自动重连
   tryAutoReconnect();
+
+  // 初始化拖拽分隔条
+  initResizers();
 });
 
 // 尝试自动重连（从sessionStorage恢复）
@@ -276,6 +279,49 @@ function initSocketEvents() {
     addChatMessage(msg);
   });
 
+  // AI 小助手事件
+  socket.on('ai:start', ({ id, playerName }) => {
+    isAiThinking = true;
+    aiPendingMessages[id] = { content: '', playerName, chunks: [] };
+    renderChatMessages();
+  });
+
+  socket.on('ai:chunk', ({ id, chunk }) => {
+    if (!aiPendingMessages[id]) return;
+    aiPendingMessages[id].content += chunk;
+    renderChatMessages();
+  });
+
+  socket.on('ai:done', ({ id }) => {
+    const pending = aiPendingMessages[id];
+    if (pending) {
+      aiChatHistory.push({ role: 'assistant', content: pending.content });
+      aiChatHistory = aiChatHistory.slice(-20);
+      // 将 AI 消息转为普通聊天消息存入 chatMessages
+      chatMessages.push({
+        id: 'ai_msg_' + id,
+        fromId: 'ai_assistant',
+        fromName: '小染 AI',
+        fromSeat: -1,
+        isDead: false,
+        isAi: true,
+        content: pending.content,
+        channel: 'public',
+        timestamp: Date.now()
+      });
+      delete aiPendingMessages[id];
+      renderChatMessages();
+    }
+    isAiThinking = false;
+  });
+
+  socket.on('ai:error', ({ message }) => {
+    isAiThinking = false;
+    aiPendingMessages = {};
+    showToast(message || 'AI请求失败');
+    renderChatMessages();
+  });
+
   socket.on('player:died', (data) => {
     if (hasLeftRoom) return;
     showPlayerDied(data);
@@ -338,6 +384,107 @@ function initSocketEvents() {
     $('godBtn').style.background = 'rgba(155,89,182,0.3)';
     $('godBtn').style.color = '#d4a5e8';
   });
+}
+
+// ========== 三栏拖拽调整宽度 ==========
+const RESIZE_STORAGE_KEY = 'xrzl_col_widths';
+const RESIZE_CONFIG = {
+  left: { min: 120, max: 400, default: 200, cssVar: '--left-col-width' },
+  right: { min: 200, max: 500, default: 280, cssVar: '--right-col-width' }
+};
+
+let _resizerState = { active: null, startX: 0, startWidth: 0 };
+
+function initResizers() {
+  applySavedWidths();
+  setupResizer('resizerLeft', 'left');
+  setupResizer('resizerRight', 'right');
+}
+
+function applySavedWidths() {
+  try {
+    const saved = localStorage.getItem(RESIZE_STORAGE_KEY);
+    if (!saved) return;
+    const widths = JSON.parse(saved);
+    const container = $('gameView');
+    if (!container) return;
+    if (widths.left) {
+      container.style.setProperty('--left-col-width', widths.left + 'px');
+    }
+    if (widths.right) {
+      container.style.setProperty('--right-col-width', widths.right + 'px');
+    }
+  } catch(e) {
+    console.warn('读取列宽失败:', e);
+  }
+}
+
+function saveWidth(side, width) {
+  try {
+    const saved = localStorage.getItem(RESIZE_STORAGE_KEY);
+    const widths = saved ? JSON.parse(saved) : {};
+    widths[side] = width;
+    localStorage.setItem(RESIZE_STORAGE_KEY, JSON.stringify(widths));
+  } catch(e) {}
+}
+
+function setupResizer(elId, side) {
+  const resizer = $(elId);
+  if (!resizer) return;
+  const config = RESIZE_CONFIG[side];
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    if (window.innerWidth < 768) return;
+    _resizerState.active = side;
+    _resizerState.startX = e.clientX;
+
+    const container = $('gameView');
+    const currentWidth = parseInt(getComputedStyle(container).getPropertyValue(config.cssVar)) || config.default;
+    _resizerState.startWidth = currentWidth;
+
+    resizer.classList.add('resizing');
+    document.body.classList.add('resizing-active');
+
+    document.addEventListener('mousemove', onResizeMove);
+    document.addEventListener('mouseup', onResizeEnd);
+  });
+}
+
+function onResizeMove(e) {
+  const side = _resizerState.active;
+  if (!side) return;
+  const config = RESIZE_CONFIG[side];
+  const container = $('gameView');
+  if (!container) return;
+
+  let delta = e.clientX - _resizerState.startX;
+  if (side === 'right') delta = -delta;
+
+  let newWidth = _resizerState.startWidth + delta;
+  newWidth = Math.max(config.min, Math.min(config.max, newWidth));
+
+  container.style.setProperty(config.cssVar, newWidth + 'px');
+}
+
+function onResizeEnd() {
+  const side = _resizerState.active;
+  if (!side) return;
+
+  const config = RESIZE_CONFIG[side];
+  const container = $('gameView');
+  if (container) {
+    const currentWidth = parseInt(getComputedStyle(container).getPropertyValue(config.cssVar)) || config.default;
+    saveWidth(side, currentWidth);
+  }
+
+  document.querySelectorAll('.resizer').forEach(r => r.classList.remove('resizing'));
+  document.body.classList.remove('resizing-active');
+
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeEnd);
+
+  _resizerState.active = null;
 }
 
 // ========== 连接状态 ==========
@@ -405,6 +552,9 @@ function backToHome() {
   unreadPublic = 0;
   unreadDead = 0;
   unreadWhispers = {};
+  aiChatHistory = [];
+  aiPendingMessages = {};
+  isAiThinking = false;
   customRoleMode = false;
   customRoleMap = {};
   isGodView = false;
@@ -719,18 +869,27 @@ function renderCenter(state) {
     const scriptCardsHtml = scriptList.map(s => {
       const info = SCRIPT_INFO[s.id] || { icon: '📜', desc: '', color: '#888', nameEn: '' };
       const isActive = s.id === currentScript;
-      const cardStyle = isActive
-        ? `border:2px solid ${info.color}; background:linear-gradient(135deg, ${info.color}33, ${info.color}11); box-shadow:0 0 12px ${info.color}55;`
-        : `border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.03);`;
       const cursor = isHost ? 'cursor:pointer;' : 'cursor:default; opacity:0.85;';
       const onClickAttr = isHost ? `onclick="setScript('${s.id}')"` : '';
-      return `<div ${onClickAttr} style="flex:1; min-width:0; padding:10px 12px; border-radius:8px; ${cardStyle} ${cursor} transition:all 0.2s; display:flex; align-items:center; gap:8px;">
-        <span style="font-size:1.6em; line-height:1;">${info.icon}</span>
-        <div style="flex:1; min-width:0;">
-          <div style="font-weight:bold; color:${isActive ? info.color : '#e0e0e0'}; font-size:14px;">${s.name}</div>
-          <div style="font-size:11px; color:#888;">${info.nameEn}${info.desc ? ' · ' + info.desc : ''}</div>
+      const borderColor = isActive ? info.color : 'rgba(255,255,255,0.1)';
+      const bgGrad = isActive
+        ? `linear-gradient(145deg, ${info.color}1a 0%, ${info.color}08 40%, rgba(255,255,255,0.02) 100%)`
+        : 'linear-gradient(145deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)';
+      const shadow = isActive
+        ? `0 4px 24px ${info.color}33, inset 0 1px 0 rgba(255,255,255,0.08)`
+        : '0 2px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)';
+      const textColor = isActive ? info.color : '#e8e8e8';
+      return `<div ${onClickAttr} class="script-card" style="flex:1; min-width:0; padding:16px 18px; border-radius:14px; border:1px solid ${borderColor}; background:${bgGrad}; box-shadow:${shadow}; ${cursor} transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display:flex; flex-direction:column; gap:8px; position:relative; overflow:hidden;">
+        <div style="position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, ${info.color}66, transparent); opacity:${isActive ? '1' : '0.3'};"></div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="script-icon" style="width:40px; height:40px; border-radius:10px; background:${isActive ? info.color + '22' : 'rgba(255,255,255,0.06)'}; display:flex; align-items:center; justify-content:center; font-size:1.5em; flex-shrink:0; transition:all 0.3s;">${info.icon}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:700; color:${textColor}; font-size:15px; letter-spacing:0.3px;">${s.name}</div>
+            <div style="font-size:11px; color:#999; font-weight:400; letter-spacing:0.5px; margin-top:2px;">${info.nameEn}</div>
+          </div>
+          ${isActive ? `<div style="width:22px; height:22px; border-radius:50%; background:${info.color}; display:flex; align-items:center; justify-content:center; font-size:12px; color:#1a1a2e; font-weight:bold; box-shadow:0 0 10px ${info.color}88;">✓</div>` : ''}
         </div>
-        ${isActive ? '<span style="color:' + info.color + '; font-size:1.1em;">✓</span>' : ''}
+        <div style="font-size:12px; color:${isActive ? '#bbb' : '#777'}; line-height:1.5; padding-left:50px; transition:color 0.3s;">${info.desc}</div>
       </div>`;
     }).join('');
 
@@ -1297,6 +1456,9 @@ function showPlayerDied(data) {
 }
 
 // ========== 聊天 ==========
+let aiChatHistory = [];      // AI 对话历史（用于上下文）
+let aiPendingMessages = {};   // 正在接收的 AI 消息 { id: { content, playerName } }
+let isAiThinking = false;     // AI 正在响应中
 let chatMessages = [];
 let unreadPublic = 0;       // 公聊未读数
 let unreadDead = 0;         // 死者频道未读数
@@ -1452,6 +1614,44 @@ function sendChat() {
   const content = input.value.trim();
   if (!content) return;
 
+  // 检测 AI 小助手触发：@小染 / @AI / @ai
+  const aiMatch = content.match(/^@(?:小染|AI|ai)\s+(.+)/);
+  if (aiMatch && currentChatChannel === 'public') {
+    const aiMessage = aiMatch[1].trim();
+    if (!aiMessage) return;
+    if (isAiThinking) {
+      showToast('小染正在回复中，请稍候...');
+      return;
+    }
+
+    // 先显示用户的消息（带 @小染 前缀）
+    const userMsg = {
+      id: Date.now() + Math.random(),
+      fromId: myId,
+      fromName: myName || '我',
+      fromSeat: (currentState && currentState.mySeat !== undefined) ? currentState.mySeat : -1,
+      isDead: false,
+      content: content,
+      channel: 'public',
+      timestamp: Date.now()
+    };
+    chatMessages.push(userMsg);
+    renderChatMessages();
+
+    // 记录到 AI 历史
+    aiChatHistory.push({ role: 'user', content: aiMessage });
+    aiChatHistory = aiChatHistory.slice(-20);
+
+    // 发送给后端
+    socket.emit('ai:chat', {
+      message: aiMessage,
+      history: aiChatHistory.filter(h => h.role === 'user' || h.role === 'assistant')
+    });
+
+    input.value = '';
+    return;
+  }
+
   let targetId = null;
   if (currentChatChannel === 'whisper') {
     targetId = whisperTargetId;
@@ -1463,6 +1663,20 @@ function sendChat() {
 
   socket.emit('chat:send', { content, channel: currentChatChannel, targetId });
   input.value = '';
+}
+
+// 插入 @小染 触发前缀
+function insertAiTrigger() {
+  const input = $('chatInput');
+  const current = input.value.trim();
+  if (current.startsWith('@小染') || current.startsWith('@AI') || current.startsWith('@ai')) {
+    input.focus();
+    return;
+  }
+  input.value = '@小染 ' + current;
+  input.focus();
+  // 光标移到末尾
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 function addChatMessage(msg) {
@@ -1517,6 +1731,14 @@ function renderChatMessages() {
   });
 
   container.innerHTML = visible.map(msg => {
+    // AI 消息特殊渲染
+    if (msg.isAi) {
+      return `<div class="chat-msg ai-msg">
+        <span class="msg-sender ai-sender">🤖 小染 AI:</span>
+        <span class="ai-content">${escapeHtml(msg.content)}</span>
+      </div>`;
+    }
+
     const senderClass = msg.fromId === myId ? 'you' : '';
     const deadClass = msg.isDead ? 'dead' : '';
     const privateClass = msg.channel === 'whisper' ? 'private' : '';
@@ -1539,6 +1761,22 @@ function renderChatMessages() {
       <span>${escapeHtml(msg.content)}</span>
     </div>`;
   }).join('');
+
+  // 渲染正在接收的 AI 流式消息
+  if (currentChatChannel === 'public') {
+    const pendingHtml = Object.values(aiPendingMessages).map(p => {
+      const displayContent = p.content || '思考中...';
+      const cursor = p.content ? '' : '<span class="ai-thinking-dots">●●●</span>';
+      return `<div class="chat-msg ai-msg ai-msg-pending">
+        <span class="msg-sender ai-sender">🤖 小染 AI:</span>
+        <span class="ai-content">${escapeHtml(displayContent)}${cursor}</span>
+      </div>`;
+    }).join('');
+    container.innerHTML += pendingHtml;
+  }
+
+  // 自动滚动到底部
+  container.scrollTop = container.scrollHeight;
 
 }
 

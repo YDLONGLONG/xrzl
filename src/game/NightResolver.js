@@ -471,7 +471,7 @@ class NightResolver {
 
     // 检查茶艺师保护
     const Tealady = require('../roles/Townsfolk2').Tealady;
-    if (Tealady.isProtectedByTealady && Tealady.isProtectedByTealady(this.engine.room, target)) {
+    if (Tealady.isProtectedByTealady && Tealady.isProtectedByTealady(target, this.engine)) {
       this.engine.logAction('ABILITY', `${target.seat+1}号 ${target.name} 被茶艺师保护`, {
         playerId: target.id
       });
