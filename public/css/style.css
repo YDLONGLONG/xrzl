@@ -509,3 +509,26 @@ body {
 .confirm-type-warning .confirm-ok:hover {
   background: linear-gradient(135deg, #ff8787, #ff6b6b);
 }
+.confirm-input-area {
+  margin-bottom: 16px;
+}
+.confirm-textarea, .confirm-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: inherit;
+  resize: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease;
+}
+.confirm-textarea:focus, .confirm-input:focus {
+  outline: none;
+  border-color: rgba(212, 175, 55, 0.7);
+}
+.confirm-textarea::placeholder, .confirm-input::placeholder {
+  color: #666;
+}

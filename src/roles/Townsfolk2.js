@@ -1,21 +1,42 @@
 // BMR镇民角色集合（黯月初升）
 const Role = require('./Role');
 const { BMR_ROLE_IDS } = require('../config/game-config');
-const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors } = require('../utils/helpers');
+const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, clearDrunkSource } = require('../utils/helpers');
 
 // 辅助：获取当晚因自身能力被唤醒的玩家ID集合
+// 判定必须与 NightResolver.wakeNext 的 shouldWake 逻辑保持一致，
+// 否则女仆等依赖"谁被唤醒"的技能会得到错误结果。
+// 注意：夜晚行动顺序的真正来源是脚本配置（FIRST_NIGHT_ORDER / OTHER_NIGHT_ORDER）
+// 与 getNightWakeInfo，而不是角色类上的 firstNightOrder/otherNightOrder 数值。
 function getWokenPlayerIds(gameState, engine) {
   const wokenIds = new Set();
   const isFirstNight = gameState.nightCount === 0;
   for (const [, player] of engine.room.players) {
     if (!player.isAlive || !player.role) continue;
-    const order = isFirstNight ? player.role.firstNightOrder : player.role.otherNightOrder;
-    if (order < 0) continue;
-    if (player.role.selectCount > 0 || player.role.wakesForInfo === true) {
+    const role = player.role;
+    const isDrunk = player.isDrunk === true;
+    const effectiveRole = (isDrunk && player.fakeRole) ? player.fakeRole : role;
+    const wakeInfo = role.getNightWakeInfo ? role.getNightWakeInfo(gameState, player, engine, isFirstNight) : null;
+    const selectCount = isDrunk ? (role.selectCount || 0) : (effectiveRole.selectCount || 0);
+    const wakesForInfo = effectiveRole.wakesForInfo === true;
+    const selectType = effectiveRole.selectType || 'player';
+    const isFakeDemon = role.isFakeDemon === true;
+    const shouldWake = (selectCount > 0) || wakesForInfo || selectType === 'role'
+      || (isDrunk && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
+    if (shouldWake) {
       wokenIds.add(player.id);
     }
   }
   return wokenIds;
+}
+
+// 辅助：从夜晚行动记录中取出目标ID列表（兼容单目标 targetId 与多目标 targets）
+function getActionTargetIds(action) {
+  if (!action) return [];
+  const ids = [];
+  if (Array.isArray(action.targets)) ids.push(...action.targets);
+  if (action.targetId) ids.push(action.targetId);
+  return ids.filter(Boolean);
 }
 
 // 辅助：检查玩家是否被恶魔杀害（当夜）
@@ -23,7 +44,7 @@ function isKilledByDemon(gameState, playerId) {
   const demonActionKeys = ['imp', 'zombuul', 'pukka', 'shabaloth', 'po'];
   return demonActionKeys.some(k => {
     const action = gameState.nightActions[k];
-    return action && action.targetId === playerId;
+    return getActionTargetIds(action).includes(playerId);
   });
 }
 
@@ -54,7 +75,7 @@ class Grandmother extends Role {
       let realGrandchildId = grandchild.id;
       let probInfo = null;
 
-      if (player.isPoisoned) {
+      if (player.isPoisoned || player.isDrunk) {
         const adjustedResult = engine.balanceSystem.adjustInfo(this, { roleName, grandchildId: grandchild.id }, player, engine, '祖母中毒正确信息');
         probInfo = adjustedResult.probInfo;
         if (adjustedResult.info === null) {
@@ -87,10 +108,12 @@ class Grandmother extends Role {
 
       if (grandchild.isDead && grandchild.deathNight === gameState.nightCount && isKilledByDemon(gameState, grandchildId)) {
         if (player.isAlive && !player.isPoisoned) {
-          engine.deathManager.killPlayerDirect(player.id, 'GRANDMOTHER', gameState.nightCount, -1);
-          engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（祖母）因孙子被恶魔杀害而死亡`, {
-            playerId: player.id, grandchildId
-          });
+          const result = engine.deathManager.killPlayer(player.id, 'GRANDMOTHER', gameState.nightCount, -1);
+          if (result && !result.prevented) {
+            engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（祖母）因孙子被恶魔杀害而死亡`, {
+              playerId: player.id, grandchildId
+            });
+          }
         }
       }
     }
@@ -128,21 +151,10 @@ class Sailor extends Role {
       return { success: false, message: '选择的玩家无效' };
     }
 
-    // 清除上一夜水手造成的醉酒
-    if (player.abilityState.lastDrunkId) {
-      const oldDrunk = engine.room.players.get(player.abilityState.lastDrunkId);
-      if (oldDrunk) oldDrunk.isDrunk = false;
-    }
-
-    // 随机决定水手或目标醉酒
+    // 随机决定水手或目标醉酒（持续到明天黄昏：本夜+次日白天）
     const sailorDrunk = Math.random() < 0.5;
-    if (sailorDrunk) {
-      player.isDrunk = true;
-      player.abilityState.lastDrunkId = player.id;
-    } else {
-      target.isDrunk = true;
-      player.abilityState.lastDrunkId = targetId;
-    }
+    const drunked = sailorDrunk ? player : target;
+    applyDrunk(drunked, 'sailor', 2);
     player.abilityState.lastTargetId = targetId;
 
     engine.setPlayerPrivateInfo(player, {
@@ -155,8 +167,8 @@ class Sailor extends Role {
   }
 
   onDeath(gameState, player, cause, engine) {
-    // 水手不会被恶魔杀害（类似士兵）
-    if (cause === 'DEMON' && !player.isPoisoned) {
+    // 水手不会被恶魔杀害（类似士兵），醉酒或中毒时失效
+    if (cause === 'DEMON' && !player.isPoisoned && !player.isDrunk) {
       player.isAlive = true;
       player.isDead = false;
       player.deathNight = -1;
@@ -220,7 +232,7 @@ class Maid extends Role {
     let realInfo = count;
     let probInfo = null;
 
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const adjustedResult = engine.balanceSystem.adjustInfo(this, count, player, engine, '侍女中毒正确信息');
       probInfo = adjustedResult.probInfo;
       if (adjustedResult.info !== null) {
@@ -291,17 +303,17 @@ class Exorcist extends Role {
     // 检查目标是否是恶魔
     const isDemon = target.role && target.role.category === 'DEMON' && target.role.team === 'EVIL';
 
-    if (isDemon && !player.isPoisoned) {
+    if (isDemon && !player.isPoisoned && !player.isDrunk) {
       // 恶魔得知驱魔人是谁
       engine.setPlayerPrivateInfo(target, {
         type: 'exorcist_reveal',
         exorcistId: player.id,
         message: `驱魔人是 ${player.seat + 1}号 ${player.name}！你的能力今晚失效。`
       });
-      // 标记恶魔能力失效
+      // 标记恶魔能力失效（NightResolver 据此当夜跳过该恶魔的唤醒与行动）
       gameState.nightActions.exorcist = { targetId, demonId: target.id };
       target.abilityState = target.abilityState || {};
-      target.abilityState.abilityDisabled = true;
+      target.abilityState.exorcisedNight = gameState.nightCount;
 
       engine.setPlayerPrivateInfo(player, {
         type: 'exorcist',
@@ -367,24 +379,17 @@ class Innkeeper extends Role {
       if (!t || !t.isAlive) return { success: false, message: '选择的玩家无效' };
     }
 
-    // 清除上一夜旅店老板造成的醉酒
-    if (player.abilityState.lastDrunkId) {
-      const oldDrunk = engine.room.players.get(player.abilityState.lastDrunkId);
-      if (oldDrunk) oldDrunk.isDrunk = false;
-    }
-
     // 保护两名玩家
     for (const tid of targets) {
       const t = engine.room.players.get(tid);
       if (t) t.isProtected = true;
     }
 
-    // 随机一人醉酒
+    // 随机一人醉酒（持续到明天黄昏：本夜+次日白天）
     const drunkTarget = Math.random() < 0.5 ? targets[0] : targets[1];
     const drunkPlayer = engine.room.players.get(drunkTarget);
     if (drunkPlayer) {
-      drunkPlayer.isDrunk = true;
-      player.abilityState.lastDrunkId = drunkTarget;
+      applyDrunk(drunkPlayer, 'innkeeper', 2);
     }
 
     gameState.nightActions.innkeeper = { targetIds: targets };
@@ -413,41 +418,66 @@ class Gambler extends Role {
     this.id = BMR_ROLE_IDS.GAMBLER;
     this.team = 'GOOD';
     this.category = 'TOWNSFOLK';
-    this.firstNightOrder = -1; // 首夜不行动
+    this.firstNightOrder = -1;
     this.otherNightOrder = 9;
     this.selectCount = 1;
-    this.abilityDesc = '第二夜起，选择一名玩家并猜测其角色，猜错则赌徒死亡。';
+    this.selectType = 'playerAndRole';
+    this.abilityDesc = '第二夜起，选择一名存活玩家并猜测其角色，猜错则赌徒死亡。';
   }
 
   getNightWakeInfo(gameState, player, engine) {
+    const { getScriptConfig } = require('../config/game-config');
+    const scriptConfig = getScriptConfig(engine.room.script || 'bmr');
+    const roles = scriptConfig.allRoles.map(rid => {
+      const roleInstance = engine.roleAllocator.createRoleInstance(rid);
+      return {
+        id: rid,
+        name: roleInstance ? roleInstance.name : rid,
+        team: roleInstance ? roleInstance.team : '',
+        category: roleInstance ? roleInstance.category : ''
+      };
+    });
     return {
       canSelectCount: 1,
-      message: '选择一名玩家并猜测其角色（通过guess字段传入角色名），猜错则死亡'
+      selectType: 'playerAndRole',
+      selectRoles: roles,
+      selectDead: false,
+      excludeSelf: false,
+      message: '选择一名存活玩家（可以选自己），然后猜测该玩家的角色。猜错则你死亡。'
     };
   }
 
   onNightAction(gameState, player, action, engine) {
-    const targetId = action.targets && action.targets[0];
+    const targetId = action.targetId || (action.targets && action.targets[0]);
+    const guessRoleId = action.roleId;
+
     if (!targetId) {
       return { success: false, message: '请选择一名玩家' };
     }
-    const target = engine.room.players.get(targetId);
-    if (!target || !target.isAlive) {
-      return { success: false, message: '选择的玩家无效' };
-    }
-    const guess = action.guess || action.roleName || '';
-    if (!guess) {
-      return { success: false, message: '请猜测目标的角色名' };
+    if (!guessRoleId) {
+      return { success: false, message: '请猜测目标的角色' };
     }
 
+    const target = engine.room.players.get(targetId);
+    if (!target) {
+      return { success: false, message: '选择的玩家无效' };
+    }
+    if (!target.isAlive) {
+      return { success: false, message: '只能选择存活玩家' };
+    }
+
+    const guessRoleInstance = engine.roleAllocator.createRoleInstance(guessRoleId);
+    const guessName = guessRoleInstance ? guessRoleInstance.name : guessRoleId;
+
     player.abilityState.gambleTarget = targetId;
-    player.abilityState.gambleGuess = guess;
+    player.abilityState.gambleGuessId = guessRoleId;
+    player.abilityState.gambleGuess = guessName;
 
     engine.setPlayerPrivateInfo(player, {
       type: 'gambler',
       targetId: targetId,
-      guess: guess,
-      message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，等待结算...`
+      guess: guessName,
+      message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guessName}】，等待天亮结算...`
     });
 
     return { success: true };
@@ -456,17 +486,20 @@ class Gambler extends Role {
   resolveNight(gameState, player, engine) {
     const targetId = player.abilityState.gambleTarget;
     const guess = player.abilityState.gambleGuess;
+    const guessId = player.abilityState.gambleGuessId;
     if (!targetId || !guess) return;
 
     const target = engine.room.players.get(targetId);
     if (!target) {
       player.abilityState.gambleTarget = null;
       player.abilityState.gambleGuess = null;
+      player.abilityState.gambleGuessId = null;
       return;
     }
 
+    const realRoleId = target.role ? target.role.id : '';
     const realRole = target.role ? target.role.name : '';
-    const correct = (realRole === guess);
+    const correct = (realRoleId === guessId);
 
     if (correct) {
       engine.setPlayerPrivateInfo(player, {
@@ -477,7 +510,6 @@ class Gambler extends Role {
         message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜对了！`
       });
     } else {
-      // 猜错，赌徒死亡
       engine.setPlayerPrivateInfo(player, {
         type: 'gambler',
         targetId: targetId,
@@ -486,16 +518,17 @@ class Gambler extends Role {
         realRole: realRole,
         message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，其实TA是【${realRole}】，你死了！`
       });
-      if (player.isAlive) {
+      if (player.isAlive && !player.isProtected) {
         engine.deathManager.killPlayer(player.id, 'GAMBLER', gameState.nightCount, -1);
         engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（赌徒）猜测错误，死亡。目标 ${target.seat + 1}号 ${target.name} 实为【${realRole}】`, {
-          playerId: player.id, targetId, guess, realRole
+          playerId: player.id, targetId, guess, guessId, realRole, realRoleId
         });
       }
     }
 
     player.abilityState.gambleTarget = null;
     player.abilityState.gambleGuess = null;
+    player.abilityState.gambleGuessId = null;
   }
 }
 
@@ -509,73 +542,87 @@ class Gossip extends Role {
     this.category = 'TOWNSFOLK';
     this.firstNightOrder = -1;
     this.otherNightOrder = -1;
-    this.abilityDesc = '每个白天可公开发表一个声明，若声明为真，当晚一名玩家死亡。';
+    this.abilityDesc = '每个白天可公开发表一个声明（自由文本）。当晚由裁判判断声明真伪：若声明为真且你未中毒/醉酒，当晚一名玩家死亡。';
   }
 
-  // 白天能力：发表声明（选择目标玩家+猜测角色，声明"该玩家是该角色"）
-  onDayAbility(gameState, player, targetId, engine) {
-    const extra = arguments[3] || {}; // 支持第四参数 action
-    const guess = extra.guess || extra.roleName || '';
-    if (!guess) {
-      return { success: false, message: '请猜测目标的角色（通过guess字段传入）' };
-    }
-    const target = engine.room.players.get(targetId);
-    if (!target) {
-      return { success: false, message: '选择的玩家无效' };
-    }
-
-    // 每天限一次
+  onDayAbility(gameState, player, statement, engine) {
     if (player.abilityState.gossipDay === gameState.dayCount) {
       return { success: false, message: '你今天已经发表过声明了' };
     }
+    if (!statement || typeof statement !== 'string' || statement.trim().length < 2) {
+      return { success: false, message: '请输入声明内容（至少2个字）' };
+    }
+    if (statement.length > 200) {
+      return { success: false, message: '声明不能超过200字' };
+    }
+
+    const cleanStatement = statement.trim().substring(0, 200);
 
     player.abilityState.gossipDay = gameState.dayCount;
-    player.abilityState.gossipStatement = { targetId, guess };
+    player.abilityState.gossipStatement = cleanStatement;
+    player.abilityState.gossipResult = null;
+    player.abilityState.gossipAIPending = true;
 
-    if (!gameState.gossipStatements) gameState.gossipStatements = [];
-    gameState.gossipStatements.push({ playerId: player.id, targetId, guess });
-
-    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）发表声明：${target.seat + 1}号 ${target.name} 是【${guess}】`, {
-      playerId: player.id, targetId, guess
+    engine.setPlayerPrivateInfo(player, {
+      type: 'gossip',
+      day: gameState.dayCount,
+      statement: cleanStatement,
+      message: `你发表了声明："${cleanStatement}"，等待裁判判断真伪...`
     });
 
-    return { success: true, message: `你发表了声明：${target.seat + 1}号 ${target.name} 是【${guess}】` };
+    return {
+      success: true,
+      statement: cleanStatement,
+      message: '声明已公布，等待裁判判断真伪...'
+    };
   }
 
   resolveNight(gameState, player, engine) {
+    const BalanceSystem = require('../game/BalanceSystem');
     const statement = player.abilityState.gossipStatement;
     if (!statement) return;
 
-    const target = engine.room.players.get(statement.targetId);
+    const result = player.abilityState.gossipResult;
+    const isTrue = result === true;
+    const isPoisoned = player.isPoisoned;
+    const isDrunk = player.isDrunk;
+
     player.abilityState.gossipStatement = null;
+    player.abilityState.gossipResult = null;
+    player.abilityState.gossipAIPending = false;
 
-    if (!target || !target.role) return;
-
-    const realRole = target.role.name;
-    const isTrue = (realRole === statement.guess);
-
-    if (isTrue && !player.isPoisoned) {
-      // 声明为真，随机杀一名玩家
-      const alive = getAlivePlayers(engine.room);
-      if (alive.length > 0) {
-        const victim = randomChoice(alive);
+    if (isTrue && !isPoisoned && !isDrunk) {
+      const victimInfo = BalanceSystem.selectGossipVictim(engine);
+      if (victimInfo && victimInfo.player) {
+        const victim = victimInfo.player;
         engine.deathManager.killPlayer(victim.id, 'GOSSIP', gameState.nightCount, -1);
-        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明为真，${victim.seat + 1}号 ${victim.name} 死亡`, {
-          playerId: player.id, victimId: victim.id
+        engine.setPlayerPrivateInfo(player, {
+          type: 'gossip',
+          result: true,
+          victimId: victim.id,
+          message: `你的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 因此死亡`
+        });
+        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 死亡（偏袒${victimInfo.favoredTeam === 'GOOD' ? '好人' : victimInfo.favoredTeam === 'EVIL' ? '邪恶' : '随机'}）`, {
+          playerId: player.id, victimId: victim.id, statement, balanceScore: victimInfo.balanceScore
         });
       }
     } else {
-      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明为假（${target.seat + 1}号 实为【${realRole}】），无事发生`, {
-        playerId: player.id, targetId: statement.targetId
+      let reason = '声明为假';
+      if (isPoisoned) reason = '声明为真但你中毒了';
+      else if (isDrunk) reason = '声明为真但你醉酒了';
+      engine.setPlayerPrivateInfo(player, {
+        type: 'gossip',
+        result: false,
+        message: `你的声明"${statement}"${reason}，无事发生`
+      });
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明"${statement}"${reason}，无事发生`, {
+        playerId: player.id, statement, isPoisoned, isDrunk
       });
     }
   }
 }
 
 // ==================== 8. 侍臣 ====================
-// 注：规范要求 selectCount:0（选择角色而非玩家，特殊UI处理）。
-// 为兼容现有 NightResolver（selectCount=0 会自动提交空action，无法获取玩家输入），
-// 此处使用 selectCount:1，玩家选择一名玩家，以其角色作为侍臣的施法目标。
 class Courtier extends Role {
   constructor() {
     super();
@@ -585,77 +632,100 @@ class Courtier extends Role {
     this.category = 'TOWNSFOLK';
     this.firstNightOrder = 8;
     this.otherNightOrder = 9;
-    this.selectCount = 1;
-    this.abilityDesc = '每局限一次，夜晚选择一个角色：如果该角色在场，该角色之一从当晚开始醉酒三天三夜。';
+    this.selectCount = 0;
+    this.selectType = 'role';
+    this.canSkip = true;
+    this.abilityDesc = '每局限一次，夜晚选择一个角色：如果该角色在场，该角色之一从当晚开始醉酒三天三夜。你可以选择不使用技能。';
   }
 
   getNightWakeInfo(gameState, player, engine) {
     if (player.abilityState.used) {
-      return { canSelectCount: 1, message: '你已使用过技能，选择一名玩家（仅确认，无效果）' };
+      return null;
     }
+    const { getScriptConfig } = require('../config/game-config');
+    const scriptConfig = getScriptConfig(engine.room.script || 'bmr');
+    const roles = scriptConfig.allRoles.map(rid => {
+      const roleInstance = engine.roleAllocator.createRoleInstance(rid);
+      return { id: rid, name: roleInstance ? roleInstance.name : rid, team: roleInstance ? roleInstance.team : '', category: roleInstance ? roleInstance.category : '' };
+    });
     return {
+      selectType: 'role',
       canSelectCount: 1,
-      message: '选择一名玩家，以TA的角色作为目标。若该角色在场，其中一人醉酒三天三夜'
+      canSkip: true,
+      selectRoles: roles,
+      message: '选择一个角色：若该角色在场，持有该角色的玩家将醉酒三天三夜。你也可以选择不使用技能。'
     };
   }
 
   onNightAction(gameState, player, action, engine) {
-    const targetId = action.targets && action.targets[0];
-    if (!targetId) {
-      return { success: false, message: '请选择一名玩家' };
-    }
-    const target = engine.room.players.get(targetId);
-    if (!target || !target.isAlive) {
-      return { success: false, message: '选择的玩家无效' };
+    if (player.abilityState.used) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'courtier',
+        message: '你已使用过技能'
+      });
+      return { success: true };
     }
 
-    if (!player.abilityState.used && !player.isPoisoned) {
-      // 使用技能：以目标玩家角色为施法对象
-      const drunkRoleId = target.role.id;
-      const drunkRoleName = target.role.name;
-      player.abilityState.used = true;
-      player.abilityState.drunkRoleId = drunkRoleId;
-      player.abilityState.drunkPlayerId = targetId;
-      player.abilityState.drunkDaysLeft = 3;
-      target.isDrunk = true;
+    if (action.skip) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'courtier',
+        message: '你选择今晚不使用技能'
+      });
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）选择今晚不使用技能`, {
+        playerId: player.id, skipped: true
+      });
+      return { success: true };
+    }
+
+    const roleId = action.roleId;
+    if (!roleId) {
+      return { success: false, message: '请选择一个角色或选择跳过' };
+    }
+
+    if (player.isPoisoned) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'courtier',
+        message: '你中毒了，技能无效'
+      });
+      return { success: true };
+    }
+
+    const roleInstance = engine.roleAllocator.createRoleInstance(roleId);
+    const drunkRoleName = roleInstance ? roleInstance.name : roleId;
+
+    const target = Array.from(engine.room.players.values()).find(p => p.seat !== -1 && p.role && p.role.id === roleId);
+
+    player.abilityState.used = true;
+    player.abilityState.drunkRoleId = roleId;
+
+    if (target) {
+      player.abilityState.drunkPlayerId = target.id;
+      // 醉酒三天三夜：由 helpers 的按来源计时负责递减，此处只需施加
+      applyDrunk(target, 'courtier', 3);
 
       engine.setPlayerPrivateInfo(player, {
         type: 'courtier',
-        targetId: targetId,
+        roleId: roleId,
+        targetId: target.id,
         roleName: drunkRoleName,
         message: `你选择了【${drunkRoleName}】（${target.seat + 1}号 ${target.name}），该角色醉酒三天三夜`
       });
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）使【${drunkRoleName}】${target.seat + 1}号 ${target.name} 醉酒三天三夜`, {
-        playerId: player.id, targetId, drunkRoleId
+        playerId: player.id, targetId: target.id, drunkRoleId: roleId
       });
     } else {
       engine.setPlayerPrivateInfo(player, {
         type: 'courtier',
-        message: player.abilityState.used ? '你已使用过技能' : '你中毒了，技能无效'
+        roleId: roleId,
+        roleName: drunkRoleName,
+        message: `你选择了【${drunkRoleName}】，该角色不在场，无人醉酒`
+      });
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）选择了【${drunkRoleName}】，该角色不在场，无人醉酒`, {
+        playerId: player.id, drunkRoleId: roleId, notInPlay: true
       });
     }
 
     return { success: true };
-  }
-
-  resolveNight(gameState, player, engine) {
-    // 管理醉酒倒计时
-    if (player.abilityState.drunkDaysLeft > 0) {
-      const drunkPlayer = engine.room.players.get(player.abilityState.drunkPlayerId);
-      if (drunkPlayer) {
-        if (player.abilityState.drunkDaysLeft > 1) {
-          drunkPlayer.isDrunk = true;
-        } else {
-          // 最后一天，醉酒结束
-          drunkPlayer.isDrunk = false;
-        }
-      }
-      player.abilityState.drunkDaysLeft--;
-      if (player.abilityState.drunkDaysLeft <= 0) {
-        player.abilityState.drunkRoleId = null;
-        player.abilityState.drunkPlayerId = null;
-      }
-    }
   }
 }
 
@@ -668,43 +738,82 @@ class Professor extends Role {
     this.team = 'GOOD';
     this.category = 'TOWNSFOLK';
     this.firstNightOrder = -1;
-    this.otherNightOrder = -1;
-    this.abilityDesc = '选择一名死亡玩家，若该玩家是镇民则复活（一次性能力）。';
+    this.otherNightOrder = 12;
+    this.selectCount = 1;
+    this.abilityDesc = '每局限一次，夜晚选择一名死亡玩家：若该玩家是镇民，将其复活。中毒/醉酒时技能无效。';
   }
 
-  onDayAbility(gameState, player, targetId, engine) {
+  getNightWakeInfo(gameState, player, engine) {
     if (player.abilityState.used) {
-      return { success: false, message: '你已经使用过教授技能了' };
+      return null;
+    }
+    const deadPlayers = Array.from(engine.room.players.values()).filter(p => p.seat !== -1 && !p.isAlive);
+    if (deadPlayers.length === 0) {
+      return null;
+    }
+    return {
+      canSelectCount: 1,
+      selectDead: true,
+      message: '选择一名死亡玩家：若该玩家是镇民，将其复活（每局限一次）'
+    };
+  }
+
+  onNightAction(gameState, player, action, engine) {
+    if (player.abilityState.used) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'professor',
+        message: '你已使用过技能'
+      });
+      return { success: true };
     }
 
+    const targetId = action.targets && action.targets[0];
+    if (!targetId) {
+      return { success: false, message: '请选择一名死亡玩家' };
+    }
     const target = engine.room.players.get(targetId);
     if (!target) {
       return { success: false, message: '选择的玩家无效' };
     }
     if (target.isAlive) {
-      return { success: false, message: '该玩家还存活' };
+      return { success: false, message: '只能选择死亡玩家' };
     }
 
     player.abilityState.used = true;
 
-    const isTownsfolk = target.role && target.role.category === 'TOWNSFOLK';
-    if (isTownsfolk && !player.isPoisoned) {
-      // 复活
+    if (!player.isPoisoned && !player.isDrunk && target.role && target.role.category === 'TOWNSFOLK') {
       target.isAlive = true;
       target.isDead = false;
       target.deathNight = -1;
       target.deathDay = -1;
       target.voteToken = 0;
+      clearDrunkSource(target, 'courtier'); // 复活解除侍臣的醉酒
+      target.isDrunk = false;
+      target.isPoisoned = false;
+
+      engine.setPlayerPrivateInfo(player, {
+        type: 'professor',
+        targetId: targetId,
+        success: true,
+        message: `你复活了 ${target.seat + 1}号 ${target.name}（${target.role.name}，镇民）！`
+      });
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（教授）复活了 ${target.seat + 1}号 ${target.name}（${target.role.name}）`, {
         playerId: player.id, targetId, revived: true
       });
-      return { success: true, message: `你复活了 ${target.seat + 1}号 ${target.name}！`, revived: true };
+    } else {
+      const reason = player.isPoisoned ? '你中毒了' : (player.isDrunk ? '你醉酒了' : '该玩家不是镇民');
+      engine.setPlayerPrivateInfo(player, {
+        type: 'professor',
+        targetId: targetId,
+        success: false,
+        message: `${reason}，技能已消耗，${target.seat + 1}号 ${target.name} 未能复活`
+      });
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（教授）对 ${target.seat + 1}号 ${target.name} 使用技能但失败：${reason}`, {
+        playerId: player.id, targetId, revived: false, reason
+      });
     }
 
-    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（教授）对 ${target.seat + 1}号 ${target.name} 使用技能，但对方不是镇民`, {
-      playerId: player.id, targetId, revived: false
-    });
-    return { success: true, message: `${target.seat + 1}号 ${target.name} 不是镇民，技能已消耗`, revived: false };
+    return { success: true };
   }
 }
 
@@ -721,33 +830,20 @@ class Bard extends Role {
     this.abilityDesc = '当一名爪牙死于处决时，除了你以外的所有其他玩家醉酒直到明天黄昏。';
   }
 
-  // 当处决爪牙时由处决逻辑调用：让除吟游诗人外的所有玩家醉酒
-  // 参数为被处决的玩家
+  // 当处决爪牙时由处决逻辑调用：让除吟游诗人外的所有玩家醉酒（持续到明天黄昏）
+  // 返回 true 表示触发成功
   static applyMinionExecutionEffect(gameState, engine, bardPlayer) {
-    if (!bardPlayer || !bardPlayer.isAlive) return;
-    if (bardPlayer.isPoisoned) return;
+    if (!bardPlayer || !bardPlayer.isAlive) return false;
+    if (bardPlayer.isPoisoned) return false;
     for (const [, p] of engine.room.players) {
       if (p.id !== bardPlayer.id && p.isAlive) {
-        p.isDrunk = true;
+        applyDrunk(p, 'bard', 2); // 每个来源独立计时，不覆盖其它醉酒
       }
     }
-    // 记录需要次日黄昏清除
-    gameState.bardDrunkActive = true;
     engine.logAction('ABILITY', `${bardPlayer.seat + 1}号 ${bardPlayer.name}（吟游诗人）触发：爪牙被处决，其他所有玩家醉酒`, {
       playerId: bardPlayer.id
     });
-  }
-
-  // 每夜清除上一轮吟游诗人造成的醉酒（次日黄昏后清除）
-  resolveNight(gameState, player, engine) {
-    if (gameState.bardDrunkActive && gameState.nightCount > 0) {
-      for (const [, p] of engine.room.players) {
-        if (p.id !== player.id) {
-          p.isDrunk = false;
-        }
-      }
-      gameState.bardDrunkActive = false;
-    }
+    return true;
   }
 }
 
@@ -806,7 +902,7 @@ class Pacifist extends Role {
     const alive = getAlivePlayers(engine.room);
     const pacifist = alive.find(p => p.role && p.role.id === BMR_ROLE_IDS.PACIFIST);
     if (!pacifist) return false;
-    if (pacifist.isPoisoned) return false;
+    if (pacifist.isPoisoned || pacifist.isDrunk) return false;
     // 拯救概率由平衡系统自动决定
     const probInfo = engine.balanceSystem.getPacifistSaveProbability(engine);
     const saved = Math.random() < probInfo.probability;
@@ -861,5 +957,7 @@ module.exports = {
   Bard,
   Tealady,
   Pacifist,
-  Fool
+  Fool,
+  getActionTargetIds,
+  isKilledByDemon
 };

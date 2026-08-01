@@ -38,7 +38,7 @@ class Washerwoman extends Role {
     let realRoleName = townsfolk.role.name;
     
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const correctInfo = { roleName, pair };
       const adjustedResult = engine.balanceSystem.adjustInfo(this, correctInfo, player, engine, '洗衣妇中毒正确信息');
       probInfo = adjustedResult.probInfo;
@@ -90,7 +90,7 @@ class Librarian extends Role {
       let msg = '本局游戏没有外来者';
       let isFalse = false;
       let probInfo = null;
-      if (player.isPoisoned) {
+      if (player.isPoisoned || player.isDrunk) {
         const adjustedResult = engine.balanceSystem.adjustInfo(this, msg, player, engine, '图书管理员中毒正确信息（无外来者）');
         probInfo = adjustedResult.probInfo;
         if (adjustedResult.info === null) {
@@ -117,7 +117,7 @@ class Librarian extends Role {
     let isFalse = false;
     let realRoleName = outsider.role.name;
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const adjustedResult = engine.balanceSystem.adjustInfo(this, roleName, player, engine, '图书管理员中毒正确信息');
       probInfo = adjustedResult.probInfo;
       if (adjustedResult.info === null) {
@@ -235,7 +235,7 @@ class Chef extends Role {
     let isFalse = false;
     let realInfo = evilPairs;
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const possible = [0, 1, 2, 3, 4].filter(n => n !== evilPairs);
       const adjustedResult = engine.balanceSystem.adjustInfo(this, evilPairs, player, engine, '厨师中毒正确信息');
       probInfo = adjustedResult.probInfo;
@@ -286,7 +286,7 @@ class Empath extends Role {
     let isFalse = false;
     let realInfo = evilCount;
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const possible = [0, 1, 2].filter(n => n !== evilCount);
       const adjustedResult = engine.balanceSystem.adjustInfo(this, evilCount, player, engine, '共情者中毒正确信息');
       probInfo = adjustedResult.probInfo;
@@ -354,7 +354,7 @@ class Fortuneteller extends Role {
     let isFalse = false;
     let realResult = hasDemon;
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const adjustedResult = engine.balanceSystem.adjustInfo(this, hasDemon, player, engine, '占卜师中毒正确信息');
       probInfo = adjustedResult.probInfo;
       if (adjustedResult.info !== null) {
@@ -537,7 +537,7 @@ class Mayor extends Role {
   }
 
   onDeath(gameState, player, cause, engine) {
-    if (cause === 'DEMON' && !player.isPoisoned) {
+    if (cause === 'DEMON' && !player.isPoisoned && !player.isDrunk) {
       const score = engine.balanceSystem.calculateBalanceScore(engine.room, engine);
       const prob = engine.balanceSystem.getMayorSaveProbability(engine);
       const cfg = engine.probConfig;
@@ -570,10 +570,12 @@ class Mayor extends Role {
           player.isAlive = true;
           player.isDead = false;
           player.deathNight = -1;
-          engine.deathManager.killPlayerDirect(sacrifice.id, 'MAYOR_SAVE', gameState.nightCount, gameState.dayCount);
-          engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的死亡被 ${sacrifice.seat+1}号 ${sacrifice.name} 代替`, {
-            playerId: player.id, sacrificeId: sacrifice.id, probInfo
-          });
+          const result = engine.deathManager.killPlayer(sacrifice.id, 'MAYOR_SAVE', gameState.nightCount, gameState.dayCount);
+          if (result && !result.prevented) {
+            engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的死亡被 ${sacrifice.seat+1}号 ${sacrifice.name} 代替`, {
+              playerId: player.id, sacrificeId: sacrifice.id, probInfo
+            });
+          }
           return { revived: true, sacrifice: sacrifice.id };
         }
       } else {
@@ -626,7 +628,7 @@ class Undertaker extends Role {
     let isFalse = false;
     let realRoleName = roleName;
     let probInfo = null;
-    if (player.isPoisoned) {
+    if (player.isPoisoned || player.isDrunk) {
       const adjustedResult = engine.balanceSystem.adjustInfo(this, { roleName }, player, engine, '掘墓人中毒正确信息');
       probInfo = adjustedResult.probInfo;
       if (adjustedResult.info === null) {

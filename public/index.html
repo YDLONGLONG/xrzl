@@ -68,7 +68,10 @@
       <div class="night-text" id="nightText">夜幕降临...</div>
       <div class="night-subtext" id="nightSubtext">等待其他玩家行动</div>
       <div class="night-select-area" id="nightSelectArea"></div>
-      <button class="btn btn-primary night-confirm-btn" id="nightConfirmBtn" style="display:none;" onclick="submitNightAction()">确认行动</button>
+      <div class="night-btn-area">
+        <button class="btn btn-secondary night-skip-btn" id="nightSkipBtn" style="display:none;" onclick="skipNightAction()">跳过/不使用</button>
+        <button class="btn btn-primary night-confirm-btn" id="nightConfirmBtn" style="display:none;" onclick="submitNightAction()">确认行动</button>
+      </div>
     </div>
 
     <!-- 头部信息 -->
@@ -161,8 +164,10 @@
         <div class="role-desc" id="roleDesc"></div>
         <div class="evil-teammates" id="evilTeammates" style="display:none;"></div>
       </div>
-      <div style="margin-left: auto;">
+      <div style="margin-left: auto; display: flex; gap: 8px;">
         <button class="btn btn-sm btn-danger" id="slayerBtn" style="display:none;" onclick="useSlayerAbility()">杀手：击杀恶魔</button>
+        <button class="btn btn-sm btn-warning" id="gossipBtn" style="display:none;" onclick="useGossipAbility()">造谣者：发表声明</button>
+        <button class="btn btn-sm btn-info" id="moonchildBtn" style="display:none;" onclick="useMoonchildAbility()">月之子：选择目标</button>
       </div>
     </div>
   </div>

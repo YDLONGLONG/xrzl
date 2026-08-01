@@ -178,6 +178,9 @@ class GameEngine {
       nightCount: gs.nightCount,
       currentWakePlayerId: gs.currentWakePlayerId,
       currentDefensePlayerId: gs.currentDefensePlayerId,
+      nightQueue: gs.nightQueue || [],
+      currentNightIndex: gs.currentNightIndex ?? -1,
+      pendingRavenkeeper: this.nightResolver.pendingRavenkeeper || null,
       nightActions: gs.nightActions,
       nominations: gs.nominations.map(n => ({
         nominatorId: n.nominatorId,
@@ -328,6 +331,17 @@ class GameEngine {
     const gs = this.room.gameState;
     const deaths = gs.deathsToAnnounce;
 
+    // 夜晚死亡的月之子：天亮时激活待选择状态
+    for (const [, player] of this.room.players) {
+      if (player.role && player.role.id === 'moonchild' && player.abilityState && player.abilityState.pendingSelectNextDay) {
+        player.abilityState.pendingSelectNextDay = false;
+        player.abilityState.pendingSelect = true;
+        this.logAction('ABILITY', `${player.seat+1}号 ${player.name}（月之子）夜晚死亡，今日白天需公开选择目标`, {
+          playerId: player.id, role: 'moonchild'
+        });
+      }
+    }
+
     // 公布死亡
     this.io.to(this.room.id).emit('game:dawnReport', {
       isFirstNight: gs.nightCount === 0,
@@ -443,24 +457,6 @@ class GameEngine {
       return { success: false, message: '请选择一名玩家' };
     }
 
-    // 处理月之子特殊情况
-    if (this.nightResolver.pendingMoonchild === playerId) {
-      const targets = action.targets || [];
-      if (targets.length === 1) {
-        const target = this.room.players.get(targets[0]);
-        this.logAction('NIGHT_ACTION', `${player.seat+1}号 ${player.name}（月之子）选择了 ${target ? target.seat+1+'号 '+target.name : '?'}`, {
-          playerId, role: 'moonchild', targetId: targets[0]
-        });
-        this.nightResolver.processMoonchildAction(playerId, targets[0]);
-        this.room.gameState.currentWakePlayerId = null;
-        this.io.to(playerId).emit('night:actionAck', { success: true });
-        this.nightResolver.finalizeNight();
-        this.broadcastState();
-        return { success: true };
-      }
-      return { success: false, message: '请选择一名玩家' };
-    }
-    
     const targets = action.targets || [];
     const isDrunk = player.role && player.role.id === 'drunk' && player.fakeRole;
     const effectiveSelectCount = player.role.selectCount || 0;
@@ -511,13 +507,27 @@ class GameEngine {
   }
 
   // 处理白天技能
-  processDayAbility(playerId, abilityName, targetId) {
+  processDayAbility(playerId, abilityName, targetId, extra) {
     const player = this.room.players.get(playerId);
-    if (!player || !player.isAlive) {
+    if (!player) {
+      return { success: false, message: '玩家不存在' };
+    }
+    // 月之子是死亡后触发选择，所以不检查isAlive
+    const isMoonchild = player.role && player.role.id === 'moonchild';
+    if (!isMoonchild && !player.isAlive) {
       return { success: false, message: '你已死亡' };
     }
-    if (player.role && player.role.onDayAbility) {
+    if (abilityName === 'gossip') {
+      return player.role.onDayAbility(this.room.gameState, player, extra, this);
+    }
+    if (abilityName === 'moonchild') {
+      if (!player.role || player.role.id !== 'moonchild') {
+        return { success: false, message: '你不是月之子' };
+      }
       return player.role.onDayAbility(this.room.gameState, player, targetId, this);
+    }
+    if (player.role && player.role.onDayAbility) {
+      return player.role.onDayAbility(this.room.gameState, player, targetId, this, extra);
     }
     return { success: false, message: '该角色无此技能' };
   }
@@ -662,7 +672,10 @@ class GameEngine {
           roleName: p.role.name,
           team: p.role.team,
           isAlive: p.isAlive
-        })) : null
+        })) : null,
+      myAbilityState: viewer.abilityState ? {
+        pendingMoonchildSelect: !!viewer.abilityState.pendingSelect
+      } : null
     };
 
     return state;

@@ -145,6 +145,92 @@ function showConfirm(message, options = {}) {
   });
 }
 
+function showTextInput(title, options = {}) {
+  return new Promise((resolve) => {
+    const placeholder = options.placeholder || '';
+    const defaultValue = options.defaultValue || '';
+    const confirmText = options.confirmText || '确定';
+    const cancelText = options.cancelText || '取消';
+    const maxLength = options.maxLength || 200;
+    const multiline = options.multiline !== false;
+    const type = options.type || 'default';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-${type}" style="min-width:340px;max-width:500px;">
+        <div class="confirm-title">${title}</div>
+        ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#aaa;">${options.description}</div>` : ''}
+        <div class="confirm-input-area">
+          ${multiline
+            ? `<textarea class="confirm-textarea" placeholder="${placeholder}" maxlength="${maxLength}" rows="3">${defaultValue}</textarea>`
+            : `<input type="text" class="confirm-input" placeholder="${placeholder}" maxlength="${maxLength}" value="${defaultValue}">`
+          }
+          <div class="confirm-input-counter" style="text-align:right;font-size:11px;color:#666;margin-top:4px;">
+            <span class="confirm-counter-num">0</span>/${maxLength}
+          </div>
+        </div>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">${cancelText}</button>
+          <button class="confirm-btn confirm-ok">${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const okBtn = overlay.querySelector('.confirm-ok');
+    const cancelBtn = overlay.querySelector('.confirm-cancel');
+    const inputEl = overlay.querySelector(multiline ? '.confirm-textarea' : '.confirm-input');
+    const counterNum = overlay.querySelector('.confirm-counter-num');
+
+    const updateCounter = () => {
+      if (counterNum) counterNum.textContent = inputEl.value.length;
+    };
+    updateCounter();
+    inputEl.addEventListener('input', updateCounter);
+
+    setTimeout(() => inputEl.focus(), 100);
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => {
+        overlay.remove();
+        resolve(result);
+      }, 200);
+    };
+
+    okBtn.addEventListener('click', () => {
+      const val = inputEl.value.trim();
+      if (options.minLength && val.length < options.minLength) {
+        inputEl.style.borderColor = '#e74c3c';
+        return;
+      }
+      close(val || null);
+    });
+    cancelBtn.addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      else if (e.key === 'Enter' && !multiline) { e.preventDefault(); okBtn.click(); }
+      else if (e.key === 'Enter' && e.ctrlKey && multiline) { e.preventDefault(); okBtn.click(); }
+    };
+    document.addEventListener('keydown', onKey);
+    const origRemove = overlay.remove.bind(overlay);
+    overlay.remove = function() {
+      document.removeEventListener('keydown', onKey);
+      origRemove();
+    };
+
+    requestAnimationFrame(() => {
+      overlay.classList.add('confirm-show');
+    });
+  });
+}
+
 function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
     return navigator.clipboard.writeText(text);

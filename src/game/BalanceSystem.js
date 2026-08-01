@@ -310,6 +310,48 @@ class BalanceSystem {
       description: '和平主义者拯救概率'
     };
   }
+
+  // 造谣者声明为真时选择死亡玩家（平衡系统决定好人/坏人）
+  static selectGossipVictim(engine) {
+    const room = engine.room;
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(room, engine);
+    const alive = Array.from(room.players.values()).filter(p => p.isAlive && p.seat !== -1);
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+    const prob = this.getFavorProbability(score, engine);
+
+    let target = null;
+    let favoredTeam = 'random';
+
+    if (alive.length === 0) return null;
+
+    if (score < goodWeakTh) {
+      const evilAlive = alive.filter(p => p.role.team === 'EVIL');
+      if (evilAlive.length > 0 && Math.random() < prob) {
+        target = evilAlive[Math.floor(Math.random() * evilAlive.length)];
+        favoredTeam = 'EVIL';
+      }
+    } else if (score > evilWeakTh) {
+      const goodAlive = alive.filter(p => p.role.team === 'GOOD');
+      if (goodAlive.length > 0 && Math.random() < prob) {
+        target = goodAlive[Math.floor(Math.random() * goodAlive.length)];
+        favoredTeam = 'GOOD';
+      }
+    }
+
+    if (!target) {
+      target = alive[Math.floor(Math.random() * alive.length)];
+      favoredTeam = target.role.team;
+    }
+
+    return {
+      player: target,
+      balanceScore: score,
+      favoredTeam,
+      description: '造谣者选择死亡目标'
+    };
+  }
 }
 
 module.exports = BalanceSystem;

@@ -685,6 +685,44 @@ body.resizing-active * {
   margin-top: 30px;
   padding: 12px 40px;
 }
+.night-btn-area {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  margin-top: 30px;
+}
+.night-skip-btn {
+  padding: 12px 30px;
+}
+.night-role-btn {
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.1);
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+}
+.night-role-btn:hover {
+  background: rgba(212, 175, 55, 0.2);
+  border-color: #d4af37;
+}
+.night-role-btn.selected {
+  background: rgba(231, 76, 60, 0.4);
+  border-color: #e74c3c;
+}
+.night-role-btn.townsfolk { border-left: 3px solid #3498db; }
+.night-role-btn.outsider { border-left: 3px solid #9b59b6; }
+.night-role-btn.minion { border-left: 3px solid #e67e22; }
+.night-role-btn.demon { border-left: 3px solid #e74c3c; }
+.night-player-btn.dead-selectable {
+  opacity: 0.65;
+  border-style: dashed;
+}
+.night-player-btn.dead-selectable:hover {
+  opacity: 0.9;
+}
 
 /* 投票界面 */
 .vote-panel {
@@ -1139,11 +1177,26 @@ body.resizing-active * {
     min-width: 80px;
     -webkit-tap-highlight-color: transparent;
   }
+  .night-role-btn {
+    padding: 8px 12px;
+    font-size: 12px;
+    min-height: 40px;
+  }
+  .night-btn-area {
+    margin-top: 20px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
   .night-confirm-btn {
     padding: 14px 30px;
     font-size: 15px;
     min-height: 48px;
-    margin-top: 20px;
+    margin-top: 0;
+  }
+  .night-skip-btn {
+    padding: 14px 24px;
+    font-size: 15px;
+    min-height: 48px;
   }
 
   /* 投票按钮 */

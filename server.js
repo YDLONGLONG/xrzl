@@ -849,25 +849,171 @@ io.on('connection', (socket) => {
   });
 
   // 使用白天技能
-  socket.on('day:useAbility', ({ abilityName, targetId }) => {
+  socket.on('day:useAbility', ({ abilityName, targetId, extra, statement }) => {
     const result = getPlayerRoom(socket.id);
     if (!result || !result.room.gameStarted) return;
     const { roomId, room } = result;
     const engine = gameEngines.get(roomId);
     if (engine) {
-      const res = engine.processDayAbility(socket.id, abilityName, targetId);
+      let param = extra;
+      if (abilityName === 'gossip') {
+        param = statement || extra;
+      }
+      const res = engine.processDayAbility(socket.id, abilityName, targetId, param);
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
-        io.to(roomId).emit('game:abilityUsed', {
-          fromId: socket.id,
-          fromName: room.players.get(socket.id).name,
-          abilityName, targetId, result: res
-        });
+        if (abilityName === 'gossip' && res.statement) {
+          const player = room.players.get(socket.id);
+          const gossipMsg = {
+            id: Date.now() + Math.random(),
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            fromSeat: player ? player.seat : -1,
+            isDead: player ? !player.isAlive : false,
+            content: `【造谣者声明】${res.statement}`,
+            channel: 'public',
+            timestamp: Date.now()
+          };
+          io.to(roomId).emit('chat:message', gossipMsg);
+          if (room.gameState.chatLog) room.gameState.chatLog.push(gossipMsg);
+
+          judgeGossipByAI(engine, roomId, socket.id, res.statement);
+
+          socket.emit('game:abilityUsed', {
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            abilityName, targetId, result: res
+          });
+        } else if (abilityName === 'moonchild' && res.targetId) {
+          // 月之子公开选择：所有人都能看到
+          const player = room.players.get(socket.id);
+          const moonMsg = {
+            id: Date.now() + Math.random(),
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            fromSeat: player ? player.seat : -1,
+            isDead: true,
+            content: `【月之子选择】我选择 ${res.targetSeat + 1}号 ${res.targetName}`,
+            channel: 'public',
+            timestamp: Date.now()
+          };
+          io.to(roomId).emit('chat:message', moonMsg);
+          if (room.gameState.chatLog) room.gameState.chatLog.push(moonMsg);
+
+          io.to(roomId).emit('game:abilityUsed', {
+            fromId: socket.id,
+            fromName: room.players.get(socket.id).name,
+            abilityName, targetId, result: res
+          });
+        } else {
+          io.to(roomId).emit('game:abilityUsed', {
+            fromId: socket.id,
+            fromName: room.players.get(socket.id).name,
+            abilityName, targetId, result: res
+          });
+        }
         broadcastRoomState(roomId);
       }
     }
   });
+
+  // AI判断造谣者声明真伪
+  async function judgeGossipByAI(engine, roomId, playerId, statement) {
+    try {
+      const room = engine.room;
+      const gs = room.gameState;
+      const players = Array.from(room.players.values()).filter(p => p.seat !== -1);
+      const playerInfo = players.map(p => {
+        const roleName = p.role ? p.role.name : '未知';
+        return `${p.seat + 1}号 ${p.name}: ${p.isAlive ? '存活' : '死亡'}, 角色=${roleName}, 阵营=${p.role ? (p.role.team === 'GOOD' ? '善良' : '邪恶') : '未知'}`;
+      }).join('\n');
+
+      const deadInfo = players.filter(p => !p.isAlive).map(p => {
+        let deathCause = '死亡';
+        return `${p.seat + 1}号 ${p.name}（${p.role ? p.role.name : '未知'}）`;
+      }).join('、') || '无';
+
+      const systemPrompt = `你是血染钟楼游戏的严格裁判。你必须判断造谣者的声明是否为"客观事实"。
+
+【当前游戏状态 - 这是你判断的唯一事实依据】
+在场玩家及真实角色（你全知全能）：
+${playerInfo}
+
+已死亡玩家：${deadInfo}
+当前是第${gs.dayCount}天，第${gs.nightCount}夜。
+
+【严格判断规则 - 默认返回false，只有完全满足以下所有条件才返回true】
+判定为true的必要条件（缺一不可）：
+1. 声明是关于"已经发生的事实"或"当前确定的状态"，而非未来预测
+2. 声明中的每一个细节都能被上述游戏状态100%证实，没有任何歧义
+3. 声明不包含"可能""大概""也许""好像""应该"等推测性词语
+4. 声明提到的角色确实存在于当前游戏中
+5. 声明提到的玩家确实在场
+6. 声明不是疑问句、感叹句或无意义内容
+
+以下情况一律判定为false：
+- 对未来的预测（如"今晚恶魔会死""明天3号会被提名"）
+- 主观推测或猜测（如"我觉得5号是恶魔""2号可能是下毒者"）
+- 模糊表述或信息不足（如"有人是邪恶的""场上有男爵"）
+- 无意义的乱讲、玩笑、与游戏无关的内容
+- 涉及不在当前剧本中的角色
+- 涉及你无法从上述状态中确认的信息（如"3号昨晚被僧侣保护了"）
+- 自指的元游戏陈述（如"我是造谣者""我说的是真话"）
+- 多重陈述中有任何一部分为假，整体即为false
+
+【输出要求】
+你只能输出一个单词：true 或 false（全部小写，无标点，无其他内容）。
+存疑时输出false。无法判断时输出false。`;
+
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer 8e7f57d3813947d9a96fa4e08804769a.xZAqoIHV2cev1hTw'
+        },
+        body: JSON.stringify({
+          model: 'glm-4.7-flash',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `造谣者声明：${statement}\n\n这个声明是真的吗？请只回答true或false。` }
+          ],
+          temperature: 0.1,
+          max_tokens: 10,
+          stream: false
+        })
+      });
+
+      if (!response.ok) {
+        console.log('[Gossip AI] API请求失败:', response.status);
+        const player = room.players.get(playerId);
+        if (player) {
+          player.abilityState.gossipResult = false;
+          player.abilityState.gossipAIPending = false;
+        }
+        return;
+      }
+
+      const data = await response.json();
+      const aiReply = (data.choices?.[0]?.message?.content || '').trim().toLowerCase();
+      const isTrue = aiReply.startsWith('true');
+      console.log(`[Gossip AI] 声明:"${statement}" AI判断:${aiReply} => ${isTrue}`);
+
+      const player = room.players.get(playerId);
+      if (player) {
+        player.abilityState.gossipResult = isTrue;
+        player.abilityState.gossipAIPending = false;
+      }
+    } catch(err) {
+      console.error('[Gossip AI] 判断错误:', err.message);
+      const room = engine.room;
+      const player = room.players.get(playerId);
+      if (player) {
+        player.abilityState.gossipResult = false;
+        player.abilityState.gossipAIPending = false;
+      }
+    }
+  }
 
   // 聊天
   socket.on('chat:send', ({ content, channel, targetId }) => {

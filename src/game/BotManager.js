@@ -254,13 +254,71 @@ class BotManager {
   _doBotNightAction(bot) {
     const gs = this.engine.room.gameState;
     const alive = Array.from(this.engine.room.players.values()).filter(p => p.isAlive && p.seat !== -1);
-    
-    let selectCount = 1;
-    if (bot.role && bot.role.selectCount) selectCount = bot.role.selectCount;
 
+    const role = bot.role;
+    const selectType = role ? (role.selectType || 'player') : 'player';
+    const canSkip = role ? !!role.canSkip : false;
+    let selectCount = 1;
+    if (role && role.selectCount) selectCount = role.selectCount;
+
+    // ========== 跳过逻辑（canSkip=true时，侍臣等技能有概率今晚不使用） ==========
+    if (canSkip && Math.random() < 0.25) {
+      this.engine.processNightAction(bot.id, { skip: true });
+      return;
+    }
+
+    // ========== 选择角色（侍臣等） ==========
+    if (selectType === 'role') {
+      const { getScriptConfig } = require('../config/game-config');
+      const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
+      const roleIds = scriptConfig.allRoles;
+      if (!roleIds || roleIds.length === 0) {
+        this.engine.processNightAction(bot.id, { skip: true });
+        return;
+      }
+      // 侍臣作为善良阵营：优先选择邪恶阵营角色（恶魔/爪牙）概率高些
+      let roleId;
+      const evilIds = roleIds.filter(rid => {
+        const ri = this.engine.roleAllocator.createRoleInstance(rid);
+        return ri && ri.team === 'EVIL';
+      });
+      if (evilIds.length > 0 && Math.random() < 0.65) {
+        roleId = evilIds[Math.floor(Math.random() * evilIds.length)];
+      } else {
+        roleId = roleIds[Math.floor(Math.random() * roleIds.length)];
+      }
+      this.engine.processNightAction(bot.id, { roleId });
+      return;
+    }
+
+    // ========== 选择玩家+角色（赌徒） ==========
+    if (selectType === 'playerAndRole') {
+      const { getScriptConfig } = require('../config/game-config');
+      const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
+      const roleIds = scriptConfig.allRoles;
+      // 选目标玩家
+      let candidates = alive.filter(p => p.id !== bot.id);
+      if (role && role.team === 'EVIL') {
+        // 赌徒是好人，倾向选疑似坏人，但bot不太准，选个随机的（允许选自己）
+      }
+      // 赌徒允许选自己，所以从所有存活里选（包括自己）
+      const allAliveSelectable = alive.slice();
+      const target = allAliveSelectable[Math.floor(Math.random() * allAliveSelectable.length)];
+      const guessRoleId = roleIds && roleIds.length > 0
+        ? roleIds[Math.floor(Math.random() * roleIds.length)]
+        : null;
+      if (!target || !guessRoleId) {
+        this.engine.processNightAction(bot.id, { skip: true });
+        return;
+      }
+      this.engine.processNightAction(bot.id, { targets: [target.id], roleId: guessRoleId });
+      return;
+    }
+
+    // ========== 默认：选择玩家 ==========
     let candidates = alive.filter(p => p.id !== bot.id);
-    
-    if (bot.role && bot.role.category === 'DEMON') {
+
+    if (role && role.category === 'DEMON') {
       // 恶魔优先杀好人
       const goodTargets = candidates.filter(p => p.role && p.role.team !== 'EVIL');
       if (goodTargets.length > 0) candidates = goodTargets;
@@ -320,9 +378,7 @@ class BotManager {
       .filter(p => p.isBot && p.isAlive && p.seat !== -1);
     
     bots.forEach((bot, idx) => {
-      console.log('[BotDayChat]', bot.name, 'role:', bot.role?.name, 'privateInfo:', bot.privateInfo ? { type: bot.privateInfo.type, msg: bot.privateInfo.message } : null);
       const msg = this._generateBotSpeech(bot);
-      console.log('[BotDayChat] generated msg:', msg);
       if (msg) {
         setImmediate(() => {
           if (this.engine.room.gameState.phase === 'DAY_DISCUSSION') {

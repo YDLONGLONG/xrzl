@@ -1,6 +1,7 @@
 // 投票/提名管理器
 const { PHASES, ROLE_IDS } = require('../config/game-config');
 const { getAlivePlayers } = require('../utils/helpers');
+const { Bard } = require('../roles/Townsfolk2');
 
 class VoteManager {
   constructor(engine) {
@@ -237,7 +238,10 @@ class VoteManager {
     if (!nomination) return;
 
     const aliveCount = getAlivePlayers(this.engine.room).length;
-    const threshold = Math.ceil(aliveCount / 2);
+    // 处决需要「严格超过」半数存活玩家赞成（平票不通过）。
+    // 注意：不能用 Math.ceil(aliveCount/2)，偶数存活人数时 ceil 正好等于一半，
+    // 会把平票误判为通过并执行（例如 6 人需要 4 票，但 ceil(3)=3 会在 3 票平票时处决）。
+    const threshold = Math.floor(aliveCount / 2) + 1;
 
     nomination.passed = nomination.voteCount >= threshold;
     nomination.resolved = true;
@@ -328,6 +332,14 @@ class VoteManager {
       } else {
         this.engine.deathManager.killPlayer(toExecute.id, 'EXECUTION', gs.nightCount, gs.dayCount);
         gs.todaysDeaths.push({ playerId: toExecute.id, cause: 'EXECUTION' });
+
+        // 吟游诗人：爪牙被处决则除自己外的所有玩家醉酒
+        if (toExecute.role && toExecute.role.category === 'MINION') {
+          const bard = getAlivePlayers(this.engine.room).find(p => p.role && p.role.id === 'bard');
+          if (bard) {
+            Bard.applyMinionExecutionEffect(gs, this.engine, bard);
+          }
+        }
 
         this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 被处决，身份是【${toExecute.role.name}】`, {
           playerId: toExecute.id, role: toExecute.role.id

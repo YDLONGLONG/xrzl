@@ -6,6 +6,9 @@ let myRoomId = null;
 let myName = null;
 let nightSelectedTargets = [];
 let nightCanSelectCount = 0;
+let nightSelectType = 'player';
+let nightCanSkip = false;
+let nightSelectedRoleId = null;
 let currentChatChannel = 'public';
 let selectedNominateTarget = null;
 let whisperTargetId = null; // 当前私聊对象ID
@@ -14,6 +17,8 @@ let godState = null;
 let isReconnecting = false;
 let reconnectAttempts = 0;
 let hasLeftRoom = false;
+let _nightDebugClicks = 0;
+let _nightDebugTimer = null;
 
 // ========== 初始化 ==========
 window.addEventListener('DOMContentLoaded', () => {
@@ -43,6 +48,42 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // 初始化拖拽分隔条
   initResizers();
+
+  // 夜晚遮罩调试：连续点击10次强制打开上帝视角
+  const nightOverlay = $('nightOverlay');
+  if (nightOverlay) {
+    nightOverlay.addEventListener('click', (e) => {
+      // 不在夜晚阶段（active状态）就忽略，点的是内部按钮也忽略
+      if (!nightOverlay.classList.contains('active')) return;
+      if (e.target.closest('button')) return;
+      if (!currentState) return;
+      const phase = currentState.phase;
+      const isNightPhase = phase === 'FIRST_NIGHT' || phase === 'NIGHT' || phase === 'NIGHT_WAKE';
+      if (!isNightPhase) return;
+
+      _nightDebugClicks++;
+      if (_nightDebugTimer) clearTimeout(_nightDebugTimer);
+      _nightDebugTimer = setTimeout(() => { _nightDebugClicks = 0; }, 2000);
+
+      const remain = 10 - _nightDebugClicks;
+      if (remain > 0 && remain <= 3) {
+        showToast(`再点${remain}下打开上帝视角调试`, 800);
+      }
+
+      if (_nightDebugClicks >= 10) {
+        _nightDebugClicks = 0;
+        if (_nightDebugTimer) clearTimeout(_nightDebugTimer);
+        showToast('🔧 夜晚调试模式', 1000);
+        // 强制打开上帝视角登录（不检查gameStarted和其他限制）
+        $('godPanel').style.display = 'block';
+        $('godLoginForm').style.display = 'block';
+        $('godContent').style.display = 'none';
+        $('godLoginError').style.display = 'none';
+        $('godPassword').value = '';
+        setTimeout(() => $('godPassword').focus(), 100);
+      }
+    });
+  }
 });
 
 // 尝试自动重连（从sessionStorage恢复）
@@ -1225,11 +1266,38 @@ function renderRoleCard(state) {
   }
 
   const slayerBtn = $('slayerBtn');
-  if (role.id === 'slayer' && me.isAlive && !me.hasUsedDayAbility &&
+  if (role.id === 'slayer' && me.isAlive &&
       (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE')) {
-    slayerBtn.style.display = 'block';
+    const slayerUsed = state.privateInfoHistory && state.privateInfoHistory.some(
+      info => info.type === 'slayer'
+    );
+    if (!slayerUsed) {
+      slayerBtn.style.display = 'block';
+    } else {
+      slayerBtn.style.display = 'none';
+    }
   } else {
     slayerBtn.style.display = 'none';
+  }
+
+  const gossipBtn = $('gossipBtn');
+  const todayGossipUsed = state.privateInfoHistory && state.privateInfoHistory.some(
+    info => info.type === 'gossip' && info.day === state.dayCount
+  );
+  if (role.id === 'gossip' && me.isAlive && !todayGossipUsed &&
+      (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE')) {
+    gossipBtn.style.display = 'block';
+  } else {
+    gossipBtn.style.display = 'none';
+  }
+
+  const moonchildBtn = $('moonchildBtn');
+  const pendingMoonchild = state.myAbilityState && state.myAbilityState.pendingMoonchildSelect;
+  if (role.id === 'moonchild' && pendingMoonchild &&
+      (state.phase === 'DAY_DAWN' || state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE' || state.phase === 'EXECUTION' || state.phase === 'VOTING' || state.phase === 'DEFENSE')) {
+    moonchildBtn.style.display = 'block';
+  } else {
+    moonchildBtn.style.display = 'none';
   }
 
   if (me.isDead) {
@@ -1244,43 +1312,250 @@ function showNightWake(data) {
   const subtext = $('nightSubtext');
   const selectArea = $('nightSelectArea');
   const confirmBtn = $('nightConfirmBtn');
+  const skipBtn = $('nightSkipBtn');
 
   overlay.classList.add('active', 'wake');
   text.textContent = `你的回合：${data.role}`;
-  // 支持换行显示
   subtext.innerHTML = (data.message || '').replace(/\n/g, '<br>');
   
   nightSelectedTargets = [];
+  nightSelectedRoleId = null;
+  nightSelectType = data.selectType || 'player';
+  nightCanSkip = data.canSkip || false;
   const canSelectCount = data.canSelectCount || 0;
   nightCanSelectCount = canSelectCount;
   const excludeSelf = data.excludeSelf || false;
+  const selectDead = data.selectDead || false;
+  let nightPlayerAndRoleStep = 'player';
+  let nightSelectedPlayerForRole = null;
 
-  if (canSelectCount > 0) {
-    selectArea.innerHTML = '';
+  selectArea.innerHTML = '';
+  selectArea.style.cssText = '';
+
+  if (nightSelectType === 'info') {
+    confirmBtn.style.display = 'block';
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '确认';
+    skipBtn.style.display = 'none';
+    return;
+  }
+
+  function updateConfirmState() {
+    if (nightSelectType === 'role') {
+      confirmBtn.disabled = !nightSelectedRoleId;
+    } else if (nightSelectType === 'playerAndRole') {
+      const hasPlayer = nightSelectedTargets.length === 1;
+      const hasRole = !!nightSelectedRoleId;
+      confirmBtn.disabled = !(hasPlayer && hasRole);
+      confirmBtn.textContent = (hasPlayer && hasRole) ? '确认选择' : (hasPlayer ? '请选择角色' : '请选择一名玩家');
+    } else {
+      confirmBtn.disabled = nightSelectedTargets.length !== (canSelectCount || 1);
+    }
+  }
+
+  function renderPlayerButtons(includeDead) {
     const players = currentState.players.filter(p => {
       if (excludeSelf && p.id === myId) return false;
-      return p.seat !== -1;
+      if (p.seat === -1) return false;
+      if (!includeDead && !p.isAlive) return false;
+      return true;
     });
 
     players.forEach(p => {
       const btn = document.createElement('button');
       btn.className = 'night-player-btn';
+      if (p.isDead) btn.classList.add('dead-selectable');
+      if (nightSelectedTargets.includes(p.id)) btn.classList.add('selected');
       btn.textContent = `${p.seat + 1}号 ${p.name}${p.isDead ? ' (死者)' : ''}`;
       btn.dataset.pid = p.id;
-      btn.onclick = () => toggleNightTarget(p.id, btn);
+      btn.onclick = () => {
+        const idx = nightSelectedTargets.indexOf(p.id);
+        if (idx >= 0) {
+          nightSelectedTargets.splice(idx, 1);
+          btn.classList.remove('selected');
+          nightSelectedPlayerForRole = null;
+          nightSelectedRoleId = null;
+          if (nightSelectType === 'playerAndRole') {
+            nightPlayerAndRoleStep = 'player';
+            renderPlayerAndRole();
+          }
+        } else {
+          document.querySelectorAll('.night-player-btn.selected').forEach(b => b.classList.remove('selected'));
+          nightSelectedTargets = [p.id];
+          btn.classList.add('selected');
+          nightSelectedPlayerForRole = p.id;
+          if (nightSelectType === 'playerAndRole') {
+            nightPlayerAndRoleStep = 'role';
+            renderPlayerAndRole();
+          }
+        }
+        updateConfirmState();
+      };
       selectArea.appendChild(btn);
     });
+  }
 
+  function renderRoleButtons(onConfirm) {
+    if (!data.selectRoles) return;
+    const roleHint = document.createElement('div');
+    roleHint.style.cssText = 'color:#d4af37;margin:12px 0 8px;font-size:14px;';
+    roleHint.textContent = '猜测该玩家的角色：';
+    selectArea.appendChild(roleHint);
+
+    data.selectRoles.forEach(r => {
+      const btn = document.createElement('button');
+      btn.className = `night-role-btn ${(r.category || '').toLowerCase()}`;
+      if (nightSelectedRoleId === r.id) btn.classList.add('selected');
+      btn.textContent = r.name;
+      btn.dataset.rid = r.id;
+      btn.title = r.team === 'GOOD' ? '善良阵营' : '邪恶阵营';
+      btn.onclick = () => {
+        document.querySelectorAll('.night-role-btn.selected').forEach(b => b.classList.remove('selected'));
+        nightSelectedRoleId = r.id;
+        btn.classList.add('selected');
+        updateConfirmState();
+      };
+      selectArea.appendChild(btn);
+    });
+  }
+
+  function renderPlayerAndRole() {
+    selectArea.innerHTML = '';
+    selectArea.style.cssText = 'display:flex;gap:12px;max-width:900px;width:100%;max-height:50vh;overflow-y:auto;';
+
+    const playerSection = document.createElement('div');
+    playerSection.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;';
+    const playerTitle = document.createElement('div');
+    playerTitle.style.cssText = 'color:#3498db;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
+    playerTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#3498db;border-radius:50%;color:#fff;text-align:center;line-height:18px;font-size:11px;">1</span>选择玩家';
+    playerSection.appendChild(playerTitle);
+    const playerGrid = document.createElement('div');
+    playerGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:5px;overflow-y:auto;padding-right:4px;';
+    playerGrid.className = 'player-select-grid';
+    const players = currentState.players.filter(p => {
+      if (excludeSelf && p.id === myId) return false;
+      if (p.seat === -1) return false;
+      if (p.isDead) return false;
+      return true;
+    });
+    players.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className = 'night-player-btn';
+      if (nightSelectedTargets.includes(p.id)) btn.classList.add('selected');
+      btn.style.cssText = 'padding:6px 4px;font-size:12px;min-height:36px;';
+      btn.textContent = `${p.seat + 1}号`;
+      btn.title = p.name;
+      btn.dataset.pid = p.id;
+      btn.onclick = () => {
+        document.querySelectorAll('.player-select-grid .night-player-btn.selected').forEach(b => b.classList.remove('selected'));
+        nightSelectedTargets = [p.id];
+        nightSelectedPlayerForRole = p.id;
+        btn.classList.add('selected');
+        nightSelectedRoleId = null;
+        document.querySelectorAll('.role-select-grid .night-role-btn.selected').forEach(b => b.classList.remove('selected'));
+        const selectedHint = roleSection.querySelector('.role-selected-hint');
+        if (selectedHint) selectedHint.textContent = `${p.seat+1}号${p.name}`;
+        updateConfirmState();
+      };
+      playerGrid.appendChild(btn);
+    });
+    playerSection.appendChild(playerGrid);
+    selectArea.appendChild(playerSection);
+
+    const divider = document.createElement('div');
+    divider.style.cssText = 'width:1px;background:rgba(255,255,255,0.15);flex-shrink:0;';
+    selectArea.appendChild(divider);
+
+    const roleSection = document.createElement('div');
+    roleSection.style.cssText = 'flex:1.5;min-width:0;display:flex;flex-direction:column;';
+    const roleTitle = document.createElement('div');
+    roleTitle.style.cssText = 'color:#d4af37;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
+    roleTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#d4af37;border-radius:50%;color:#000;text-align:center;line-height:18px;font-size:11px;">2</span>猜测角色';
+    roleSection.appendChild(roleTitle);
+
+    const hint = document.createElement('div');
+    hint.className = 'role-selected-hint';
+    hint.style.cssText = 'color:#888;font-size:11px;margin-bottom:6px;flex-shrink:0;';
+    const selectedP = nightSelectedTargets.length > 0 ? currentState.players.find(p=>p.id===nightSelectedTargets[0]) : null;
+    hint.textContent = selectedP ? `${selectedP.seat+1}号${selectedP.name}` : '请先选玩家';
+    roleSection.appendChild(hint);
+
+    const roleGrid = document.createElement('div');
+    roleGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:4px;overflow-y:auto;padding-right:4px;';
+    roleGrid.className = 'role-select-grid';
+    if (data.selectRoles) {
+      data.selectRoles.forEach(r => {
+        const btn = document.createElement('button');
+        btn.className = `night-role-btn ${(r.category || '').toLowerCase()}`;
+        if (nightSelectedRoleId === r.id) btn.classList.add('selected');
+        btn.style.cssText = 'padding:5px 3px;font-size:11px;min-height:32px;';
+        btn.textContent = r.name;
+        btn.dataset.rid = r.id;
+        btn.title = (r.team === 'GOOD' ? '善良阵营' : '邪恶阵营') + ' - ' + r.name;
+        btn.onclick = () => {
+          if (nightSelectedTargets.length === 0) {
+            showToast('请先选择一名玩家');
+            return;
+          }
+          document.querySelectorAll('.role-select-grid .night-role-btn.selected').forEach(b => b.classList.remove('selected'));
+          nightSelectedRoleId = r.id;
+          btn.classList.add('selected');
+          updateConfirmState();
+        };
+        roleGrid.appendChild(btn);
+      });
+    }
+    roleSection.appendChild(roleGrid);
+    selectArea.appendChild(roleSection);
+  }
+
+  if (nightSelectType === 'role' && data.selectRoles) {
+    data.selectRoles.forEach(r => {
+      const btn = document.createElement('button');
+      btn.className = `night-role-btn ${(r.category || '').toLowerCase()}`;
+      btn.textContent = r.name;
+      btn.dataset.rid = r.id;
+      btn.title = r.team === 'GOOD' ? '善良阵营' : '邪恶阵营';
+      btn.onclick = () => {
+        document.querySelectorAll('.night-role-btn.selected').forEach(b => b.classList.remove('selected'));
+        nightSelectedRoleId = r.id;
+        btn.classList.add('selected');
+        updateConfirmState();
+      };
+      selectArea.appendChild(btn);
+    });
+    confirmBtn.style.display = 'block';
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '确认选择';
+  } else if (nightSelectType === 'playerAndRole') {
+    renderPlayerAndRole();
+    confirmBtn.style.display = 'block';
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '请选择一名玩家';
+  } else if (canSelectCount > 0) {
+    renderPlayerButtons(selectDead);
     confirmBtn.style.display = 'block';
     confirmBtn.disabled = true;
     confirmBtn.textContent = '确认行动';
   } else {
-    // 不需要选择目标，直接显示提示文字和确认按钮
-    selectArea.innerHTML = '';
     confirmBtn.style.display = 'block';
     confirmBtn.disabled = false;
     confirmBtn.textContent = '确认';
   }
+
+  skipBtn.style.display = nightCanSkip ? 'block' : 'none';
+}
+
+function toggleNightRole(rid, btn) {
+  if (nightSelectedRoleId === rid) {
+    nightSelectedRoleId = null;
+    btn.classList.remove('selected');
+  } else {
+    document.querySelectorAll('.night-role-btn.selected').forEach(b => b.classList.remove('selected'));
+    nightSelectedRoleId = rid;
+    btn.classList.add('selected');
+  }
+  $('nightConfirmBtn').disabled = !nightSelectedRoleId;
 }
 
 function toggleNightTarget(pid, btn) {
@@ -1300,17 +1575,37 @@ function toggleNightTarget(pid, btn) {
     btn.classList.add('selected');
   }
 
-  // 检查是否选够了
   const neededCount = getNeededSelectCount();
   $('nightConfirmBtn').disabled = nightSelectedTargets.length !== neededCount;
 }
 
 function getNeededSelectCount() {
-  // 从night:wake数据推断
   return nightCanSelectCount || 1;
 }
 
 function submitNightAction() {
+  if (nightSelectType === 'role') {
+    if (!nightSelectedRoleId) {
+      showToast('请选择一个角色');
+      return;
+    }
+    socket.emit('night:action', { roleId: nightSelectedRoleId });
+    return;
+  }
+
+  if (nightSelectType === 'playerAndRole') {
+    if (nightSelectedTargets.length !== 1) {
+      showToast('请选择一名玩家');
+      return;
+    }
+    if (!nightSelectedRoleId) {
+      showToast('请猜测该玩家的角色');
+      return;
+    }
+    socket.emit('night:action', { targets: nightSelectedTargets, roleId: nightSelectedRoleId });
+    return;
+  }
+
   const neededCount = getNeededSelectCount();
   if (nightSelectedTargets.length > 0 && nightSelectedTargets.length !== neededCount) {
     showToast(`请选择${neededCount}名玩家`);
@@ -1318,6 +1613,10 @@ function submitNightAction() {
   }
 
   socket.emit('night:action', { targets: nightSelectedTargets });
+}
+
+function skipNightAction() {
+  socket.emit('night:action', { skip: true });
 }
 
 function hideNightOverlay() {
@@ -1330,6 +1629,7 @@ function showWaitingNight() {
   const subtext = $('nightSubtext');
   const selectArea = $('nightSelectArea');
   const confirmBtn = $('nightConfirmBtn');
+  const skipBtn = $('nightSkipBtn');
 
   overlay.classList.add('active');
   overlay.classList.remove('wake');
@@ -1337,6 +1637,7 @@ function showWaitingNight() {
   subtext.textContent = '等待其他玩家行动...';
   selectArea.innerHTML = '';
   confirmBtn.style.display = 'none';
+  skipBtn.style.display = 'none';
 }
 
 function handleNightOverlay(state) {
@@ -1418,16 +1719,97 @@ function confirmPhase() {
 
 async function useSlayerAbility() {
   const players = currentState.players.filter(p => p.isAlive && p.seat !== -1 && p.id !== myId);
-  const name = prompt('杀手技能：选择要击杀的玩家\n' + players.map((p,i) => `${i+1}: ${p.seat+1}号 ${p.name}`).join('\n'));
-  if (name) {
-    const idx = parseInt(name) - 1;
-    if (idx >= 0 && idx < players.length) {
-      const ok = await showConfirm(`确定对 ${players[idx].seat+1}号 ${players[idx].name} 使用杀手技能吗？每局只能使用一次。`, { type: 'warning', title: '杀手技能', confirmText: '确认击杀' });
+  const selectedId = await showPlayerSelect('杀手技能：选择要击杀的玩家', players, { type: 'warning', confirmText: '选择' });
+  if (selectedId) {
+    const target = players.find(p => p.id === selectedId);
+    if (target) {
+      const ok = await showConfirm(`确定对 ${target.seat+1}号 ${target.name} 使用杀手技能吗？每局只能使用一次。`, { type: 'warning', title: '杀手技能', confirmText: '确认击杀' });
       if (ok) {
-        socket.emit('day:useAbility', { abilityName: 'slayer', targetId: players[idx].id });
+        socket.emit('day:useAbility', { abilityName: 'slayer', targetId: selectedId });
       }
     }
   }
+}
+
+async function useGossipAbility() {
+  const statement = await showTextInput('造谣者：发表公开声明', {
+    placeholder: '输入你的声明（2-200字）...',
+    description: '规则：今晚裁判会判断你的声明是否为真。若声明为真且你未中毒/醉酒，今晚一名玩家会死亡。',
+    maxLength: 200,
+    minLength: 2,
+    multiline: true,
+    type: 'warning',
+    confirmText: '发表声明',
+    cancelText: '取消'
+  });
+  if (statement) {
+    socket.emit('day:useAbility', { abilityName: 'gossip', statement: statement });
+  }
+}
+
+async function useMoonchildAbility() {
+  const players = currentState.players.filter(p => p.isAlive && p.seat !== -1);
+  const selectedId = await showPlayerSelect('月之子：公开选择一名玩家', players, { type: 'info', confirmText: '公开选择' });
+  if (selectedId) {
+    const target = players.find(p => p.id === selectedId);
+    if (target) {
+      const ok = await showConfirm(`确定选择 ${target.seat+1}号 ${target.name} 吗？所有人都会看到你的选择。如果TA是善良的，今晚TA会死亡。`, { type: 'info', title: '月之子选择', confirmText: '确认选择' });
+      if (ok) {
+        socket.emit('day:useAbility', { abilityName: 'moonchild', targetId: selectedId });
+      }
+    }
+  }
+}
+
+function showPlayerSelect(title, players, options = {}) {
+  return new Promise((resolve) => {
+    const type = options.type || 'default';
+    const confirmText = options.confirmText || '确定';
+    const selected = { id: null };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    const playerButtons = players.map(p =>
+      `<button class="slayer-player-btn" data-pid="${p.id}">${p.seat+1}号 ${p.name}</button>`
+    ).join('');
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-${type}" style="min-width:340px;max-width:500px;">
+        <div class="confirm-title">${title}</div>
+        <div class="confirm-input-area" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;max-height:50vh;overflow-y:auto;">
+          ${playerButtons}
+        </div>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">取消</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => { overlay.remove(); resolve(result); }, 200);
+    };
+
+    overlay.querySelectorAll('.slayer-player-btn').forEach(btn => {
+      btn.style.cssText = 'padding:8px 6px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#e0e0e0;cursor:pointer;font-size:13px;font-family:inherit;transition:all 0.15s;';
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(231,76,60,0.3)'; btn.style.borderColor = 'rgba(231,76,60,0.6)'; });
+      btn.addEventListener('mouseleave', () => {
+        if (!btn.classList.contains('psel')) {
+          btn.style.background = 'rgba(255,255,255,0.08)';
+          btn.style.borderColor = 'rgba(255,255,255,0.15)';
+        }
+      });
+      btn.addEventListener('click', () => { close(btn.dataset.pid); });
+    });
+
+    overlay.querySelector('.confirm-cancel').addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } };
+    document.addEventListener('keydown', onKey);
+
+    requestAnimationFrame(() => overlay.classList.add('confirm-show'));
+  });
 }
 
 function showAbilityUsed(data) {
@@ -1438,8 +1820,10 @@ function showAbilityUsed(data) {
     } else {
       msg = `${data.fromName} 使用杀手技能，但无事发生。`;
     }
+  } else if (data.abilityName === 'gossip') {
+    msg = `${data.fromName} 发表了公开声明`;
   }
-  showToast(msg);
+  if (msg) showToast(msg);
 }
 
 function showPlayerDied(data) {
@@ -1967,6 +2351,43 @@ function renderGodView() {
     statusHtml += `<div style="color:#aaa;">${gs.winReason||''}</div>`;
   }
   $('godStatus').innerHTML = statusHtml;
+
+  // 夜晚队列调试信息（判断流程卡住用）
+  if (gs.nightQueue && gs.nightQueue.length > 0) {
+    const queue = gs.nightQueue;
+    const idx = gs.currentNightIndex ?? -1;
+    let debugHtml = '<div style="margin-top:12px; padding:10px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.25); border-radius:6px;">';
+    debugHtml += `<div style="color:#e74c3c; font-weight:bold; margin-bottom:6px;">🔍 夜晚流程调试</div>`;
+    debugHtml += `<div><strong>队列进度：</strong>${idx >= 0 ? idx + 1 : 0} / ${queue.length} （索引：${idx}）</div>`;
+    if (idx >= 0 && idx < queue.length) {
+      const current = queue[idx];
+      const cp = players.find(p => p.id === current.playerId);
+      debugHtml += `<div style="color:#f39c12; margin-top:4px;"><strong>当前等待：</strong>${current.roleId}${current.isDrunk?'(酒鬼假身份)':''}${current.isFakeDemon?'(假恶魔)':''} → ${cp?cp.seat+1+'号 '+cp.name:'未知玩家'}</div>`;
+      if (cp && cp.isBot !== undefined) {
+        debugHtml += `<div style="color:#aaa; font-size:0.9em;">玩家状态：${cp.isAlive?'存活':'💀死亡'} | ${cp.isBot?'🤖机器人':'👤真人'} | ${cp.isConnected?'✅在线':'❌断线'}</div>`;
+      }
+    } else if (idx >= queue.length) {
+      debugHtml += `<div style="color:#2ecc71; margin-top:4px;"><strong>状态：</strong>夜晚队列已全部执行完毕，等待进入天亮/结算</div>`;
+    }
+    if (gs.pendingRavenkeeper) {
+      const rp = players.find(p => p.id === gs.pendingRavenkeeper);
+      debugHtml += `<div style="color:#9b59b6; margin-top:4px;"><strong>待处理守鸦人：</strong>${rp?rp.seat+1+'号 '+rp.name:gs.pendingRavenkeeper}</div>`;
+    }
+    // 完整队列列表
+    debugHtml += `<div style="margin-top:8px;"><strong>完整队列：</strong><div style="margin-top:4px; font-size:0.9em; max-height:180px; overflow-y:auto; padding:6px; background:rgba(0,0,0,0.2); border-radius:4px;">`;
+    queue.forEach((item, i) => {
+      const p = players.find(pp => pp.id === item.playerId);
+      const doneTag = i < idx ? '✅ ' : (i === idx ? '👉 ' : '⏳ ');
+      const statusColor = i < idx ? 'color:#888;' : (i === idx ? 'color:#f1c40f; font-weight:bold;' : '');
+      const extraTags = [];
+      if (item.isDrunk) extraTags.push('酒鬼');
+      if (item.isFakeDemon) extraTags.push('假恶魔');
+      const extra = extraTags.length > 0 ? ` <span style="color:#e67e22;">(${extraTags.join('/')})</span>` : '';
+      debugHtml += `<div style="${statusColor} line-height:1.6;">${doneTag}[${i}] ${item.roleId}${extra} → ${p?p.seat+1+'号 '+p.name:'?'}</div>`;
+    });
+    debugHtml += `</div></div></div>`;
+    $('godStatus').innerHTML += debugHtml;
+  }
 
   // 渲染全部日志
   const logContainer = $('godActionLog');

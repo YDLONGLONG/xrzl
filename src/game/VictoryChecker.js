@@ -1,5 +1,5 @@
 // 胜负判定器
-const { getAlivePlayers } = require('../utils/helpers');
+const { getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { PHASES } = require('../config/game-config');
 
 class VictoryChecker {
@@ -23,7 +23,7 @@ class VictoryChecker {
     }
 
     // 检查恶魔存活情况
-    const demon = alive.find(p => p.role.category === 'DEMON' && !p.isFakeDemon);
+    const demon = alive.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     if (!demon) {
       // 主谋额外回合中：不因恶魔死亡而结束游戏（等待额外白天结束）
       if (gs.mastermindExtraRound) {
@@ -35,7 +35,7 @@ class VictoryChecker {
         if (mastermind) {
           const demonExecuted = gs.todaysDeaths.find(d => {
             const p = room.players.get(d.playerId);
-            return p && p.role && p.role.category === 'DEMON' && !p.isFakeDemon && d.cause === 'EXECUTION';
+            return p && p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon && d.cause === 'EXECUTION';
           });
           if (demonExecuted) {
             gs.mastermindTriggered = true;
@@ -72,7 +72,7 @@ class VictoryChecker {
     if (!executedPlayer || !executedPlayer.role) return null;
 
     gs.mastermindExtraRound = false;
-    const losingTeam = executedPlayer.role.team;
+    const losingTeam = getPlayerEffectiveTeam(executedPlayer);
     const winningTeam = losingTeam === 'GOOD' ? 'EVIL' : 'GOOD';
     return this.endGame(
       winningTeam,
@@ -110,7 +110,7 @@ class VictoryChecker {
         seat: p.seat,
         roleName: p.role.name,
         roleId: p.role.id,
-        team: p.role.team,
+        team: getPlayerEffectiveTeam(p),
         isAlive: p.isAlive,
         isBot: !!p.isBot
       }));

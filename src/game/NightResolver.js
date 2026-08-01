@@ -1,12 +1,12 @@
 // 夜晚结算器 - 支持多剧本
 const { getScriptConfig, PHASES, ROLE_IDS } = require('../config/game-config');
-const { getAlivePlayers } = require('../utils/helpers');
+const { getAlivePlayers, decrementDrunkPlayers } = require('../utils/helpers');
+const { Lunatic } = require('../roles/Outsider2');
 
 class NightResolver {
   constructor(engine) {
     this.engine = engine;
     this.pendingRavenkeeper = null;
-    this.pendingMoonchild = null;
   }
 
   get scriptConfig() {
@@ -23,7 +23,10 @@ class NightResolver {
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
-    this.pendingMoonchild = null;
+    gs.goonTriggeredThisNight = false;
+
+    // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
+    decrementDrunkPlayers(this.engine.room);
 
     gs.nightQueue = this.buildNightQueue(true);
 
@@ -45,7 +48,10 @@ class NightResolver {
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
-    this.pendingMoonchild = null;
+    gs.goonTriggeredThisNight = false;
+
+    // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
+    decrementDrunkPlayers(this.engine.room);
 
     gs.nightQueue = this.buildNightQueue(false);
 
@@ -58,6 +64,8 @@ class NightResolver {
       }
     }
     gs.nominations = [];
+    // 先保存「刚刚过去的这个白天」的死亡记录，供僵怖等能力判定使用，再清空当日记录
+    gs.lastDayDeaths = (gs.todaysDeaths || []).slice();
     gs.todaysDeaths = [];
 
     this.wakeNext();
@@ -68,19 +76,21 @@ class NightResolver {
     const baseOrder = isFirstNight ? sc.firstNightOrder : sc.otherNightOrder;
     const queue = [];
     const demonIds = sc.demonRoles;
+    const handledRoleIds = new Set();
 
     baseOrder.forEach(roleId => {
-      // 去重（BMR首夜顺序中godfather出现两次）
-      if (queue.some(e => e.roleId === roleId && e.isDuplicateHandled)) return;
+      // 去重：同一角色在顺序表中重复出现时只入队一次
+      if (handledRoleIds.has(roleId)) return;
+      handledRoleIds.add(roleId);
 
       // 酒鬼假角色处理（仅TB）
       const drunksWithThisRole = getAlivePlayers(this.engine.room).filter(
         p => p.role && p.role.id === ROLE_IDS.DRUNK && p.fakeRole && p.fakeRole.id === roleId
       );
 
-      // 疯子/莽夫假恶魔角色处理（仅BMR）
+      // 疯子假恶魔角色处理（仅BMR；莽夫是被动角色，不再视为假恶魔）
       const fakeDemonsWithThisRole = getAlivePlayers(this.engine.room).filter(
-        p => p.role && (p.role.id === 'madman' || p.role.id === 'lunatic') && p.fakeRole && p.fakeRole.id === roleId
+        p => p.role && p.role.isFakeDemon && p.fakeRole && p.fakeRole.id === roleId
       );
 
       // 真实角色玩家
@@ -90,10 +100,14 @@ class NightResolver {
 
       // 首夜恶魔不唤醒杀人（只给信息）
       if (isFirstNight && demonIds.includes(roleId)) {
-        // 但假恶魔（疯子/莽夫）需要被唤醒选择目标
+        // 但假恶魔（疯子）需要被唤醒选择目标
         fakeDemonsWithThisRole.forEach(fd => {
           queue.push({ roleId, playerId: fd.id, isFakeDemon: true });
         });
+        // 普卡例外：技能表为「每个夜晚，选择一名玩家中毒」，首夜同样行动
+        if (roleId === 'pukka' && realPlayer) {
+          queue.push({ roleId, playerId: realPlayer.id, isDrunk: false });
+        }
         return;
       }
 
@@ -136,6 +150,16 @@ class NightResolver {
         let effectiveRole = role;
         let wakeInfo = null;
 
+        // 驱魔人：被选中的恶魔当晚能力失效，不唤醒行动
+        if (!isFakeDemon && role.category === 'DEMON' &&
+            player.abilityState.exorcisedNight === gs.nightCount) {
+          this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（${role.name}）被驱魔人选中，本夜能力失效`, {
+            playerId: player.id, role: role.id, event: 'exorcised'
+          });
+          gs.currentNightIndex++;
+          continue;
+        }
+
         if (isDrunkPlayer && player.fakeRole) {
           effectiveRole = player.fakeRole;
           wakeInfo = role.getNightWakeInfo ? role.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
@@ -150,10 +174,21 @@ class NightResolver {
         }
 
         const wakesForInfo = effectiveRole.wakesForInfo === true;
+        const selectType = effectiveRole.selectType || 'player';
         const selectCount = isDrunkPlayer ? (role.selectCount || 0) : (effectiveRole.selectCount || 0);
-        const shouldWake = (selectCount > 0) || wakesForInfo || (isDrunkPlayer && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
+        const canSkip = effectiveRole.canSkip === true;
+        const shouldWake = (selectCount > 0) || wakesForInfo || selectType === 'role' || (isDrunkPlayer && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
 
         if (shouldWake) {
+          if (!wakeInfo) {
+            wakeInfo = effectiveRole.getNightWakeInfo ? effectiveRole.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
+          }
+
+          if (wakeInfo === null) {
+            gs.currentNightIndex++;
+            continue;
+          }
+
           gs.currentWakePlayerId = player.id;
           gs.phase = PHASES.NIGHT_WAKE;
 
@@ -162,16 +197,22 @@ class NightResolver {
             playerId: player.id, role: (isDrunkPlayer || isFakeDemon) ? player.fakeRole.id : role.id
           });
 
-          if (!wakeInfo) {
-            wakeInfo = effectiveRole.getNightWakeInfo ? effectiveRole.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
-          }
-
           // 假恶魔使用假角色的selectCount
-          const effectiveSelectCount = isFakeDemon ? (effectiveRole.selectCount || 0) : selectCount;
+          let effectiveSelectCount = isFakeDemon ? (effectiveRole.selectCount || 0) : selectCount;
+          // getNightWakeInfo 可能会动态调整本夜可选人数（如珀上次跳过后需选三人），以其返回值为准
+          if (!isDrunkPlayer && typeof wakeInfo?.canSelectCount === 'number') {
+            effectiveSelectCount = wakeInfo.canSelectCount;
+          }
+          const wakeSelectType = wakeInfo?.selectType || selectType;
 
           this.engine.io.to(player.id).emit('night:wake', {
             role: roleName,
             canSelectCount: effectiveSelectCount,
+            selectType: wakeSelectType,
+            selectRoles: wakeInfo?.selectRoles || null,
+            canSkip: wakeInfo?.canSkip !== undefined ? wakeInfo.canSkip : canSkip,
+            selectDead: wakeInfo?.selectDead || false,
+            selectPlayerAndRole: wakeInfo?.selectPlayerAndRole || false,
             excludeSelf: wakeInfo?.excludeSelf || false,
             message: wakeInfo?.message || '请行动'
           });
@@ -202,24 +243,22 @@ class NightResolver {
     }
 
     const isDrunk = player.role.id === ROLE_IDS.DRUNK;
-    const isFakeDemon = player.role.id === 'madman' || player.role.id === 'lunatic';
+    const isFakeDemon = player.role.id === 'madman';
 
-    // 假恶魔处理：使用真实角色的onNightAction，假装行动但不实际杀人
+    // 假恶魔处理：仅记录其选择并通知真恶魔，不调用真实恶魔角色的 onNightAction（避免真实伤害）
     if (isFakeDemon && player.fakeRole) {
       const fakeRole = player.fakeRole;
       const effectiveSelectCount = fakeRole.selectCount || 0;
 
-      if (effectiveSelectCount === 0) {
-        if (fakeRole.onNightAction) {
-          fakeRole.onNightAction(gs, player, { targets: [] }, this.engine);
-        }
-      } else {
+      // 关键：假恶魔（疯子）绝不能调用真实恶魔角色的 onNightAction。
+      // 疯子的假角色按设计取自「不在场的恶魔」，调用其 onNightAction 会向 nightActions
+      // 注册真实的击杀/中毒等副作用（例如普卡会 Po 化目标、沙巴洛斯会记录真实击杀），
+      // 而不会有任何真恶魔去覆盖这些 nightActions，从而制造出「虚假的真实伤害」。
+      // 因此此处只做目标数校验，实际效果由下方「假确认信息 + 通知真恶魔」完成。
+      if (effectiveSelectCount > 0) {
         const targets = action.targets || [];
         if (targets.length !== effectiveSelectCount) {
           return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
-        }
-        if (fakeRole.onNightAction) {
-          fakeRole.onNightAction(gs, player, action, this.engine);
         }
       }
 
@@ -252,6 +291,37 @@ class NightResolver {
     }
 
     const effectiveSelectCount = player.role.selectCount || 0;
+    const roleSelectType = player.role.selectType || 'player';
+    const roleCanSkip = player.role.canSkip === true;
+
+    if (action.skip && roleCanSkip) {
+      if (player.role && player.role.onNightAction) {
+        const result = player.role.onNightAction(gs, player, { skip: true }, this.engine);
+        if (!result.success) return result;
+      }
+      gs.currentWakePlayerId = null;
+      this.engine.io.to(playerId).emit('night:actionAck', { success: true });
+      gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
+      this.wakeNext();
+      return { success: true };
+    }
+
+    if (roleSelectType === 'role') {
+      const roleId = action.roleId || (action.targets && action.targets[0]);
+      if (!roleId) {
+        return { success: false, message: '请选择一个角色' };
+      }
+      if (player.role && player.role.onNightAction) {
+        const result = player.role.onNightAction(gs, player, { roleId }, this.engine);
+        if (!result.success) return result;
+      }
+      gs.currentWakePlayerId = null;
+      this.engine.io.to(playerId).emit('night:actionAck', { success: true });
+      gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
+      this.wakeNext();
+      return { success: true };
+    }
+
     if (effectiveSelectCount === 0 && !isDrunk) {
       if (player.role.onNightAction) {
         const result = player.role.onNightAction(gs, player, { targets: [] }, this.engine);
@@ -276,6 +346,17 @@ class NightResolver {
 
     if (isDrunk) {
       player.role.selectCount = 0;
+    }
+
+    // BMR 莽夫（Goon）：本夜第一个将能力选向莽夫的玩家醉酒，并令莽夫转变阵营
+    // 兼容单目标 targetId 与多目标 targets / roleId
+    const targetIds = Lunatic.getTargetedIds(action);
+    for (const tid of targetIds) {
+      const target = this.engine.room.players.get(tid);
+      if (target && target.role && target.role.id === 'lunatic') {
+        Lunatic.triggerGoon(gs, target, player, this.engine);
+        break;
+      }
     }
 
     gs.currentWakePlayerId = null;
@@ -313,36 +394,6 @@ class NightResolver {
     this.pendingRavenkeeper = null;
   }
 
-  // 月之子死亡唤醒
-  wakeMoonchild(player) {
-    const gs = this.engine.room.gameState;
-    this.pendingMoonchild = player.id;
-    gs.currentWakePlayerId = player.id;
-    gs.phase = PHASES.NIGHT_WAKE;
-
-    this.engine.io.to(player.id).emit('night:wake', {
-      role: player.role.name,
-      canSelectCount: 1,
-      message: '你死了。选择一名存活玩家，如果TA是善良的，TA会在当晚死亡'
-    });
-    this.engine.broadcastState();
-  }
-
-  processMoonchildAction(playerId, targetId) {
-    const player = this.engine.room.players.get(playerId);
-    const target = this.engine.room.players.get(targetId);
-    if (player && target && target.role) {
-      if (target.role.team === 'GOOD' && target.isAlive) {
-        this.engine.deathManager.killPlayerDirect(targetId, 'MOONCHILD', this.engine.room.gameState.nightCount, -1);
-      }
-      this.engine.setPlayerPrivateInfo(player, {
-        type: 'moonchild',
-        message: `${target.seat+1}号 ${target.name} 是${target.role.team === 'GOOD' ? '善良' : '邪恶'}阵营${target.role.team === 'GOOD' ? '，TA将在今晚死亡' : '，无事发生'}`
-      });
-    }
-    this.pendingMoonchild = null;
-  }
-
   resolveNight() {
     const gs = this.engine.room.gameState;
     const isFirstNight = gs.nightCount === 0;
@@ -364,16 +415,6 @@ class NightResolver {
       return;
     }
 
-    // 检查月之子死亡
-    const moonchildDead = Array.from(this.engine.room.players.values())
-      .filter(p => p.isDead && p.deathNight === gs.nightCount && p.role && p.role.id === 'moonchild' && !p.abilityState.hasUsed);
-
-    if (moonchildDead.length > 0 && !moonchildDead[0].isPoisoned) {
-      moonchildDead[0].abilityState.hasUsed = true;
-      this.wakeMoonchild(moonchildDead[0]);
-      return;
-    }
-
     this.finalizeNight();
   }
 
@@ -387,37 +428,40 @@ class NightResolver {
       this.executeDemonKill(targetId, gs, 'imp');
     }
 
-    // BMR: 僵怖 - 仅当白天无人死亡时杀人
+    // BMR: 僵怖 - 仅当刚过去的白天无人死亡时杀人
     if (gs.nightActions.zombuul) {
-      const dayDeaths = (gs.todaysDeaths || []).filter(d => d.cause !== 'FIRST_NIGHT');
-      if (dayDeaths.length === 0) {
+      const { Zombuul } = require('../roles/Demon2');
+      if (!Zombuul.hadDayDeath(gs)) {
         this.executeDemonKill(gs.nightActions.zombuul.targetId, gs, 'zombuul');
+      } else {
+        this.engine.logAction('ABILITY', '僵怖：白天有人死亡，本夜无法杀人', { event: 'zombuul_blocked' });
       }
     }
 
     // BMR: 普卡 - 杀上一夜的毒目标
     if (gs.nightActions.pukka) {
       const pukkaPlayer = this.findAlivePlayerWithRole('pukka');
-      if (pukkaPlayer && pukkaPlayer.abilityState.lastPoisonTargetId !== undefined) {
-        const lastTargetId = pukkaPlayer.abilityState.lastPoisonTargetId;
-        const lastTarget = this.engine.room.players.get(lastTargetId);
-        if (lastTarget && lastTarget.isAlive) {
-          lastTarget.isPoisoned = false; // 恢复健康
-          this.engine.deathManager.killPlayer(lastTargetId, 'DEMON', gs.nightCount, -1);
-        }
-      }
-      // 设置当前毒目标为上一夜目标
       if (pukkaPlayer) {
+        if (!pukkaPlayer.abilityState) pukkaPlayer.abilityState = {};
+        const lastTargetId = pukkaPlayer.abilityState.lastPoisonTargetId;
+        // 本夜刚选的目标不能同时被判为「上一夜目标」
+        if (lastTargetId && lastTargetId !== gs.nightActions.pukka.targetId) {
+          const lastTarget = this.engine.room.players.get(lastTargetId);
+          if (lastTarget && lastTarget.isAlive) {
+            lastTarget.isPoisoned = false; // 恢复健康
+            this.engine.deathManager.killPlayer(lastTargetId, 'DEMON', gs.nightCount, -1);
+          }
+        }
+        // 设置当前毒目标为下一夜结算用的「上一夜目标」
         pukkaPlayer.abilityState.lastPoisonTargetId = gs.nightActions.pukka.targetId;
       }
     }
 
     // BMR: 沙巴洛斯 - 杀2人 + 可选复活
     if (gs.nightActions.shabaloth) {
-      const targets = gs.nightActions.shabaloth.targetIds || [];
-      targets.forEach(tid => this.executeDemonKill(tid, gs, 'shabaloth'));
+      const targets = gs.nightActions.shabaloth.targets || [];
 
-      // 反刍：复活上一夜选择且已死亡的目标之一
+      // 反刍：复活上一夜选择且已死亡的目标之一（先于本夜击杀结算，避免复活本夜刚死的人）
       const shabalothPlayer = this.findAlivePlayerWithRole('shabaloth');
       if (shabalothPlayer && shabalothPlayer.abilityState.lastNightTargets) {
         const lastTargets = shabalothPlayer.abilityState.lastNightTargets;
@@ -435,14 +479,17 @@ class NightResolver {
           });
         }
       }
+      // 本夜击杀结算
+      targets.forEach(tid => this.executeDemonKill(tid, gs, 'shabaloth'));
+
       if (shabalothPlayer) {
         shabalothPlayer.abilityState.lastNightTargets = targets;
       }
     }
 
-    // BMR: 珀 - 杀1或3人
+    // BMR: 珀 - 杀1或3人（也可能跳过不杀）
     if (gs.nightActions.po) {
-      const targets = gs.nightActions.po.targetIds || [gs.nightActions.po.targetId].filter(Boolean);
+      const targets = gs.nightActions.po.targets || [];
       targets.forEach(tid => this.executeDemonKill(tid, gs, 'po'));
     }
   }
@@ -455,13 +502,13 @@ class NightResolver {
     if (target.isProtected) return;
 
     // 检查士兵免疫
-    if (target.role.id === 'soldier' && !target.isPoisoned) return;
+    if (target.role.id === 'soldier' && !target.isPoisoned && !target.isDrunk) return;
 
     // 检查水手免疫（BMR水手不会死亡）
-    if (target.role.id === 'sailor' && !target.isPoisoned) return;
+    if (target.role.id === 'sailor' && !target.isPoisoned && !target.isDrunk) return;
 
     // 检查弄臣首次死亡免疫
-    if (target.role.id === 'fool' && !target.abilityState.usedDeath && !target.isPoisoned) {
+    if (target.role.id === 'fool' && !target.abilityState.usedDeath && !target.isPoisoned && !target.isDrunk) {
       target.abilityState.usedDeath = true;
       this.engine.logAction('ABILITY', `${target.seat+1}号 ${target.name}（弄臣）首次死亡免疫`, {
         playerId: target.id
@@ -479,7 +526,7 @@ class NightResolver {
     }
 
     // 检查僵怖首次死亡免疫
-    if (target.role.id === 'zombuul' && !target.abilityState.firstDeath && !target.isPoisoned) {
+    if (target.role.id === 'zombuul' && !target.abilityState.firstDeath && !target.isPoisoned && !target.isDrunk) {
       target.abilityState.firstDeath = true;
       // 仍存活但被当作死亡
       target.isDead = true;
@@ -561,6 +608,51 @@ class NightResolver {
 
   finalizeNight() {
     const gs = this.engine.room.gameState;
+
+    // 结算月之子白天选择的目标：善良则当晚死亡
+    for (const [, player] of this.engine.room.players) {
+      if (player.role && player.role.id === 'moonchild' && player.abilityState && player.abilityState.selectedTarget) {
+        const target = this.engine.room.players.get(player.abilityState.selectedTarget);
+        const abilityWorks = !player.abilityState.deathPoisoned && !player.abilityState.deathDrunk;
+        if (target && target.isAlive && target.role) {
+          const isGood = target.role.team === 'GOOD';
+          if (isGood && abilityWorks) {
+            const moonResult = this.engine.deathManager.killPlayer(target.id, 'MOONCHILD', gs.nightCount, -1);
+            if (!(moonResult && moonResult.prevented)) {
+              this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（月之子）诅咒杀死了 ${target.seat+1}号 ${target.name}`, {
+                playerId: player.id, targetId: target.id, moonchildId: player.id, cause: 'MOONCHILD'
+              });
+            }
+          } else if (!isGood && abilityWorks) {
+            // 目标邪恶，无事发生（也记录日志）
+            this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（月之子）选择的目标 ${target.seat+1}号 ${target.name} 是邪恶阵营【${target.role.name}】，技能未生效`, {
+              playerId: player.id, role: 'moonchild', event: 'resolve_skip_target_evil', targetId: target.id, targetRoleId: target.role.id
+            });
+          } else if (!abilityWorks) {
+            // 月之子中毒/醉酒，技能失效
+            const debuff = [];
+            if (player.abilityState.deathPoisoned) debuff.push('中毒');
+            if (player.abilityState.deathDrunk) debuff.push('醉酒');
+            const debuffText = debuff.join('+');
+            const realConsequence = isGood
+              ? '但因月之子死亡时' + debuffText + '，技能失效，目标本应死亡却存活'
+              : '且目标邪恶，技能本就不生效';
+            const teamText = isGood ? '善良' : '邪恶';
+            const logMsg = `${player.seat+1}号 ${player.name}（月之子）死亡时${debuffText}，目标是${teamText}阵营【${target.role.name}】（${target.seat+1}号 ${target.name}），${realConsequence}`;
+            this.engine.logAction('ABILITY', logMsg, {
+              playerId: player.id, role: 'moonchild', event: 'resolve_skip_disabled', targetId: target.id, targetTeam: target.role.team, disabledByPoison: !!player.abilityState.deathPoisoned, disabledByDrunk: !!player.abilityState.deathDrunk
+            });
+          }
+        } else if (!target || !target.isAlive) {
+          // 目标在白天被选择后到夜晚结算前已死亡
+          this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（月之子）选择的目标已死亡，结算跳过`, {
+            playerId: player.id, role: 'moonchild', event: 'resolve_skip_target_dead', targetId: player.abilityState.selectedTarget
+          });
+        }
+        // 清掉选择，避免重复结算
+        player.abilityState.selectedTarget = null;
+      }
+    }
 
     // 结算信息位技能
     for (const [, player] of this.engine.room.players) {
