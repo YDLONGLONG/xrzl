@@ -285,11 +285,77 @@ body.resizing-active * {
 }
 
 /* 剧本选择卡片 */
+.script-list {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  max-width: 520px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.script-card {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.script-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.script-card-titles {
+  flex: 1;
+  min-width: 0;
+}
+.script-card-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.script-card-desc {
+  padding-left: 50px;
+}
 .script-card:hover {
   transform: translateY(-2px);
 }
 .script-card:hover .script-icon {
   transform: scale(1.1);
+}
+
+/* 窄屏：脚本卡片改为纵向堆叠，避免被挤压竖排 */
+@media (max-width: 520px) {
+  .script-list {
+    flex-direction: column;
+    max-width: 100%;
+    gap: 8px;
+  }
+  .script-card {
+    flex: 1 1 auto;
+    width: 100%;
+    padding: 12px 14px;
+    gap: 6px;
+  }
+  .script-card-head {
+    gap: 8px;
+  }
+  .script-card-desc {
+    padding-left: 0;
+  }
+  .script-card .script-icon {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 1.2em !important;
+  }
+  .script-card-name {
+    font-size: 14px !important;
+  }
 }
 
 /* 确认进度 */
@@ -857,81 +923,97 @@ body.resizing-active * {
 }
 
 @media (max-width: 768px) {
-  /* 整体布局：垂直堆叠 */
+  /* 整体布局：垂直堆叠，中央信息区占据剩余主要空间 */
   .game-container {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     height: 100vh;
     height: 100dvh;
     gap: 6px;
     padding: 6px;
-    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    /* 底部给折叠聊天标签栏（约44px）及安全区留出空间，避免被遮挡 */
+    padding-bottom: calc(50px + env(safe-area-inset-bottom));
   }
 
-  /* 头部 */
+  /* 头部：左右两栏对齐，左=房间号+角色统计(纵向)，右=阶段徽章+按钮(纵向) */
   .game-header {
     grid-column: 1;
     grid-template-columns: 1fr auto;
     grid-template-rows: auto auto;
-    padding: 8px 12px;
-    gap: 6px;
+    align-items: center;
+    padding: 6px 10px;
+    gap: 4px 10px;
     border-radius: 6px;
   }
   .game-header .room-info {
     grid-column: 1;
-    gap: 8px;
-    flex-wrap: wrap;
+    grid-row: 1 / 3;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
   }
   .game-header .header-center {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    gap: 10px;
-    order: 3;
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: start;
+    gap: 6px;
+    margin-left: 0;
   }
   .game-header .header-right {
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2;
+    justify-self: end;
+    align-self: end;
     gap: 4px;
     flex-wrap: wrap;
     justify-content: flex-end;
+    max-width: 60vw;
   }
   .room-code {
-    font-size: 1.3em;
-    letter-spacing: 3px;
+    font-size: 1.05em;
+    letter-spacing: 2px;
+    line-height: 1.1;
   }
   .room-comp {
-    font-size: 0.7em;
+    font-size: 0.62em;
     margin-left: 0;
     flex-wrap: wrap;
-    gap: 3px;
+    gap: 2px;
+    line-height: 1.2;
   }
   .comp-badge {
-    padding: 1px 6px;
-    font-size: 0.65em;
+    padding: 1px 5px;
+    font-size: 0.58em;
   }
   .comp-players {
-    font-size: 0.75em;
+    font-size: 0.68em;
   }
   .day-count {
-    font-size: 1em;
-  }
-  .game-header .phase-badge {
-    padding: 3px 10px;
     font-size: 0.85em;
   }
+  .game-header .phase-badge {
+    padding: 2px 8px;
+    font-size: 0.78em;
+    white-space: nowrap;
+  }
   .game-header .btn {
-    padding: 5px 8px;
-    font-size: 12px;
+    padding: 3px 7px;
+    font-size: 11px;
+    min-height: 0;
+    line-height: 1.2;
   }
 
-  /* 座位区：水平滚动条 */
+  /* 座位区：水平滚动条，紧凑高度 */
   .seats-area {
     flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 8px;
-    gap: 8px;
-    max-height: 90px;
+    padding: 5px 8px;
+    gap: 6px;
+    max-height: 64px;
     flex: 0 0 auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -941,32 +1023,36 @@ body.resizing-active * {
   }
   .game-seat {
     flex: 0 0 auto;
-    min-width: 80px;
-    padding: 8px 10px;
+    min-width: 64px;
+    padding: 4px 8px;
     -webkit-tap-highlight-color: transparent;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
+    gap: 1px;
   }
   .game-seat .seat-name {
-    font-size: 12px;
+    font-size: 11px;
     margin: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 70px;
-    line-height: 1.2;
+    max-width: 60px;
+    line-height: 1.15;
   }
   .game-seat .seat-num {
-    font-size: 10px;
+    /* 重置全局 .seat-num 的绝对定位，让座位号作为 flex 第一行正常排列 */
+    position: static;
+    font-size: 9px;
     line-height: 1;
+    opacity: 0.7;
+    margin-bottom: 1px;
   }
   .game-seat .seat-mark {
-    font-size: 9px;
+    font-size: 8px;
     display: block;
-    line-height: 1.2;
+    line-height: 1.15;
   }
 
   /* 移动端隐藏拖拽分隔条 */
@@ -976,19 +1062,33 @@ body.resizing-active * {
 
   /* 中央区域 */
   .center-area {
-    padding: 12px;
+    grid-row: 3;
+    grid-column: 1;
+    padding: 8px;
     border-radius: 6px;
     min-height: 0;
     overflow: hidden;
-    padding-bottom: 70px; /* 为聊天按钮留出空间 */
+    display: flex;
+    flex-direction: column;
+  }
+  .center-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 2px;
   }
   .center-bottom {
-    margin-top: 10px;
+    margin-top: 6px;
+    flex: 0 0 auto;
   }
   .center-message {
-    font-size: 1em;
-    padding: 12px;
-    margin-bottom: 12px;
+    font-size: 0.95em;
+    padding: 10px;
+    margin-bottom: 10px;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    line-height: 1.5;
   }
 
   /* 聊天区：可折叠 — 不透明背景 */
@@ -1103,47 +1203,53 @@ body.resizing-active * {
     align-items: center;
   }
 
-  /* 身份卡 */
+  /* 身份卡 — 移动端紧凑：底部让位交给容器统一处理，去重占位 */
   .role-card {
     grid-column: 1;
-    padding: 10px 12px;
-    gap: 10px;
+    grid-row: 4;
+    padding: 5px 10px;
+    gap: 4px;
     flex-wrap: wrap;
+    align-items: center;
     border-radius: 6px;
     position: relative;
     z-index: 5;
     margin-bottom: 0;
-    /* 底部留出空间，不被折叠聊天栏（44px）遮挡 */
-    padding-bottom: calc(50px + env(safe-area-inset-bottom));
+    /* 遮挡由容器 padding-bottom 统一处理，这里只留安全区 */
+    padding-bottom: env(safe-area-inset-bottom);
   }
   .role-icon {
-    width: 40px;
-    height: 40px;
-    font-size: 18px;
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
     flex-shrink: 0;
   }
   .role-info {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
   .role-name {
-    font-size: 1em;
+    font-size: 0.9em;
+    line-height: 1.1;
   }
   .role-desc {
-    font-size: 0.75em;
-    line-height: 1.4;
+    font-size: 0.68em;
+    line-height: 1.3;
   }
   .evil-teammates {
-    font-size: 0.75em;
-    line-height: 1.4;
+    font-size: 0.68em;
+    line-height: 1.3;
   }
   .role-card .btn {
-    padding: 8px 12px;
+    padding: 4px 8px;
     font-size: 11px;
-    min-height: 36px;
+    min-height: 30px;
     margin-left: 0;
     width: 100%;
-    margin-top: 6px;
+    margin-top: 3px;
   }
   .role-card > div:last-child {
     margin-left: 0 !important;
@@ -1229,20 +1335,34 @@ body.resizing-active * {
     flex-wrap: wrap;
   }
 
-  /* 确认按钮 */
+  /* 确认按钮 — 移动端紧凑：去掉外边距/内边距，缩高 */
   .confirm-bar .btn {
     width: 100%;
-    padding: 12px;
-    font-size: 14px;
-    min-height: 48px;
+    padding: 6px 10px;
+    font-size: 13px;
+    min-height: 32px;
+    margin-top: 6px !important;
   }
   .confirm-bar {
-    margin-top: 12px;
-    padding: 12px;
+    margin-top: 6px;
+    padding: 6px 8px;
+  }
+  .confirm-bar #confirmText {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .confirm-progress {
+    height: 4px;
+    margin-top: 4px;
+  }
+  .confirm-players {
+    margin-top: 4px;
+    padding: 4px 6px;
+    gap: 3px;
   }
   .confirm-player-chip {
     font-size: 10px;
-    padding: 2px 6px;
+    padding: 1px 5px;
   }
 
   /* 首页 */
@@ -1356,25 +1476,32 @@ body.resizing-active * {
     padding: 12px 30px;
   }
 
-  /* 行动面板 */
+  /* 行动面板 — 紧凑 */
   .action-panel {
-    padding: 10px;
+    padding: 6px 8px;
+    margin-top: 0;
   }
   .action-buttons {
-    gap: 8px;
+    gap: 6px;
+    margin-top: 6px;
   }
   .action-buttons .btn {
     flex: 1;
-    min-height: 44px;
-    font-size: 13px;
-    padding: 8px;
+    min-height: 36px;
+    font-size: 12px;
+    padding: 6px;
   }
   .target-chip {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 4px 8px;
+    font-size: 11px;
   }
   .action-title {
-    font-size: 14px;
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .selected-targets {
+    margin-top: 4px;
+    gap: 4px;
   }
 
   /* Toast错误 */

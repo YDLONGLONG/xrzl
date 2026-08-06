@@ -582,7 +582,7 @@ io.on('connection', (socket) => {
     if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始' }); return; }
     if (room.players.size >= 15) { socket.emit('room:error', { message: '房间已满' }); return; }
 
-    const botNames = ['小明', '小红', '小刚', '小丽', '阿强', '阿珍', '小王', '小李', '小张', '小陈', '小刘', '小赵', '小周', '小吴'];
+    const botNames = ['豆包', '通义千问', '文心一言', '混元', 'MiMo', 'DeepSeek', 'GLM', 'Kimi', 'MiniMax', '科大讯飞', 'GPT', 'Claude', 'Gemini', 'Grok'];
     const usedNames = new Set(Array.from(room.players.values()).map(p => p.name));
     const available = botNames.filter(n => !usedNames.has(n));
     if (available.length === 0) { socket.emit('room:error', { message: '机器人名字用完了' }); return; }

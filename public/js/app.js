@@ -920,23 +920,23 @@ function renderCenter(state) {
         ? `0 4px 24px ${info.color}33, inset 0 1px 0 rgba(255,255,255,0.08)`
         : '0 2px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)';
       const textColor = isActive ? info.color : '#e8e8e8';
-      return `<div ${onClickAttr} class="script-card" style="flex:1; min-width:0; padding:16px 18px; border-radius:14px; border:1px solid ${borderColor}; background:${bgGrad}; box-shadow:${shadow}; ${cursor} transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display:flex; flex-direction:column; gap:8px; position:relative; overflow:hidden;">
-        <div style="position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, ${info.color}66, transparent); opacity:${isActive ? '1' : '0.3'};"></div>
-        <div style="display:flex; align-items:center; gap:10px;">
+      return `<div ${onClickAttr} class="script-card" style="border:1px solid ${borderColor}; background:${bgGrad}; box-shadow:${shadow}; ${cursor} transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
+        <div class="script-card-highlight" style="position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, ${info.color}66, transparent); opacity:${isActive ? '1' : '0.3'};"></div>
+        <div class="script-card-head">
           <div class="script-icon" style="width:40px; height:40px; border-radius:10px; background:${isActive ? info.color + '22' : 'rgba(255,255,255,0.06)'}; display:flex; align-items:center; justify-content:center; font-size:1.5em; flex-shrink:0; transition:all 0.3s;">${info.icon}</div>
-          <div style="flex:1; min-width:0;">
-            <div style="font-weight:700; color:${textColor}; font-size:15px; letter-spacing:0.3px;">${s.name}</div>
-            <div style="font-size:11px; color:#999; font-weight:400; letter-spacing:0.5px; margin-top:2px;">${info.nameEn}</div>
+          <div class="script-card-titles">
+            <div class="script-card-name" style="font-weight:700; color:${textColor}; font-size:15px; letter-spacing:0.3px;">${s.name}</div>
+            <div class="script-card-en" style="font-size:11px; color:#999; font-weight:400; letter-spacing:0.5px; margin-top:2px;">${info.nameEn}</div>
           </div>
-          ${isActive ? `<div style="width:22px; height:22px; border-radius:50%; background:${info.color}; display:flex; align-items:center; justify-content:center; font-size:12px; color:#1a1a2e; font-weight:bold; box-shadow:0 0 10px ${info.color}88;">✓</div>` : ''}
+          ${isActive ? `<div class="script-card-check" style="width:22px; height:22px; border-radius:50%; background:${info.color}; display:flex; align-items:center; justify-content:center; font-size:12px; color:#1a1a2e; font-weight:bold; box-shadow:0 0 10px ${info.color}88;">✓</div>` : ''}
         </div>
-        <div style="font-size:12px; color:${isActive ? '#bbb' : '#777'}; line-height:1.5; padding-left:50px; transition:color 0.3s;">${info.desc}</div>
+        <div class="script-card-desc" style="font-size:12px; color:${isActive ? '#bbb' : '#777'}; line-height:1.5; transition:color 0.3s;">${info.desc}</div>
       </div>`;
     }).join('');
 
-    html = `<div style="text-align:center;">
+    html = `<div class="lobby-content" style="text-align:center;">
       <h2 style="color:#d4af37; margin-bottom:14px;">游戏大厅</h2>
-      <div style="display:flex; gap:10px; margin-bottom:14px; max-width:520px; margin-left:auto; margin-right:auto;">${scriptCardsHtml}</div>
+      <div class="script-list">${scriptCardsHtml}</div>
       <p>入座玩家: ${seatedCount}/15（至少需要5人）</p>
       <p style="margin-top:10px; color:#aaa;">点击左侧空座位入座，准备后房主开始游戏</p>
     </div>`;
