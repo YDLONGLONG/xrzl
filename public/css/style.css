@@ -149,22 +149,82 @@ body {
   transform: translateY(-2px);
   box-shadow: 0 5px 20px rgba(155, 89, 182, 0.4);
 }
-.toast-error {
+/* 消息提示 Toast（深色玻璃风，适配移动端） */
+#app-toast-container {
   position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #e74c3c;
-  color: white;
-  padding: 12px 24px;
-  border-radius: 6px;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   z-index: 9999;
-  animation: slideDown 0.3s ease;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  pointer-events: none;
 }
-@keyframes slideDown {
-  from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
-  to { transform: translateX(-50%) translateY(0); opacity: 1; }
+.app-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 480px);
+  padding: 11px 18px;
+  background: rgba(22, 26, 38, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #eef0f4;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: toastIn 0.25s ease;
+}
+.app-toast-out {
+  animation: toastOut 0.25s ease forwards;
+}
+.app-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+  background: rgba(91, 141, 239, 0.18);
+  color: #6ea8ff;
+}
+.app-toast-success .app-toast-icon {
+  background: rgba(46, 204, 113, 0.16);
+  color: #4cd98a;
+}
+.app-toast-error .app-toast-icon {
+  background: rgba(230, 126, 34, 0.16);
+  color: #f0954f;
+}
+.app-toast-text {
+  flex: 1;
+  min-width: 0;
+}
+@keyframes toastIn {
+  from { opacity: 0; translate: 0 -10px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes toastOut {
+  from { opacity: 1; translate: 0 0; }
+  to { opacity: 0; translate: 0 -10px; }
+}
+@media (max-width: 520px) {
+  #app-toast-container { padding: 0 12px; }
+  .app-toast {
+    width: 100%;
+    max-width: none;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
 }
 .btn-sm {
   width: auto;

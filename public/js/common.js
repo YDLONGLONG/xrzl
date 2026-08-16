@@ -8,11 +8,11 @@ function showError(msg, elementId) {
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 3000);
   } else {
-    showToast(msg);
+    showToast(msg, 'error');
   }
 }
 
-function showToast(msg) {
+function showToast(msg, type = 'info') {
   if (!window._toastQueue) {
     window._toastQueue = [];
     window._toastActive = false;
@@ -20,17 +20,17 @@ function showToast(msg) {
 
   // 消息去重：相同的消息不再重复添加
   const last = window._toastQueue[window._toastQueue.length - 1];
-  if (last && last === msg) return;
+  if (last && last.msg === msg) return;
 
-  window._toastQueue.push(msg);
+  window._toastQueue.push({ msg, type });
   processToastQueue();
 }
 
 function processToastQueue() {
   if (!window._toastQueue || window._toastQueue.length === 0 || window._toastActive) return;
   window._toastActive = true;
-  const msg = window._toastQueue.shift();
-  createToast(msg);
+  const item = window._toastQueue.shift();
+  createToast(item.msg, item.type);
 
   // 依次显示后续队列
   const interval = setInterval(() => {
@@ -40,35 +40,43 @@ function processToastQueue() {
       return;
     }
     const next = window._toastQueue.shift();
-    createToast(next);
+    createToast(next.msg, next.type);
   }, 600);
 }
 
-function createToast(msg) {
+function createToast(msg, type = 'info') {
+  const container = getToastContainer();
+
   const toast = document.createElement('div');
-  toast.className = 'toast-error';
-  toast.textContent = msg;
+  toast.className = `app-toast app-toast-${type}`;
 
-  // 计算垂直偏移：根据已有的toast数量
-  const existing = document.querySelectorAll('.toast-error');
-  const index = existing.length;
-  const vOffset = 10 + index * 60;
+  const icon = document.createElement('span');
+  icon.className = 'app-toast-icon';
+  icon.textContent = type === 'success' ? '✓' : type === 'error' ? '!' : 'i';
 
-  toast.style.top = vOffset + 'px';
-  toast.style.position = 'fixed';
-  toast.style.zIndex = 300;
+  const text = document.createElement('span');
+  text.className = 'app-toast-text';
+  text.textContent = msg;
 
-  document.body.appendChild(toast);
+  toast.appendChild(icon);
+  toast.appendChild(text);
+  container.appendChild(toast);
 
-  // 消失后移除并重排
+  // 淡出后移除（flex容器自动重排）
   setTimeout(() => {
-    toast.remove();
-    // 重排剩余toast的位置
-    const remaining = document.querySelectorAll('.toast-error');
-    remaining.forEach((t, i) => {
-      t.style.top = (10 + i * 60) + 'px';
-    });
-  }, 3000);
+    toast.classList.add('app-toast-out');
+    setTimeout(() => toast.remove(), 250);
+  }, 2600);
+}
+
+function getToastContainer() {
+  let container = document.getElementById('app-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'app-toast-container';
+    document.body.appendChild(container);
+  }
+  return container;
 }
 
 function getQueryParam(name) {

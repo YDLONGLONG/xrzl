@@ -556,7 +556,7 @@ const VoiceManager = {
   // Toast提示
   showToast(msg, type = 'info') {
     if (typeof showToast === 'function') {
-      showToast(msg);
+      showToast(msg, type);
     } else {
       console.log('[Voice]', msg);
     }

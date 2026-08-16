@@ -187,7 +187,7 @@ function initSocketEvents() {
     clearReconnectInfo();
     saveSession();
     showGameView();
-    showToast('重新连接成功！');
+    showToast('重新连接成功！', 'success');
     // 关闭可能打开的断线遮罩
     const overlay = $('disconnectOverlay');
     if (overlay) overlay.style.display = 'none';
@@ -200,7 +200,7 @@ function initSocketEvents() {
 
   socket.on('room:playerReconnected', ({ name }) => {
     if (hasLeftRoom) return;
-    showToast(`玩家 ${name} 已重新连接`);
+    showToast(`玩家 ${name} 已重新连接`, 'success');
   });
 
   socket.on('room:stateUpdate', (state) => {
@@ -804,7 +804,7 @@ function updateHeader(state) {
     const roomId = state.roomId || myRoomId;
     if (roomId) {
       copyToClipboard(roomId);
-      showToast('房间号已复制');
+      showToast('房间号已复制', 'success');
     }
   };
 
