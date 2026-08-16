@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -5,12 +6,18 @@ const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
 const { SCRIPTS } = require('./src/config/game-config');
+const qqAuthRouter = require('./src/config/qq-auth');
+const wechatAuthRouter = require('./src/config/wechat-auth');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
+
+// 第三方登录路由（需在静态文件之前注册）
+app.use('/api/qq', qqAuthRouter);
+app.use('/api/wechat', wechatAuthRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
@@ -373,6 +380,9 @@ function handleDisconnect(socket) {
 
   if (!player || player.isBot) return;
 
+  // 清理语音频道
+  removeUserFromVoiceChannel(roomId, socket.id);
+
   player.isConnected = false;
   player.disconnectedAt = Date.now();
 
@@ -420,6 +430,40 @@ function handleDisconnect(socket) {
   }
 
   socket.leave(roomId);
+}
+
+// ========== 房间语音（WebRTC信令） ==========
+const voiceChannels = new Map(); // roomId -> Set<socketId>
+
+function getVoiceChannel(roomId) {
+  if (!voiceChannels.has(roomId)) {
+    voiceChannels.set(roomId, new Set());
+  }
+  return voiceChannels.get(roomId);
+}
+
+function broadcastVoiceUsers(roomId) {
+  const channel = voiceChannels.get(roomId);
+  if (!channel) return;
+  const room = rooms.get(roomId);
+  const users = [];
+  for (const sid of channel) {
+    const player = room && room.players.get(sid);
+    if (player) {
+      users.push({ id: sid, name: player.name, seat: player.seat });
+    }
+  }
+  io.to(roomId).emit('voice:users', { users });
+}
+
+function removeUserFromVoiceChannel(roomId, socketId) {
+  const channel = voiceChannels.get(roomId);
+  if (!channel || !channel.has(socketId)) return;
+  channel.delete(socketId);
+  for (const sid of channel) {
+    io.to(sid).emit('voice:userLeft', { userId: socketId });
+  }
+  broadcastVoiceUsers(roomId);
 }
 
 // ========== Socket.IO 事件处理 ==========
@@ -662,6 +706,9 @@ io.on('connection', (socket) => {
     const player = room.players.get(socket.id);
     if (!player || player.isBot) return;
 
+    // 清理语音频道
+    removeUserFromVoiceChannel(roomId, socket.id);
+
     if (player.isConnected === false) {
       // 已经是断线状态（可能正在等待重连超时），直接彻底移除
       removePlayerFromRoom(roomId, socket.id);
@@ -713,6 +760,65 @@ io.on('connection', (socket) => {
       removePlayerFromRoom(roomId, socket.id);
       socket.leave(roomId);
     }
+  });
+
+  // ========== 房间语音（WebRTC信令） ==========
+  // 加入语音频道
+  socket.on('voice:join', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId, room } = result;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    const channel = getVoiceChannel(roomId);
+    if (channel.has(socket.id)) return; // 已在频道中
+
+    // 通知频道内已有用户：有新用户加入
+    for (const sid of channel) {
+      io.to(sid).emit('voice:userJoined', { userId: socket.id, name: player.name });
+    }
+
+    channel.add(socket.id);
+    broadcastVoiceUsers(roomId);
+  });
+
+  // 离开语音频道
+  socket.on('voice:leave', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId } = result;
+    const channel = voiceChannels.get(roomId);
+    if (!channel || !channel.has(socket.id)) return;
+
+    channel.delete(socket.id);
+    // 通知其他用户
+    for (const sid of channel) {
+      io.to(sid).emit('voice:userLeft', { userId: socket.id });
+    }
+    broadcastVoiceUsers(roomId);
+  });
+
+  // WebRTC信令转发（offer/answer/candidate）
+  socket.on('voice:signal', ({ targetId, type, data }) => {
+    // 转发给目标用户
+    io.to(targetId).emit('voice:signal', { fromId: socket.id, type, data });
+  });
+
+  // 静音状态广播
+  socket.on('voice:mute', ({ muted }) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId } = result;
+    io.to(roomId).emit('voice:muteState', { userId: socket.id, muted });
+  });
+
+  // 说话状态广播（语音活动检测）
+  socket.on('voice:speaking', ({ speaking }) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId } = result;
+    io.to(roomId).emit('voice:speakingState', { userId: socket.id, speaking });
   });
 
   socket.on('disconnect', () => handleDisconnect(socket));

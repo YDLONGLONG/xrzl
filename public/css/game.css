@@ -1553,6 +1553,238 @@ body.resizing-active * {
   }
 }
 
+/* ========== 语音功能样式 ========== */
+.voice-btn {
+  background: rgba(46, 204, 113, 0.25) !important;
+  border: 1px solid rgba(46, 204, 113, 0.5) !important;
+  color: #2ecc71 !important;
+}
+.voice-btn:hover {
+  background: rgba(46, 204, 113, 0.4) !important;
+}
+
+/* 语音控制按钮（麦克风/扬声器） */
+.voice-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.voice-control-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.voice-control-btn.active {
+  background: rgba(231, 76, 60, 0.4);
+  border-color: rgba(231, 76, 60, 0.6);
+  color: #e74c3c;
+}
+
+/* 语音用户面板（嵌入聊天区） */
+.voice-panel {
+  flex: 1;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+.voice-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #2ecc71;
+  font-weight: bold;
+}
+.voice-panel-title {
+  flex: 1;
+}
+.voice-panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.voice-panel-controls .voice-control-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+}
+.voice-leave-btn {
+  background: rgba(231, 76, 60, 0.3);
+  border: 1px solid rgba(231, 76, 60, 0.5);
+  color: #e74c3c;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.voice-leave-btn:hover {
+  background: rgba(231, 76, 60, 0.5);
+}
+.voice-join-btn {
+  background: rgba(46, 204, 113, 0.3);
+  border: 1px solid rgba(46, 204, 113, 0.5);
+  color: #2ecc71;
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.voice-join-btn:hover {
+  background: rgba(46, 204, 113, 0.5);
+}
+.voice-collapse-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ccc;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.voice-panel-body {
+  transition: all 0.2s;
+}
+
+/* 语音用户列表 */
+.voice-user-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.voice-user {
+  padding: 6px 8px;
+  margin: 4px 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.voice-user-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.voice-user-icon {
+  font-size: 14px;
+}
+.voice-user-name {
+  flex: 1;
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-mute-icon {
+  font-size: 12px;
+}
+
+/* 音量控制行 */
+.voice-vol-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.voice-vol-label {
+  font-size: 11px;
+}
+.voice-vol-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.voice-vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #2ecc71;
+  cursor: pointer;
+}
+.voice-vol-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #2ecc71;
+  border: none;
+  cursor: pointer;
+}
+.voice-vol-val {
+  font-size: 10px;
+  color: #999;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* 说话状态 - 绿色边框+发光 */
+.voice-user.voice-speaking {
+  background: rgba(46, 204, 113, 0.2);
+  border: 1px solid rgba(46, 204, 113, 0.5);
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.3);
+}
+.voice-user.voice-speaking .voice-user-name {
+  color: #2ecc71;
+}
+
+/* 静音状态 - 灰色 */
+.voice-user.voice-muted {
+  opacity: 0.5;
+}
+.voice-user.voice-muted .voice-user-icon {
+  filter: grayscale(1);
+}
+
+/* 自己 */
+.voice-user.voice-self .voice-user-name {
+  color: #d4af37;
+  font-weight: bold;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .voice-user-name {
+    font-size: 11px;
+  }
+}
+
+/* 麦克风测试按钮（图标按钮，与静音/扬声器同样式） */
+.voice-control-btn.testing {
+  background: rgba(231, 76, 60, 0.4);
+  border-color: rgba(231, 76, 60, 0.6);
+  color: #e74c3c;
+  animation: voice-test-pulse 1s ease-in-out infinite;
+}
+@keyframes voice-test-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* 横屏手机优化 */
 @media (max-height: 500px) and (orientation: landscape) {
   .game-container {

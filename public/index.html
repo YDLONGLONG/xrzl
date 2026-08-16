@@ -55,6 +55,24 @@
       </div>
     </div>
 
+    <!-- 第三方登录入口 -->
+    <div class="third-login-section">
+      <div class="third-login-divider">
+        <span>或使用第三方账号</span>
+      </div>
+      <div class="third-login-buttons">
+        <button class="btn third-login-btn qq-login-btn" onclick="qqLogin()">
+          <span class="third-login-icon qq-icon">QQ</span>
+          <span>QQ扫码登录</span>
+        </button>
+        <button class="btn third-login-btn wx-login-btn" onclick="wxLogin()">
+          <span class="third-login-icon wx-icon">微信</span>
+          <span>微信扫码登录</span>
+        </button>
+      </div>
+      <div class="third-login-tip" id="thirdLoginTip"></div>
+    </div>
+
     <div style="margin-top: 40px; color: #666; font-size: 14px; text-align: center; max-width: 600px; line-height: 1.8;">
       <p>游戏说明：5-15人游玩，系统担任说书人控制流程。全员确认进入下一阶段，无倒计时。</p>
       <p>善良阵营：处决恶魔即可获胜；邪恶阵营：仅剩2人且恶魔存活则获胜。</p>
@@ -131,6 +149,7 @@
         <div class="chat-tab active" data-channel="public" onclick="switchChatChannel('public')">公聊</div>
         <div class="chat-tab" data-channel="dead" id="deadChatTab" onclick="switchChatChannel('dead')" style="display:none;">死者</div>
         <div class="chat-tab" data-channel="whisper" onclick="switchChatChannel('whisper')">私聊</div>
+        <div class="chat-tab" data-channel="voice" onclick="switchChatChannel('voice')">语音</div>
       </div>
       <div class="chat-messages" id="chatMessages"></div>
       <!-- 私聊对象选择面板 -->
@@ -143,7 +162,23 @@
         <span class="whisper-current-name" id="whisperCurrentName"></span>
         <span class="whisper-change" onclick="showWhisperPanel()">切换</span>
       </div>
-      <div class="chat-input-area">
+      <!-- 语音频道面板 -->
+      <div id="voicePanel" class="voice-panel" style="display:none;">
+        <div class="voice-panel-header" id="voicePanelHeader">
+          <span class="voice-panel-title" id="voicePanelTitle">🔊 语音频道</span>
+          <div class="voice-panel-controls">
+            <button class="voice-control-btn" id="voiceMuteBtn" style="display:none;" onclick="VoiceManager.toggleMute()" title="静音麦克风">🎤</button>
+            <button class="voice-control-btn" id="voiceSpeakerBtn" style="display:none;" onclick="VoiceManager.toggleSpeaker()" title="扬声器">🔊</button>
+            <button class="voice-control-btn" id="voiceTestBtn" style="display:none;" onclick="VoiceManager.testMic()" title="测试麦克风">🧪</button>
+            <button class="voice-leave-btn" id="voiceLeaveBtn" style="display:none;" onclick="VoiceManager.leave()">退出</button>
+            <button class="voice-join-btn" id="voiceJoinBtn" onclick="VoiceManager.join()">🎙 加入</button>
+          </div>
+        </div>
+        <div class="voice-panel-body" id="voicePanelBody">
+          <div class="voice-user-list" id="voiceUserList"></div>
+        </div>
+      </div>
+      <div class="chat-input-area" id="chatInputArea">
         <button class="btn btn-sm ai-trigger-btn" onclick="insertAiTrigger()" title="@小染 AI助手">🤖</button>
         <input type="text" id="chatInput" placeholder="输入消息... @小染 可问AI" maxlength="500" onkeydown="if(event.key==='Enter')sendChat()">
         <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
@@ -170,7 +205,6 @@
         <button class="btn btn-sm btn-info" id="moonchildBtn" style="display:none;" onclick="useMoonchildAbility()">月之子：选择目标</button>
       </div>
     </div>
-  </div>
 
   <!-- 上帝视角面板 -->
   <div id="godPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
@@ -358,6 +392,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/common.js"></script>
+  <script src="/js/voice.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

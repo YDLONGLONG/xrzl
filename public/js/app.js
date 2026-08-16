@@ -24,6 +24,8 @@ let _nightDebugTimer = null;
 window.addEventListener('DOMContentLoaded', () => {
   socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: 30 });
   initSocketEvents();
+  // 初始化语音模块
+  VoiceManager.init(socket);
   checkReconnectInfo();
   
   // 回车提交
@@ -566,6 +568,11 @@ function backToHome() {
   if (hasLeftRoom) return;
   hasLeftRoom = true;
 
+  // 离开语音频道
+  if (VoiceManager.isJoined) {
+    VoiceManager.leave();
+  }
+
   const wasInGame = currentState && currentState.gameStarted && currentState.phase !== 'GAME_OVER';
   const savedRoomId = myRoomId;
   const savedName = myName;
@@ -880,11 +887,8 @@ function renderSeats(state) {
         <div style="color:#666; font-size:12px;">空座位</div>
         <div style="color:#d4af37; font-size:11px;">点击入座</div>
       </div>`;
-    } else {
-      html += `<div class="game-seat" style="opacity:0.3;">
-        <div class="seat-num">${i+1}</div>
-      </div>`;
     }
+    // 游戏开始后空座位不显示
   }
   container.innerHTML = html;
 }
@@ -1948,8 +1952,16 @@ function switchChatChannel(channel) {
   const whisperPanel = $('whisperPanel');
   const whisperCurrent = $('whisperCurrent');
   const chatInput = $('chatInput');
+  const chatMessages = $('chatMessages');
+  const voicePanel = $('voicePanel');
+  const chatInputArea = $('chatInputArea');
 
   if (channel === 'whisper') {
+    // 显示聊天消息和输入区
+    if (chatMessages) chatMessages.style.display = '';
+    if (chatInputArea) chatInputArea.style.display = '';
+    if (voicePanel) voicePanel.style.display = 'none';
+
     if (whisperTargetId) {
       // 已有私聊对象，清除该对象未读
       clearUnreadForWhisper(whisperTargetId);
@@ -1972,7 +1984,19 @@ function switchChatChannel(channel) {
       whisperCurrent.style.display = 'none';
       chatInput.placeholder = '请先选择私聊对象...';
     }
+  } else if (channel === 'voice') {
+    // 语音频道：显示语音面板，隐藏聊天消息和输入区
+    if (chatMessages) chatMessages.style.display = 'none';
+    if (chatInputArea) chatInputArea.style.display = 'none';
+    whisperPanel.style.display = 'none';
+    whisperCurrent.style.display = 'none';
+    if (voicePanel) voicePanel.style.display = 'flex';
+    if (typeof VoiceManager !== 'undefined') VoiceManager.updateVoiceUI();
   } else {
+    // 其他频道：显示聊天消息和输入区，隐藏语音面板
+    if (chatMessages) chatMessages.style.display = '';
+    if (chatInputArea) chatInputArea.style.display = '';
+    if (voicePanel) voicePanel.style.display = 'none';
     whisperPanel.style.display = 'none';
     whisperCurrent.style.display = 'none';
     chatInput.placeholder = '输入消息...';
@@ -3800,4 +3824,92 @@ async function viewHistoryDetail(historyId) {
     container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
   }
 }
+
+// ========== 第三方扫码登录（QQ / 微信）==========
+function qqLogin() {
+  // 跳转到QQ授权页面
+  window.location.href = '/api/qq/login';
+}
+
+function wxLogin() {
+  // 跳转到微信授权页面
+  window.location.href = '/api/wechat/login';
+}
+
+// 显示第三方登录提示
+function showThirdLoginTip(text, color) {
+  const tipEl = $('thirdLoginTip');
+  if (tipEl) {
+    tipEl.textContent = text;
+    tipEl.style.color = color || '#e74c3c';
+  }
+}
+
+// 用 token 换取第三方用户信息
+function fetchThirdLoginUserinfo(type, token) {
+  fetch(`/api/${type}/userinfo?token=${token}`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.success) {
+        // 自动填入昵称
+        const createNameEl = $('createName');
+        const joinNameEl = $('joinName');
+        const nickname = (data.nickname || '玩家').substring(0, 20);
+        if (createNameEl) createNameEl.value = nickname;
+        if (joinNameEl) joinNameEl.value = nickname;
+
+        // 显示成功提示
+        showThirdLoginTip(`已登录：${data.nickname}`, '#2ecc71');
+
+        // 保存头像/昵称信息
+        if (data.avatar) {
+          sessionStorage.setItem(`${type}_avatar`, data.avatar);
+          sessionStorage.setItem(`${type}_nickname`, data.nickname);
+        }
+      } else {
+        showThirdLoginTip(`${type === 'qq' ? 'QQ' : '微信'}登录失败：` + (data.message || '未知错误'));
+      }
+    })
+    .catch(err => {
+      console.error('第三方登录验证失败:', err);
+    });
+}
+
+// 页面加载时检测第三方登录回调
+function checkThirdLoginCallback() {
+  const params = new URLSearchParams(window.location.search);
+
+  // QQ 登录回调
+  const qqToken = params.get('qq_token');
+  const qqError = params.get('qq_error');
+  // 微信 登录回调
+  const wxToken = params.get('wx_token');
+  const wxError = params.get('wx_error');
+
+  if (qqError) {
+    showThirdLoginTip('QQ登录失败：' + qqError);
+    window.history.replaceState({}, document.title, '/');
+    return;
+  }
+
+  if (wxError) {
+    showThirdLoginTip('微信登录失败：' + wxError);
+    window.history.replaceState({}, document.title, '/');
+    return;
+  }
+
+  if (qqToken) {
+    fetchThirdLoginUserinfo('qq', qqToken);
+    window.history.replaceState({}, document.title, '/');
+    return;
+  }
+
+  if (wxToken) {
+    fetchThirdLoginUserinfo('wechat', wxToken);
+    window.history.replaceState({}, document.title, '/');
+  }
+}
+
+// DOM加载完成后检测第三方登录回调
+window.addEventListener('DOMContentLoaded', checkThirdLoginCallback);
 
