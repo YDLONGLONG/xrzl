@@ -210,7 +210,11 @@ class Drunk extends Role {
           }, true, { realInfo: '酒鬼无技能' });
         }
       } else if (fake.id === 'undertaker' && !isFirstNight) {
-        const executed = (gameState.todaysDeaths || []).find(d => d.cause === 'EXECUTION');
+        // 与真掘墓人一致：入夜后处决记录在 lastDayDeaths 中
+        const dayDeaths = (gameState.lastDayDeaths && gameState.lastDayDeaths.length)
+          ? gameState.lastDayDeaths
+          : (gameState.todaysDeaths || []);
+        const executed = dayDeaths.find(d => d.cause === 'EXECUTION');
         if (executed) {
           const allRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','僧侣','守鸦人','圣女','杀手','士兵','市长','掘墓人','圣徒','管家','酒鬼','隐士','下毒者','红唇女郎','男爵','间谍','小恶魔'];
           const fakeRole = allRoles[Math.floor(Math.random()*allRoles.length)];

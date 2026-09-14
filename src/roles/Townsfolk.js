@@ -567,22 +567,28 @@ class Mayor extends Role {
         const others = getAlivePlayers(engine.room).filter(p => p.id !== player.id);
         if (others.length > 0) {
           const sacrifice = randomChoice(others);
-          player.isAlive = true;
-          player.isDead = false;
-          player.deathNight = -1;
+          // 先让替死者尝试死亡；只有他确实死亡，市长才得以存活
           const result = engine.deathManager.killPlayer(sacrifice.id, 'MAYOR_SAVE', gameState.nightCount, gameState.dayCount);
           if (result && !result.prevented) {
+            player.isAlive = true;
+            player.isDead = false;
+            player.deathNight = -1;
+            player.deathDay = -1;
+            player.voteToken = 0;
             engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的死亡被 ${sacrifice.seat+1}号 ${sacrifice.name} 代替`, {
               playerId: player.id, sacrificeId: sacrifice.id, probInfo
             });
+            return { revived: true, sacrifice: sacrifice.id };
           }
-          return { revived: true, sacrifice: sacrifice.id };
+          engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的替死者 ${sacrifice.seat+1}号 ${sacrifice.name} 未能死亡，市长正常死亡`, {
+            playerId: player.id, sacrificeId: sacrifice.id, probInfo
+          });
+          return {};
         }
-      } else {
-        engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）替死失败，正常死亡`, {
-          playerId: player.id, probInfo
-        });
       }
+      engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）替死失败，正常死亡`, {
+        playerId: player.id, probInfo
+      });
     }
     return {};
   }
@@ -604,9 +610,14 @@ class Undertaker extends Role {
   resolveNight(gameState, player, engine) {
     // 第一夜没有处决，不给信息
     if (gameState.nightCount === 0) return;
-    
-    // 找到今天被处决的玩家
-    const executedEntry = (gameState.todaysDeaths || []).find(d => d.cause === 'EXECUTION');
+
+    // 找到今天被处决的玩家。
+    // 注意：入夜时 beginNight 会把当天的死亡记录迁移到 lastDayDeaths 并清空 todaysDeaths，
+    // 所以这里必须优先读 lastDayDeaths，否则永远拿不到处决信息。
+    const dayDeaths = (gameState.lastDayDeaths && gameState.lastDayDeaths.length)
+      ? gameState.lastDayDeaths
+      : (gameState.todaysDeaths || []);
+    const executedEntry = dayDeaths.find(d => d.cause === 'EXECUTION');
     if (!executedEntry || !executedEntry.playerId) {
       engine.setPlayerPrivateInfo(player, {
         type: 'undertaker',

@@ -714,10 +714,21 @@ body.resizing-active * {
   text-align: center;
 }
 .night-subtext {
-  color: #666;
+  color: #b9b9b9;
   margin-bottom: 30px;
   white-space: pre-line;
   line-height: 1.6;
+  max-height: 50vh;
+  max-width: min(92vw, 560px);
+  overflow-y: auto;
+}
+/* 纯信息类唤醒（如间谍的魔典）：左对齐、加框，长文本更易阅读 */
+.night-subtext.info-list {
+  text-align: left;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 6px;
 }
 .night-select-area {
   display: flex;

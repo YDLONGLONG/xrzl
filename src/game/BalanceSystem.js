@@ -273,6 +273,44 @@ class BalanceSystem {
     };
   }
 
+  // 隐士夜晚意外死亡概率（由平衡系统控制）
+  // 隐士是善良外来者，其死亡削弱好人：好人弱势时降低死亡概率，邪恶弱势时提高死亡概率
+  static getRecluseDeathProbability(engine) {
+    const room = engine.room;
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(room, engine);
+    const base = cfg && cfg.balance && cfg.balance.recluseDeathBase !== undefined ? cfg.balance.recluseDeathBase : 0.05;
+    const bonus = cfg && cfg.balance && cfg.balance.recluseDeathBonus !== undefined ? cfg.balance.recluseDeathBonus : 0.15;
+    const penalty = cfg && cfg.balance && cfg.balance.recluseDeathPenalty !== undefined ? cfg.balance.recluseDeathPenalty : 0.15;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+    const prob = this.getFavorProbability(score, engine);
+
+    let scenario = 'balanced';
+    let probability = base;
+
+    if (score < goodWeakTh) {
+      // 好人弱势：降低隐士的意外死亡概率
+      scenario = 'good_weak';
+      probability = Math.max(base - prob * (penalty / 0.2), 0);
+    } else if (score > evilWeakTh) {
+      // 邪恶弱势：提高隐士的意外死亡概率
+      scenario = 'evil_weak';
+      probability = Math.min(base + prob * (bonus / 0.2), 1);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      description: '隐士夜晚意外死亡概率'
+    };
+  }
+
   // 和平主义者拯救善良被处决者概率（由平衡系统控制）
   // 和平主义者是善良村民，能阻止善良玩家被处决：好人弱势时提高拯救概率，邪恶弱势时降低拯救概率
   static getPacifistSaveProbability(engine) {

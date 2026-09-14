@@ -101,6 +101,36 @@ class Baron extends Role {
   }
 }
 
+// 生成统一格式的「魔典」文本：恶魔/同伙单独列出，其余玩家按座位排序、每人独占一行。
+// 这样在信息面板、唤醒遮罩、上帝视角里都不会挤成一整串难以分辨的字符串。
+function buildGrimoireText(engine, spyPlayer) {
+  const players = Array.from(engine.room.players.values())
+    .filter(p => p.seat !== -1)
+    .sort((a, b) => a.seat - b.seat);
+
+  const demon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
+  // 同伙只列爪牙（恶魔已单独一行，避免重复显示）
+  const teammates = players.filter(p =>
+    p.id !== spyPlayer.id && p.role.category === 'MINION');
+
+  const lines = [];
+  lines.push('👹 恶魔：' + (demon
+    ? `${demon.seat + 1}号 ${demon.name}【${demon.role.name}】`
+    : '（不在场）'));
+  lines.push('🩸 同伙：' + (teammates.length > 0
+    ? teammates.map(m => `${m.seat + 1}号 ${m.name}【${m.role.name}】`).join('、')
+    : '（无）'));
+  lines.push('──────────────');
+  lines.push(`📖 全员身份（共 ${players.length} 人）`);
+
+  // 每行只呈现「座位号 + 名称 + 身份」，不显示存活/中毒/醉酒等状态
+  players.forEach(p => {
+    lines.push(`${p.seat + 1}号 ${p.name} ·【${p.role.name}】`);
+  });
+
+  return lines.join('\n');
+}
+
 // 间谍
 class Spy extends Role {
   constructor() {
@@ -121,35 +151,24 @@ class Spy extends Role {
   }
 
   getNightWakeInfo(gameState, player, engine, isFirstNight) {
-    // 间谍每晚看到所有玩家身份（魔典）
-    const players = Array.from(engine.room.players.values()).filter(p => p.seat !== -1);
-    const roleList = players.map(p => `${p.seat+1}号 ${p.name}: ${p.role.name}（${p.isAlive ? '存活' : '死亡'}）`).join('\n');
+    // 间谍每晚看到所有玩家身份（魔典），无需选择目标
     return {
       canSelectCount: 0,
-      message: '你查看了魔典，所有玩家身份如下：\n' + roleList
+      selectType: 'info',
+      message: '你查看了魔典：\n' + buildGrimoireText(engine, player)
     };
   }
 
   onNightAction(gameState, player, action, engine) {
     // 间谍不选择目标，但每晚给其完整魔典信息
     const players = Array.from(engine.room.players.values()).filter(p => p.seat !== -1);
-    const demon = players.find(p => p.role.category === 'DEMON');
-    const otherMinions = players.filter(p => p.role.category === 'MINION' && p.id !== player.id);
-    
-    let teamInfo = '';
-    if (demon) teamInfo += `恶魔是${demon.seat+1}号 ${demon.name}【${demon.role.name}】`;
-    if (otherMinions.length > 0) teamInfo += (teamInfo ? '。' : '') + `队友：${otherMinions.map(m => `${m.seat+1}号 ${m.name}【${m.role.name}】`).join('、')}`;
-
-    const roleList = players.map(p => 
-      `${p.seat+1}号 ${p.name}：【${p.role.name}】（${p.role.team === 'GOOD' ? '善良' : '邪恶'}·${p.isAlive ? '存活' : '死亡'}${p.isPoisoned?'·中毒':''}）`
-    ).join('\n');
 
     engine.setPlayerPrivateInfo(player, {
       type: 'spy',
       grimoire: players.map(p => ({
         id: p.id, seat: p.seat, name: p.name, role: p.role.name, team: p.role.team, isAlive: p.isAlive
       })),
-      message: (teamInfo ? teamInfo + '\n\n' : '') + '魔典（所有玩家身份）：\n' + roleList
+      message: buildGrimoireText(engine, player)
     });
 
     // 间谍不需要选择目标，直接返回成功

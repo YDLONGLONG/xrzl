@@ -53,6 +53,12 @@ class VictoryChecker {
       return this.endGame('EVIL', '仅剩两名玩家存活且恶魔仍在，邪恶阵营获胜！');
     }
 
+    // 场上仅剩恶魔一人（其余玩家全部死亡）：必须立即结束，
+    // 否则会进入死局——恶魔被唤醒后无法选满目标数，夜晚流程永远无法结算。
+    if (demon && alive.length <= 1) {
+      return this.endGame('EVIL', '场上仅剩恶魔一名玩家存活，邪恶阵营获胜！');
+    }
+
     // 检查圣徒被处决（在处决时触发，这里作为备份）
     const executedSaint = gs.todaysDeaths.find(d => {
       const p = room.players.get(d.playerId);

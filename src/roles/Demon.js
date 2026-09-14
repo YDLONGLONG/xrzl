@@ -42,7 +42,10 @@ class Imp extends Role {
       return { success: false, message: '选择的玩家无效' };
     }
     
-    gameState.nightActions.imp = { targetId };
+    // 中毒/醉酒时能力失效：不记录击杀（与 BMR 四个恶魔保持一致），但行动照常完成
+    if (!player.isPoisoned && !player.isDrunk) {
+      gameState.nightActions.imp = { targetId };
+    }
 
     engine.setPlayerPrivateInfo(player, {
       type: 'imp',

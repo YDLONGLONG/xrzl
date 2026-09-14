@@ -1183,7 +1183,8 @@ function renderCenter(state) {
         infoHtml += `<div style="margin-bottom:6px;">
           <div style="color:#d4af37; font-size:0.8em; margin-bottom:4px; opacity:0.8;">${dayLabel}</div>`;
         byDay[day].forEach(info => {
-          infoHtml += `<div style="color:#f0d78c; line-height:1.5; font-size:0.9em; margin-bottom:3px;">· ${escapeHtml(info.message).replace(/\n/g, '<br>')}</div>`;
+          // 多行信息用独立卡片承载，避免多条信息连在一起难以分辨
+        infoHtml += `<div style="color:#f0d78c; line-height:1.6; font-size:0.9em; margin-bottom:6px; padding:6px 9px; background:rgba(0,0,0,0.18); border-radius:4px; white-space:pre-wrap;">${escapeHtml(info.message).replace(/\n/g, '<br>')}</div>`;
         });
         infoHtml += '</div>';
       });
@@ -1325,6 +1326,8 @@ function showNightWake(data) {
   nightSelectedTargets = [];
   nightSelectedRoleId = null;
   nightSelectType = data.selectType || 'player';
+  // 纯信息类（如间谍查看魔典）左对齐并允许滚动，长文本更易阅读
+  subtext.classList.toggle('info-list', nightSelectType === 'info');
   nightCanSkip = data.canSkip || false;
   const canSelectCount = data.canSelectCount || 0;
   nightCanSelectCount = canSelectCount;
@@ -1638,6 +1641,7 @@ function showWaitingNight() {
   overlay.classList.add('active');
   overlay.classList.remove('wake');
   text.textContent = '夜幕降临';
+  subtext.classList.remove('info-list');
   subtext.textContent = '等待其他玩家行动...';
   selectArea.innerHTML = '';
   confirmBtn.style.display = 'none';
@@ -2447,7 +2451,9 @@ function updateGodPlayers() {
     if (hist.length > 0) {
       const latest = hist[hist.length - 1];
       const falseStyle = latest.isFalse ? 'color:#e74c3c;' : 'color:#f0d78c;';
-      infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message)}">${escapeHtml(latest.message).substring(0, 30)}${latest.message.length > 30 ? '...' : ''}</span>
+      // 表格单元格只显示第一行摘要（完整内容用 title 悬浮查看），避免多行信息被挤成一串
+      const firstLine = String(latest.message || '').split('\n')[0];
+      infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message)}">${escapeHtml(firstLine).substring(0, 30)}${firstLine.length > 30 ? '...' : ''}</span>
         <span style="color:#888; font-size:11px;">(${hist.length}条)</span>`;
     }
     return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05); opacity:${p.isAlive?1:0.5};">
@@ -2489,7 +2495,7 @@ function renderGodPlayer(p, team) {
         const falseMark = info.isFalse 
           ? '<span style="color:#e74c3c; font-weight:bold; font-size:11px;"> ⚠️假</span>' 
           : '<span style="color:#2ecc71; font-size:11px;"> ✓</span>';
-        dayHtml += `<div style="font-size:11.5px; line-height:1.4; color:${info.isFalse ? '#e74c3c' : '#f0d78c'}; margin-left:10px; margin-bottom:2px;">· ${escapeHtml(info.message)}${falseMark}</div>`;
+        dayHtml += `<div style="font-size:11.5px; line-height:1.5; color:${info.isFalse ? '#e74c3c' : '#f0d78c'}; margin-left:10px; margin-bottom:6px; white-space:pre-wrap;">· ${escapeHtml(info.message).replace(/\n/g, '<br>')}${falseMark}</div>`;
       });
     });
     infoHtml = `<div style="margin-left:20px; margin-top:3px; padding:6px 8px; background:rgba(0,0,0,0.2); border-radius:3px;">
@@ -3824,92 +3830,4 @@ async function viewHistoryDetail(historyId) {
     container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
   }
 }
-
-// ========== 第三方扫码登录（QQ / 微信）==========
-function qqLogin() {
-  // 跳转到QQ授权页面
-  window.location.href = '/api/qq/login';
-}
-
-function wxLogin() {
-  // 跳转到微信授权页面
-  window.location.href = '/api/wechat/login';
-}
-
-// 显示第三方登录提示
-function showThirdLoginTip(text, color) {
-  const tipEl = $('thirdLoginTip');
-  if (tipEl) {
-    tipEl.textContent = text;
-    tipEl.style.color = color || '#e74c3c';
-  }
-}
-
-// 用 token 换取第三方用户信息
-function fetchThirdLoginUserinfo(type, token) {
-  fetch(`/api/${type}/userinfo?token=${token}`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.success) {
-        // 自动填入昵称
-        const createNameEl = $('createName');
-        const joinNameEl = $('joinName');
-        const nickname = (data.nickname || '玩家').substring(0, 20);
-        if (createNameEl) createNameEl.value = nickname;
-        if (joinNameEl) joinNameEl.value = nickname;
-
-        // 显示成功提示
-        showThirdLoginTip(`已登录：${data.nickname}`, '#2ecc71');
-
-        // 保存头像/昵称信息
-        if (data.avatar) {
-          sessionStorage.setItem(`${type}_avatar`, data.avatar);
-          sessionStorage.setItem(`${type}_nickname`, data.nickname);
-        }
-      } else {
-        showThirdLoginTip(`${type === 'qq' ? 'QQ' : '微信'}登录失败：` + (data.message || '未知错误'));
-      }
-    })
-    .catch(err => {
-      console.error('第三方登录验证失败:', err);
-    });
-}
-
-// 页面加载时检测第三方登录回调
-function checkThirdLoginCallback() {
-  const params = new URLSearchParams(window.location.search);
-
-  // QQ 登录回调
-  const qqToken = params.get('qq_token');
-  const qqError = params.get('qq_error');
-  // 微信 登录回调
-  const wxToken = params.get('wx_token');
-  const wxError = params.get('wx_error');
-
-  if (qqError) {
-    showThirdLoginTip('QQ登录失败：' + qqError);
-    window.history.replaceState({}, document.title, '/');
-    return;
-  }
-
-  if (wxError) {
-    showThirdLoginTip('微信登录失败：' + wxError);
-    window.history.replaceState({}, document.title, '/');
-    return;
-  }
-
-  if (qqToken) {
-    fetchThirdLoginUserinfo('qq', qqToken);
-    window.history.replaceState({}, document.title, '/');
-    return;
-  }
-
-  if (wxToken) {
-    fetchThirdLoginUserinfo('wechat', wxToken);
-    window.history.replaceState({}, document.title, '/');
-  }
-}
-
-// DOM加载完成后检测第三方登录回调
-window.addEventListener('DOMContentLoaded', checkThirdLoginCallback);
 

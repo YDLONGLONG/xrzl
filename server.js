@@ -6,18 +6,12 @@ const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
 const { SCRIPTS } = require('./src/config/game-config');
-const qqAuthRouter = require('./src/config/qq-auth');
-const wechatAuthRouter = require('./src/config/wechat-auth');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
-
-// 第三方登录路由（需在静态文件之前注册）
-app.use('/api/qq', qqAuthRouter);
-app.use('/api/wechat', wechatAuthRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {

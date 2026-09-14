@@ -1,4 +1,6 @@
 // 简单AI机器人管理器 - 用于测试和补位
+const { isEffectivelyDead } = require('../utils/helpers');
+
 class BotManager {
   constructor(engine) {
     this.engine = engine;
@@ -184,7 +186,7 @@ class BotManager {
     }
 
     // 提名阶段 - 只有bot有概率提名，断线真实玩家不提名
-    if (gs.phase === 'NOMINATION_PHASE' && bot.isBot && bot.isAlive && !bot.hasNominated && !bot._botNominated) {
+    if (gs.phase === 'NOMINATION_PHASE' && bot.isBot && !isEffectivelyDead(bot) && !bot.hasNominated && !bot._botNominated) {
       if (bot._botTimer) return;
       if (Math.random() < this.engine.prob('bot_nominate')) {
         bot._botNominated = true;
@@ -215,7 +217,7 @@ class BotManager {
   }
 
   _canBotVote(bot) {
-    if (bot.isAlive) return true;
+    if (!isEffectivelyDead(bot)) return true;
     if (bot.voteToken > 0) return true;
     return false;
   }
@@ -338,10 +340,10 @@ class BotManager {
   _doBotNominate(bot) {
     const gs = this.engine.room.gameState;
     if (gs.phase !== 'NOMINATION_PHASE') return;
-    if (bot.hasNominated || !bot.isAlive) return;
+    if (bot.hasNominated || isEffectivelyDead(bot)) return;
 
     const others = Array.from(this.engine.room.players.values())
-      .filter(p => p.isAlive && p.seat !== -1 && p.id !== bot.id && !p.wasNominatedToday);
+      .filter(p => !isEffectivelyDead(p) && p.seat !== -1 && p.id !== bot.id && !p.wasNominatedToday);
     
     if (others.length === 0) return;
 

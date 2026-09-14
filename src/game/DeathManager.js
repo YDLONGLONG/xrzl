@@ -24,6 +24,23 @@ class DeathManager {
       }
     }
 
+    // 士兵：不会被恶魔杀害（仅对恶魔击杀生效，白天处决等其他死因不受影响）
+    if (cause === 'DEMON' && roleId === 'soldier' && !impaired) {
+      this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（士兵）不会被恶魔杀害`, {
+        playerId: player.id, cause, event: 'soldier_immune'
+      });
+      return 'SOLDIER';
+    }
+
+    // 僧侣 / 旅店老板的守护（isProtected）：仅对恶魔击杀生效。
+    // 注意不能对所有死因生效，否则会连白天处决一起免疫。
+    if (cause === 'DEMON' && player.isProtected) {
+      this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name} 受到守护，恶魔无法杀害`, {
+        playerId: player.id, cause, event: 'protected'
+      });
+      return 'PROTECTED';
+    }
+
     // 水手：水手不会死亡
     if (roleId === 'sailor' && !impaired) {
       this.engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（水手）不会死亡`, {
@@ -121,6 +138,8 @@ class DeathManager {
       'ASSASSIN': '被刺客刺杀',
       'MOONCHILD': '被月之子诅咒而死',
       'TINKER': '夜晚死亡',
+      'RECLUSE': '夜晚意外死亡',
+      'GRANDMOTHER': '因孙子被恶魔杀害而死',
       'GAMBLER': '赌徒猜错而死'
     }[cause] || '死亡';
 
@@ -183,7 +202,8 @@ class DeathManager {
     if (demonAlive) return;
 
     const sw = alive.find(p => p.role.id === 'scarletwoman');
-    if (sw && alive.length >= 5) {
+    // 中毒/醉酒的红唇女郎能力失效，不能继承恶魔
+    if (sw && alive.length >= 5 && !sw.isPoisoned && !sw.isDrunk) {
       // 红唇女郎变成新恶魔（保持同剧本的恶魔类型）
       const { getScriptConfig } = require('../config/game-config');
       const sc = getScriptConfig(room.script || 'tb');

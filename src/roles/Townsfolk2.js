@@ -747,8 +747,11 @@ class Professor extends Role {
     if (player.abilityState.used) {
       return null;
     }
-    const deadPlayers = Array.from(engine.room.players.values()).filter(p => p.seat !== -1 && !p.isAlive);
-    if (deadPlayers.length === 0) {
+    // 只有存在「死亡的镇民」时才唤醒：否则玩家被迫选一名无法复活的目标，
+    // 会白白浪费这个一次性能力（也会让机器人乱选导致技能作废）。
+    const deadTownsfolk = Array.from(engine.room.players.values())
+      .filter(p => p.seat !== -1 && !p.isAlive && p.role && p.role.category === 'TOWNSFOLK');
+    if (deadTownsfolk.length === 0) {
       return null;
     }
     return {
@@ -929,7 +932,8 @@ class Fool extends Role {
   }
 
   onDeath(gameState, player, cause, engine) {
-    if (!player.abilityState.usedDeath && !player.isPoisoned) {
+    // 与 executeDemonKill / checkDeathPrevention 保持一致：中毒或醉酒都失效
+    if (!player.abilityState.usedDeath && !player.isPoisoned && !player.isDrunk) {
       player.abilityState.usedDeath = true;
       player.isAlive = true;
       player.isDead = false;

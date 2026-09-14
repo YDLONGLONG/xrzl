@@ -1,6 +1,6 @@
 // 投票/提名管理器
 const { PHASES, ROLE_IDS } = require('../config/game-config');
-const { getAlivePlayers } = require('../utils/helpers');
+const { getAlivePlayers, isEffectivelyDead } = require('../utils/helpers');
 const { Bard } = require('../roles/Townsfolk2');
 
 class VoteManager {
@@ -25,7 +25,9 @@ class VoteManager {
       return { success: false, message: '玩家不存在' };
     }
 
-    if (!nominator.isAlive) {
+    // 僵怖首次死亡后 isAlive 仍为 true 但被当作死亡，必须按死亡处理
+    const nominatorDead = isEffectivelyDead(nominator);
+    if (nominatorDead) {
       if (nominator.voteToken <= 0) {
         return { success: false, message: '你已使用死后投票标记' };
       }
@@ -40,7 +42,7 @@ class VoteManager {
       return { success: false, message: '该玩家今天已被提名过' };
     }
 
-    if (!nominee.isAlive) {
+    if (isEffectivelyDead(nominee)) {
       return { success: false, message: '不能提名死亡玩家' };
     }
 
@@ -127,8 +129,9 @@ class VoteManager {
       return { success: false, message: '现在不是投票阶段' };
     }
 
-    // 检查投票资格
-    if (!player.isAlive && player.voteToken <= 0) {
+    // 检查投票资格（僵怖被当作死亡时同样只能使用一次死后投票）
+    const voterDead = isEffectivelyDead(player);
+    if (voterDead && player.voteToken <= 0) {
       return { success: false, message: '你已使用死后投票标记' };
     }
 
@@ -154,14 +157,14 @@ class VoteManager {
       nomination.votes.add(playerId);
       nomination.currentVotes[playerId] = true;
       // 第一次投赞成票时才消耗死者投票标记
-      if (!player.isAlive && previousVote !== true) {
+      if (voterDead && previousVote !== true) {
         player.voteToken--;
       }
     } else {
       nomination.votes.delete(playerId);
       nomination.currentVotes[playerId] = false;
       // 死者之前投过赞成现在改反对，退还投票标记
-      if (!player.isAlive && previousVote === true) {
+      if (voterDead && previousVote === true) {
         player.voteToken++;
       }
     }
@@ -176,7 +179,7 @@ class VoteManager {
 
     // 检查是否所有人都投了（自动结束投票）
     const eligibleVoters = Array.from(this.engine.room.players.values())
-      .filter(p => p.seat !== -1 && (p.isAlive || (p.isDead && p.voteToken > 0)));
+      .filter(p => p.seat !== -1 && (!isEffectivelyDead(p) || p.voteToken > 0));
 
     const allEligibleVoted = eligibleVoters.every(p => nomination.currentVotes[p.id] !== undefined);
 
@@ -216,7 +219,7 @@ class VoteManager {
     if (previousVote === true) {
       nomination.votes.delete(playerId);
       // 死者撤回赞成票，退还投票标记
-      if (!player.isAlive) {
+      if (isEffectivelyDead(player)) {
         player.voteToken++;
       }
     }
@@ -330,7 +333,28 @@ class VoteManager {
           message: `${toExecute.seat+1}号(${toExecute.name})被和平主义者拯救`
         });
       } else {
-        this.engine.deathManager.killPlayer(toExecute.id, 'EXECUTION', gs.nightCount, gs.dayCount);
+        const killResult = this.engine.deathManager.killPlayer(toExecute.id, 'EXECUTION', gs.nightCount, gs.dayCount);
+
+        // 被魔鬼代言人等免死效果阻止时，玩家并未死亡：
+        // 不写入死亡记录，也不触发「爪牙死于处决」等后续技能。
+        // 例外：僵怖的「首次死亡」会被当作死亡，仍需按死亡处理。
+        const trulyPrevented = killResult && killResult.prevented && killResult.reason !== 'ZOMBUUL';
+        if (trulyPrevented) {
+          this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 的处决被免死效果阻止（${killResult.reason}），未死亡`, {
+            playerId: toExecute.id, prevented: true, reason: killResult.reason
+          });
+          this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
+            executedId: null,
+            seat: toExecute.seat,
+            name: toExecute.name,
+            votes: maxVotes,
+            message: `${toExecute.seat+1}号(${toExecute.name})的处决被阻止，未死亡`
+          });
+          this.engine.waitForConfirmation();
+          this.engine.broadcastState();
+          return;
+        }
+
         gs.todaysDeaths.push({ playerId: toExecute.id, cause: 'EXECUTION' });
 
         // 吟游诗人：爪牙被处决则除自己外的所有玩家醉酒

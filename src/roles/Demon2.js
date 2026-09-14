@@ -132,6 +132,11 @@ class Pukka extends Role {
       return { success: false, message: '请选择一名玩家' };
     }
 
+    // 不能选择自己：普卡一旦毒到自己，毒无法被自身能力解除，会导致对局永久卡死
+    if (targetId === player.id) {
+      return { success: false, message: '不能选择自己' };
+    }
+
     const target = engine.room.players.get(targetId);
     if (!target || !target.isAlive) {
       return { success: false, message: '选择的玩家无效' };

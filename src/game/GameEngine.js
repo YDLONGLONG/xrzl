@@ -459,9 +459,15 @@ class GameEngine {
 
     const targets = action.targets || [];
     const isDrunk = player.role && player.role.id === 'drunk' && player.fakeRole;
-    const effectiveSelectCount = player.role.selectCount || 0;
-    if (effectiveSelectCount > 0 && targets.length !== effectiveSelectCount) {
-      return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
+    const canSkip = player.role.canSkip === true;
+    // 「跳过行动」由 NightResolver 处理。这里不能再按 selectCount 校验目标数量，
+    // 否则像珀这样 selectCount>0 且 canSkip=true 的角色永远无法跳过，
+    // 其「上次未选择→今晚选三人」的机制也就无法触发。
+    if (!(action.skip === true && canSkip)) {
+      const effectiveSelectCount = player.role.selectCount || 0;
+      if (effectiveSelectCount > 0 && targets.length !== effectiveSelectCount) {
+        return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
+      }
     }
     if (player && player.role) {
       const targetNames = targets.map(tid => {
@@ -612,8 +618,8 @@ class GameEngine {
       confirmedIds: Array.from(room.confirmations),
       totalNeeded: neededConfirm,
       yourRole: viewer.role ? (() => {
-        // 酒鬼/疯子/莽夫看到的是假身份
-        const fakeRoleIds = ['drunk', 'madman', 'lunatic'];
+        // 酒鬼/疯子看到的是假身份（莽夫没有假身份）
+        const fakeRoleIds = ['drunk', 'madman'];
         if (fakeRoleIds.includes(viewer.role.id) && viewer.fakeRole) {
           const isOutsiderFake = viewer.role.id === 'drunk';
           return {

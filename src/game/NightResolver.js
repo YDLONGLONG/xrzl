@@ -177,13 +177,17 @@ class NightResolver {
         const selectType = effectiveRole.selectType || 'player';
         const selectCount = isDrunkPlayer ? (role.selectCount || 0) : (effectiveRole.selectCount || 0);
         const canSkip = effectiveRole.canSkip === true;
-        const shouldWake = (selectCount > 0) || wakesForInfo || selectType === 'role' || (isDrunkPlayer && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
+        let shouldWake = (selectCount > 0) || wakesForInfo || selectType === 'role' || (isDrunkPlayer && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
+
+        // 唤醒信息由 getNightWakeInfo 动态生成。像教父这样 selectCount 为 0 的角色
+        // 完全依靠 getNightWakeInfo 返回非空内容来决定是否被唤醒（首夜报外来者 /
+        // 外来者白天死亡当夜才能杀人），所以必须先询问一次再判定。
+        if (!wakeInfo) {
+          wakeInfo = effectiveRole.getNightWakeInfo ? effectiveRole.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
+        }
+        if (!shouldWake && wakeInfo) shouldWake = true;
 
         if (shouldWake) {
-          if (!wakeInfo) {
-            wakeInfo = effectiveRole.getNightWakeInfo ? effectiveRole.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
-          }
-
           if (wakeInfo === null) {
             gs.currentNightIndex++;
             continue;
@@ -204,6 +208,20 @@ class NightResolver {
             effectiveSelectCount = wakeInfo.canSelectCount;
           }
           const wakeSelectType = wakeInfo?.selectType || selectType;
+
+          // 防御：需要选人但场上已无可选目标（例如只剩自己且技能不能自选）时，
+          // 直接跳过本次唤醒，避免夜晚流程永远无法结算。
+          if (effectiveSelectCount > 0 && wakeSelectType === 'player') {
+            const othersAlive = getAlivePlayers(this.engine.room).filter(p => p.id !== player.id).length;
+            const selfSelectable = wakeInfo?.excludeSelf !== true;
+            if (othersAlive === 0 && !selfSelectable) {
+              this.engine.logAction('NIGHT_WAKE', `${player.seat+1}号 ${player.name}（${roleName}）没有可选目标，跳过本次唤醒`, {
+                playerId: player.id
+              });
+              gs.currentNightIndex++;
+              continue;
+            }
+          }
 
           this.engine.io.to(player.id).emit('night:wake', {
             role: roleName,
@@ -422,9 +440,13 @@ class NightResolver {
   resolveDemonKills(gs) {
     const sc = this.scriptConfig;
 
-    // TB: 小恶魔
+    // TB: 小恶魔（若选择自己则触发「星传」：一名存活的爪牙接任恶魔）
     if (gs.nightActions.imp) {
       const targetId = gs.nightActions.imp.targetId;
+      const imp = this.findAlivePlayerWithRole('imp');
+      if (imp && targetId === imp.id) {
+        this.starPassImp(imp, gs);
+      }
       this.executeDemonKill(targetId, gs, 'imp');
     }
 
@@ -438,23 +460,27 @@ class NightResolver {
       }
     }
 
-    // BMR: 普卡 - 杀上一夜的毒目标
-    if (gs.nightActions.pukka) {
-      const pukkaPlayer = this.findAlivePlayerWithRole('pukka');
-      if (pukkaPlayer) {
-        if (!pukkaPlayer.abilityState) pukkaPlayer.abilityState = {};
-        const lastTargetId = pukkaPlayer.abilityState.lastPoisonTargetId;
-        // 本夜刚选的目标不能同时被判为「上一夜目标」
-        if (lastTargetId && lastTargetId !== gs.nightActions.pukka.targetId) {
-          const lastTarget = this.engine.room.players.get(lastTargetId);
-          if (lastTarget && lastTarget.isAlive) {
-            lastTarget.isPoisoned = false; // 恢复健康
-            this.engine.deathManager.killPlayer(lastTargetId, 'DEMON', gs.nightCount, -1);
+    // BMR: 普卡 - 上一夜被毒的玩家在今晚死亡并恢复健康
+    // 结算不能依赖「本夜是否成功下毒」（gs.nightActions.pukka）：否则普卡一旦
+    // 中毒/醉酒或被驱魔人封禁，毒就会永久残留在目标身上，对局直接卡死。
+    const pukkaPlayer = this.findAlivePlayerWithRole('pukka');
+    if (pukkaPlayer) {
+      if (!pukkaPlayer.abilityState) pukkaPlayer.abilityState = {};
+      const lastTargetId = pukkaPlayer.abilityState.lastPoisonTargetId;
+      if (lastTargetId) {
+        const lastTarget = this.engine.room.players.get(lastTargetId);
+        if (lastTarget) {
+          lastTarget.isPoisoned = false; // 无论是否真的死亡，毒都必须解除
+          if (lastTarget.isAlive) {
+            // 普卡的击杀属于恶魔击杀：统一走 executeDemonKill，
+            // 以便正确应用士兵免疫与僧侣/旅店老板的守护。
+            this.executeDemonKill(lastTargetId, gs, 'pukka');
           }
         }
-        // 设置当前毒目标为下一夜结算用的「上一夜目标」
-        pukkaPlayer.abilityState.lastPoisonTargetId = gs.nightActions.pukka.targetId;
       }
+      const pukkaAction = gs.nightActions.pukka;
+      pukkaPlayer.abilityState.lastPoisonTargetId =
+        (pukkaAction && pukkaAction.targetId) ? pukkaAction.targetId : null;
     }
 
     // BMR: 沙巴洛斯 - 杀2人 + 可选复活
@@ -492,6 +518,24 @@ class NightResolver {
       const targets = gs.nightActions.po.targets || [];
       targets.forEach(tid => this.executeDemonKill(tid, gs, 'po'));
     }
+  }
+
+  // 小恶魔自尽时的「星传」：随机一名存活的爪牙成为新的小恶魔
+  starPassImp(imp, gs) {
+    const minions = getAlivePlayers(this.engine.room)
+      .filter(p => p.role && p.role.category === 'MINION' && p.id !== imp.id);
+    if (minions.length === 0) return;
+    const heir = minions[Math.floor(Math.random() * minions.length)];
+    const newRole = this.engine.roleAllocator.createRoleInstance(imp.role.id);
+    if (!newRole) return;
+    heir.role = newRole;
+    this.engine.setPlayerPrivateInfo(heir, {
+      type: 'imp_starpass',
+      message: '小恶魔将恶魔身份传给了你，你成为了新的【小恶魔】！'
+    });
+    this.engine.logAction('ABILITY', `${imp.seat + 1}号 ${imp.name}（小恶魔）自尽，星传给了 ${heir.seat + 1}号 ${heir.name}`, {
+      playerId: imp.id, heirId: heir.id
+    });
   }
 
   executeDemonKill(targetId, gs, demonType) {
@@ -576,6 +620,18 @@ class NightResolver {
         this.engine.deathManager.killPlayer(tinker.id, 'TINKER', gs.nightCount, -1);
         this.engine.logAction('DEATH', `${tinker.seat+1}号 ${tinker.name}（修补匠）在夜晚死亡`, {
           playerId: tinker.id, probInfo
+        });
+      }
+    });
+
+    // 隐士：「你可能在夜晚死亡，即使没人想杀你」（由平衡系统控制概率）
+    const recluses = getAlivePlayers(this.engine.room).filter(p => p.role && p.role.id === 'recluse');
+    recluses.forEach(recluse => {
+      const probInfo = this.engine.balanceSystem.getRecluseDeathProbability(this.engine);
+      if (Math.random() < probInfo.probability) {
+        this.engine.deathManager.killPlayer(recluse.id, 'RECLUSE', gs.nightCount, -1);
+        this.engine.logAction('DEATH', `${recluse.seat+1}号 ${recluse.name}（隐士）在夜晚意外死亡`, {
+          playerId: recluse.id, probInfo
         });
       }
     });
@@ -678,10 +734,55 @@ class NightResolver {
       this.engine.logAction('NIGHT_END', `第${gs.nightCount}夜结束，平安夜`, {});
     }
 
+    // 兜底：技能互相抵消可能造成长期没有任何死亡，房间会永久卡住
+    if (this.checkStall(gs)) return;
+
     const victory = this.engine.victoryChecker.checkVictory();
     if (victory) return;
 
     this.engine.transitionTo(PHASES.DAY_DAWN);
+  }
+
+  // 对局卡死兜底：
+  //  - 连续多个昼夜无人死亡（技能互相抵消）→ 先告警，超过上限强制结束；
+  //  - 绝对回合上限（即使有零星死亡，也不允许对局无限拖长，例如
+  //    僵怖「被当作死亡」后无法被处决 + 旅店老板持续守护导致的极慢收束）。
+  // 返回 true 表示对局已因此结束。
+  checkStall(gs) {
+    const cfg = (this.engine.probConfig && this.engine.probConfig.balance) ? this.engine.probConfig.balance : {};
+    const warnRounds = (cfg.stallWarnRounds !== undefined) ? cfg.stallWarnRounds : 15;
+    const endRounds = (cfg.stallEndRounds !== undefined) ? cfg.stallEndRounds : 30;
+    const maxRounds = (cfg.stallMaxRounds !== undefined) ? cfg.stallMaxRounds : 30;
+
+    const dayDeaths = (gs.lastDayDeaths || []).filter(d => d && d.playerId);
+    const hadDeath = (gs.deathsToAnnounce || []).length > 0 || dayDeaths.length > 0;
+    gs.roundsWithoutDeath = hadDeath ? 0 : (gs.roundsWithoutDeath || 0) + 1;
+
+    // 绝对回合上限
+    if (maxRounds > 0 && gs.nightCount >= maxRounds) {
+      this.engine.logAction('GAME_OVER', `对局已进行 ${gs.nightCount} 个夜晚仍未有结果，判定无法继续，强制结束`, {
+        nightCount: gs.nightCount, maxRounds
+      });
+      this.engine.victoryChecker.endGame('GOOD',
+        `对局进行至第 ${gs.nightCount} 个夜晚仍无结果，判善良阵营获胜（防止房间卡死）`);
+      return true;
+    }
+
+    if (endRounds > 0 && gs.roundsWithoutDeath >= endRounds) {
+      this.engine.logAction('GAME_OVER', `已连续 ${gs.roundsWithoutDeath} 个昼夜无任何玩家死亡，判定对局无法继续，强制结束`, {
+        roundsWithoutDeath: gs.roundsWithoutDeath
+      });
+      this.engine.victoryChecker.endGame('GOOD',
+        `连续 ${gs.roundsWithoutDeath} 个昼夜无人死亡，对局无法继续，判善良阵营获胜`);
+      return true;
+    }
+
+    if (warnRounds > 0 && gs.roundsWithoutDeath >= warnRounds) {
+      this.engine.logAction('ABILITY', `注意：已连续 ${gs.roundsWithoutDeath} 个昼夜无任何玩家死亡，达到 ${endRounds} 个昼夜将强制结束对局`, {
+        roundsWithoutDeath: gs.roundsWithoutDeath, warnRounds, endRounds
+      });
+    }
+    return false;
   }
 }
 

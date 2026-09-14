@@ -20,6 +20,8 @@ class Godfather extends Role {
   getNightWakeInfo(gameState, player, engine, isFirstNight) {
     // 首夜：得知在场的所有外来者角色名 + 恶魔/队友信息，不选择目标
     if (isFirstNight || gameState.nightCount === 0) {
+      this.selectCount = 0; // 首夜只给信息
+
       const players = Array.from(engine.room.players.values()).filter(p => p.seat !== -1);
       const demon = players.find(p => p.role && p.role.category === 'DEMON');
       const otherMinions = players.filter(p => p.role && p.role.category === 'MINION' && p.id !== player.id);
@@ -45,9 +47,13 @@ class Godfather extends Role {
       p => p.role && p.role.category === 'OUTSIDER' && !p.isAlive && p.deathDay === gameState.dayCount
     );
     if (dayDeadOutsiders.length === 0) {
+      this.selectCount = 0;
       return null; // 没有外来者在白天死亡，不唤醒
     }
     // 有外来者在白天死亡，唤醒选择目标杀人
+    // 关键：把本夜可选人数同步到角色实例，GameEngine/NightResolver 的目标数量
+    // 校验读取的是角色实例的 selectCount，不同步会导致选好的目标被当成「无目标」丢弃。
+    this.selectCount = 1;
     return {
       canSelectCount: 1,
       message: '一名外来者在白天死亡，选择一名玩家：他死亡'
@@ -116,16 +122,13 @@ class DevilsAdvocate extends Role {
     this.id = BMR_ROLE_IDS.DEVILSADVOCATE;
     this.team = 'EVIL';
     this.category = 'MINION';
-    this.firstNightOrder = -1; // 首夜不行动
+    this.firstNightOrder = 2; // 技能表为「每个夜晚」，首夜同样守护
     this.otherNightOrder = 2;
     this.selectCount = 1;
     this.abilityDesc = '每个夜晚，选择一名存活玩家（与上个夜晚不同）：如果该玩家明天白天被处决则不会死。';
   }
 
   getNightWakeInfo(gameState, player, engine, isFirstNight) {
-    if (isFirstNight || gameState.nightCount === 0) {
-      return null; // 首夜不行动
-    }
     const lastTargetId = player.abilityState.lastTargetId;
     let message = '选择一名存活玩家：如果该玩家明天白天被处决则不会死';
     if (lastTargetId) {

@@ -154,11 +154,10 @@ class Lunatic extends Role {
     this.id = BMR_ROLE_IDS.LUNATIC;
     this.team = 'GOOD';
     this.category = 'OUTSIDER';
-    this.abilityDesc = '每个夜晚，第一个将能力选择指向你的玩家会醉酒直到明天黄昏，而你会转而属于该玩家的阵营。此后你被视作该阵营（除非被再次转化）。你不会死亡。';
+    this.abilityDesc = '每个夜晚，第一个将能力选择指向你的玩家会醉酒直到明天黄昏，而你会转而属于该玩家的阵营。此后你被视作该阵营（除非被再次转化）。';
     this.selectCount = 0; // 被动角色，无夜晚行动
     this.isFakeDemon = false; // 不是假恶魔，不在夜晚被唤醒
     this.drunkDuration = 2; // 直到明天黄昏（覆盖本夜 + 次日白天，于下次黄昏清除）
-    this.deathImmune = true; // 莽夫不会死亡
   }
 
   // 首夜初始化转化状态

@@ -108,6 +108,14 @@ function decrementDrunkPlayers(room) {
   }
 }
 
+// 判断玩家是否「实际已死 / 被当作死亡」。
+// 僵怖首次死亡后 isAlive 仍为 true，但 isDead 为 true（被当作死亡）；
+// 提名与投票资格等场景必须把它视作死亡，否则它可以被反复提名处决。
+function isEffectivelyDead(player) {
+  if (!player) return true;
+  return player.isAlive !== true || player.isDead === true;
+}
+
 // 取得玩家的「有效阵营」。
 // 疯子(莽夫)被莽夫机制转为邪恶阵营时，其角色实例的 team 仍是善良，
 // 需通过 getEffectiveTeam 读取 transformedTeam（若存在）。
@@ -129,5 +137,6 @@ module.exports = {
   decrementDrunkPlayers,
   applyDrunk,
   clearDrunkSource,
-  getPlayerEffectiveTeam
+  getPlayerEffectiveTeam,
+  isEffectivelyDead
 };

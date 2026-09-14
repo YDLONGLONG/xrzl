@@ -145,7 +145,8 @@ const BMR_FIRST_NIGHT_ORDER = [
   BMR_ROLE_IDS.SAILOR,
   BMR_ROLE_IDS.EXORCIST,
   BMR_ROLE_IDS.COURTIER,
-  BMR_ROLE_IDS.MAID
+  BMR_ROLE_IDS.MAID,
+  BMR_ROLE_IDS.DEVILSADVOCATE  // 技能表为「每个夜晚」，首夜同样守护，否则第一天的处决无法被保护
 ];
 
 // 驱魔人必须排在恶魔之前，否则「该恶魔能力失效」当晚无法生效

@@ -181,8 +181,8 @@ class RoleAllocator {
       }
     });
 
-    // BMR: 疯子和莽夫以为自己是不在场的恶魔
-    const fakeDemonPlayers = players.filter(p => p.role.id === 'madman' || p.role.id === 'lunatic');
+    // BMR: 只有疯子以为自己是不在场的恶魔；莽夫（Goon）是普通外来者，没有假身份
+    const fakeDemonPlayers = players.filter(p => p.role.id === 'madman');
     fakeDemonPlayers.forEach(player => {
       const notInPlayDemons = sc.demonRoles.filter(r => !selectedDemons.includes(r));
       const pool = notInPlayDemons.length > 0 ? notInPlayDemons : sc.demonRoles;
@@ -317,9 +317,9 @@ class RoleAllocator {
     });
   }
 
-  // BMR: 疯子/莽夫以为自己是恶魔
+  // BMR: 疯子以为自己是恶魔
   setupFakeDemonInfo(players) {
-    const fakeDemonPlayers = players.filter(p => p.role && (p.role.id === 'madman' || p.role.id === 'lunatic'));
+    const fakeDemonPlayers = players.filter(p => p.role && p.role.id === 'madman');
     const realDemon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
 
     fakeDemonPlayers.forEach(player => {
