@@ -14,6 +14,32 @@ class BalanceSystem {
     return defaults[key] || 0;
   }
 
+  // 开局基准：用本局实际配比（rolesInPlay）算出「初始好人-邪恶实力比」作为人数项的零点。
+  // 必要性：标准血染配比下好人数量天然占优，若不减去基准，人数项恒为正，
+  // 分数永远落在“邪恶弱势”，「帮弱方」会退化成「恒定帮邪恶」。
+  // 结果缓存在 gameState.balanceBaseline 上，只计算一次。
+  static getBaselineRatio(engine) {
+    const gs = engine && engine.room ? engine.room.gameState : null;
+    if (!gs) return null;
+    if (gs.balanceBaseline !== undefined) return gs.balanceBaseline;
+
+    let ratio = null;
+    const ids = gs.rolesInPlay;
+    if (ids && ids.length > 0 && engine.roleAllocator) {
+      let good = 0, evilPower = 0;
+      for (const rid of ids) {
+        const r = engine.roleAllocator.createRoleInstance(rid);
+        if (!r) continue;
+        if (r.team === 'GOOD') good += 1;
+        else if (r.category === 'DEMON') evilPower += 2;
+        else if (r.category === 'MINION') evilPower += 1.5;
+      }
+      ratio = (good - evilPower) / ids.length;
+    }
+    gs.balanceBaseline = ratio; // 无法计算时存 null，退回旧口径
+    return ratio;
+  }
+
   // 计算平衡分数 [-1, 1]，正=好人优势，负=邪恶优势
   static calculateBalanceScore(room, engine) {
     const players = Array.from(room.players.values());
@@ -27,17 +53,21 @@ class BalanceSystem {
 
     let score = 0;
 
-    // 人数比：恶魔权重2，爪牙1.5
+    // 人数比：恶魔权重2，爪牙1.5。以开局配比为基准，衡量“相对开局的实力偏移”。
     const evilPower = alive.filter(p => p.role.category === 'DEMON').length * 2
                     + alive.filter(p => p.role.category === 'MINION').length * 1.5;
     const goodPower = aliveGood;
     if (alive.length > 0) {
-      score += (goodPower - evilPower) / alive.length * this.getW(engine, 'numbersAdvantage') * 3;
+      const ratio = (goodPower - evilPower) / alive.length;
+      const baseline = this.getBaselineRatio(engine);
+      const deviation = (baseline === null) ? ratio : (ratio - baseline);
+      score += deviation * this.getW(engine, 'numbersAdvantage') * 3;
     }
 
-    // 已死邪恶/好人
+    // 已死邪恶/好人。权重自带符号（deadEvil=+0.2 好人优势，deadGood=-0.15 好人劣势），
+    // 因此两项都用 += ：好人阵亡必须降低分数。
     score += deadEvil * this.getW(engine, 'deadEvil');
-    score -= deadGood * this.getW(engine, 'deadGood');
+    score += deadGood * this.getW(engine, 'deadGood');
 
     // 关键角色存活
     const infoRoles = ['chef', 'empath', 'fortuneteller', 'investigator', 'washerwoman', 'librarian'];
@@ -54,7 +84,17 @@ class BalanceSystem {
     const base = cfg ? cfg.balance.baseFavor : 0.1;
     const max = cfg ? cfg.balance.maxFavor : 0.7;
     const mult = cfg ? cfg.balance.favorMultiplier : 0.6;
+    // baseFavor 为标准 0：prob = min(|score| * 强度, max) —— 越失衡偏袒越强。
     return Math.min(Math.abs(balanceScore) * mult + base, max);
+  }
+
+  // 阈值相对量 0~1：0 = 刚好踩在阈值上（不偏袒），1 = 达到理论极值（score=±1）。
+  // 用它取代原先写死的 `prob * (delta / 0.2)`，避免参数一过阈值就被瞬间拉满。
+  static getFavorExcess(balanceScore, threshold, side) {
+    const span = side === 'good_weak' ? (1 + threshold) : (1 - threshold);
+    if (!span || span <= 0) return 0;
+    const excess = side === 'good_weak' ? (threshold - balanceScore) : (balanceScore - threshold);
+    return Math.max(0, Math.min(1, excess / span));
   }
 
   // 是否给中毒/醉酒玩家正确信息（返回详细信息对象）
@@ -68,31 +108,31 @@ class BalanceSystem {
 
     let result = false;
     let scenario = 'balanced';
-    let threshold = 0;
+    let correctInfoChance = 0; // 实际给“正确信息”的概率
 
     // 中毒/醉酒信息真伪由平衡系统自动决定（内置启用，不可关闭）
     if (player.role.team === 'GOOD' && score < goodWeakTh) {
-      // 好人弱势：按偏袒概率给真信息（帮好人调查）
+      // 好人弱势：按偏袒强度给真信息（帮好人调查）。prob 随失衡程度渐变，
+      // 不再恒为 1，因此不会一跨阈值就 100% 给真信息。
       scenario = 'good_weak';
-      threshold = prob;
+      correctInfoChance = prob;
       result = Math.random() < prob;
     } else if (player.role.team === 'GOOD' && score > evilWeakTh) {
-      // 邪恶弱势：保持假信息（误导好人，帮邪恶）
+      // 邪恶弱势：保持假信息（帮邪恶）。假信息本来就是中毒/醉酒的默认结果，
+      // 此处系统不做额外动作，因此没有可门控的概率。
       scenario = 'evil_weak';
-      threshold = 0;
       result = false;
     } else {
       // 局势均衡：假信息
       scenario = 'balanced';
-      threshold = 0;
       result = false;
     }
 
     return {
       result,
       balanceScore: score,
-      probability: prob,
-      threshold,
+      probability: correctInfoChance,
+      threshold: prob,
       scenario,
       goodWeakThreshold: goodWeakTh,
       evilWeakThreshold: evilWeakTh,
@@ -227,10 +267,12 @@ class BalanceSystem {
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
 
     if (score < goodWeakTh) {
-      return Math.min(base + this.getFavorProbability(score, engine) * (bonus / 0.2), base + bonus);
+      // 好人弱势：按失衡程度线性提高替死概率（最多 +bonus）
+      return Math.min(base + this.getFavorExcess(score, goodWeakTh, 'good_weak') * bonus, 1);
     }
     if (score > evilWeakTh) {
-      return Math.max(base - this.getFavorProbability(score, engine) * (penalty / 0.2), base - penalty);
+      // 邪恶弱势：按失衡程度线性降低替死概率（最多 -penalty）
+      return Math.max(base - this.getFavorExcess(score, evilWeakTh, 'evil_weak') * penalty, 0);
     }
     return base;
   }
@@ -246,19 +288,21 @@ class BalanceSystem {
     const penalty = cfg && cfg.balance && cfg.balance.tinkerDeathPenalty !== undefined ? cfg.balance.tinkerDeathPenalty : 0.15;
     const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
-    const prob = this.getFavorProbability(score, engine);
 
     let scenario = 'balanced';
     let probability = base;
+    let favorExcess = 0;
 
     if (score < goodWeakTh) {
       // 好人弱势：降低修补匠死亡概率（帮好人保人）
       scenario = 'good_weak';
-      probability = Math.max(base - prob * (penalty / 0.2), 0);
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = Math.max(base - favorExcess * penalty, 0);
     } else if (score > evilWeakTh) {
       // 邪恶弱势：提高修补匠死亡概率（帮邪恶削减好人）
       scenario = 'evil_weak';
-      probability = Math.min(base + prob * (bonus / 0.2), 1);
+      favorExcess = this.getFavorExcess(score, evilWeakTh, 'evil_weak');
+      probability = Math.min(base + favorExcess * bonus, 1);
     }
 
     return {
@@ -266,6 +310,7 @@ class BalanceSystem {
       balanceScore: score,
       threshold: probability,
       scenario,
+      favorExcess,
       goodWeakThreshold: goodWeakTh,
       evilWeakThreshold: evilWeakTh,
       baseProbability: base,
@@ -284,19 +329,21 @@ class BalanceSystem {
     const penalty = cfg && cfg.balance && cfg.balance.recluseDeathPenalty !== undefined ? cfg.balance.recluseDeathPenalty : 0.15;
     const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
-    const prob = this.getFavorProbability(score, engine);
 
     let scenario = 'balanced';
     let probability = base;
+    let favorExcess = 0;
 
     if (score < goodWeakTh) {
       // 好人弱势：降低隐士的意外死亡概率
       scenario = 'good_weak';
-      probability = Math.max(base - prob * (penalty / 0.2), 0);
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = Math.max(base - favorExcess * penalty, 0);
     } else if (score > evilWeakTh) {
       // 邪恶弱势：提高隐士的意外死亡概率
       scenario = 'evil_weak';
-      probability = Math.min(base + prob * (bonus / 0.2), 1);
+      favorExcess = this.getFavorExcess(score, evilWeakTh, 'evil_weak');
+      probability = Math.min(base + favorExcess * bonus, 1);
     }
 
     return {
@@ -304,6 +351,7 @@ class BalanceSystem {
       balanceScore: score,
       threshold: probability,
       scenario,
+      favorExcess,
       goodWeakThreshold: goodWeakTh,
       evilWeakThreshold: evilWeakTh,
       baseProbability: base,
@@ -322,19 +370,21 @@ class BalanceSystem {
     const penalty = cfg && cfg.balance && cfg.balance.pacifistSavePenalty !== undefined ? cfg.balance.pacifistSavePenalty : 0.3;
     const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
     const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
-    const prob = this.getFavorProbability(score, engine);
 
     let scenario = 'balanced';
     let probability = base;
+    let favorExcess = 0;
 
     if (score < goodWeakTh) {
       // 好人弱势：提高拯救概率（帮好人保人）
       scenario = 'good_weak';
-      probability = Math.min(base + prob * (bonus / 0.2), 1);
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = Math.min(base + favorExcess * bonus, 1);
     } else if (score > evilWeakTh) {
       // 邪恶弱势：降低拯救概率（帮邪恶处决好人）
       scenario = 'evil_weak';
-      probability = Math.max(base - prob * (penalty / 0.2), 0);
+      favorExcess = this.getFavorExcess(score, evilWeakTh, 'evil_weak');
+      probability = Math.max(base - favorExcess * penalty, 0);
     }
 
     return {
@@ -342,6 +392,7 @@ class BalanceSystem {
       balanceScore: score,
       threshold: probability,
       scenario,
+      favorExcess,
       goodWeakThreshold: goodWeakTh,
       evilWeakThreshold: evilWeakTh,
       baseProbability: base,

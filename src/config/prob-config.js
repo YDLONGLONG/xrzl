@@ -35,11 +35,11 @@ const DEFAULT_PROB_CONFIG = {
   ...BMR_FIXED_PROB,
   ...BOT_PROB,
 
-  // ===== 动态概率（平衡系统参数）—— 标准模式：必帮弱方 =====
+  // ===== 动态概率（平衡系统参数）—— 标准模式：按失衡程度帮弱方 =====
   balance: {
-    baseFavor: 1,
+    baseFavor: 0,                // 偏袒基准概率（必须为 0，否则概率失去渐变）
     maxFavor: 1,
-    favorMultiplier: 1,
+    favorMultiplier: 1,          // 偏袒斜率
     mayorSaveBase: 0.5,
     mayorSaveBonus: 0.5,
     mayorSavePenalty: 0.5,
@@ -47,7 +47,7 @@ const DEFAULT_PROB_CONFIG = {
     evilWeakThreshold: 0.3,
     redHerringFavorMinion: true,
     redHerringFavorGood: true,
-    favorStrength: 1.0           // 偏袒强度（0=不偏袒，1=必帮弱方）
+    favorStrength: 1.0           // 偏袒强度（0=完全不偏袒；1=按 |score| 线性偏袒，越失衡越强）
   },
 
   // ===== 平衡分数权重（通用）=====
@@ -113,10 +113,14 @@ const PROB_CONFIG_META = [
 ];
 
 // 偏袒强度对应的标准值映射
+// 偏袒概率 = min(|score| * favorMultiplier + baseFavor, maxFavor)
+//   baseFavor 固定为 0：强度只控制「斜率」，否则 prob 会被抬到恒定值，
+//   所有偏袒项退化成 0/1 开关（越失衡偏袒越强的设计就失效了）。
+//   s=0 → prob=0，完全不偏袒；s=1 → prob=|score|，按失衡程度线性偏袒。
 function applyFavorStrength(cfg, strength) {
   const s = Math.max(0, Math.min(1, strength));
   const b = cfg.balance;
-  b.baseFavor = s;
+  b.baseFavor = 0;
   b.maxFavor = 1;
   b.favorMultiplier = s;
   b.mayorSaveBase = 0.5;
@@ -138,7 +142,7 @@ function getStandardProbConfig(scriptId = 'tb') {
     ...BOT_PROB,
     ...(SCRIPT_FIXED_PROB[scriptId] || TB_FIXED_PROB),
     balance: {
-      baseFavor: 1, maxFavor: 1, favorMultiplier: 1,
+      baseFavor: 0, maxFavor: 1, favorMultiplier: 1,
       mayorSaveBase: 0.5, mayorSaveBonus: 0.5, mayorSavePenalty: 0.5,
       goodWeakThreshold: -0.2, evilWeakThreshold: 0.3,
       redHerringFavorMinion: true, redHerringFavorGood: true,

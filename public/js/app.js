@@ -3180,9 +3180,10 @@ let _probShowAdvanced = false; // 已废弃（高级权重面板已移除），�
 function applyFavorStrength(cfg, strength) {
   const s = Math.max(0, Math.min(1, strength));
   const b = cfg.balance;
-  b.baseFavor = s;
-  b.maxFavor = s;
-  b.favorMultiplier = 0;
+  // baseFavor 固定 0：强度只控制斜率，prob = min(|score| * s, 1)
+  b.baseFavor = 0;
+  b.maxFavor = 1;
+  b.favorMultiplier = s;
   b.mayorSaveBase = 0.5;
   b.mayorSaveBonus = 0.5 * s;
   b.mayorSavePenalty = 0.5 * s;
@@ -3210,7 +3211,7 @@ function getStandardConfig(scriptId) {
     ...BOT,
     ...scriptFixed,
     balance: {
-      baseFavor: 1.0, maxFavor: 1.0, favorMultiplier: 1.0,
+      baseFavor: 0, maxFavor: 1.0, favorMultiplier: 1.0,
       mayorSaveBase: 0.5, mayorSaveBonus: 0.5, mayorSavePenalty: 0.5,
       goodWeakThreshold: -0.2, evilWeakThreshold: 0.3,
       redHerringFavorMinion: true, redHerringFavorGood: true,
