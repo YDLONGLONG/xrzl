@@ -1316,14 +1316,14 @@ function renderCenter(state) {
       case 'DAY_DISCUSSION':
         msgClass = '';
         html = `<div>💬 自由讨论中 - 第${state.dayCount}天</div>`;
-        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击左侧玩家可提名；全员确认后进入提名投票</div>';
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击右侧玩家可提名；全员确认后进入提名投票</div>';
         showConfirm = true;
         break;
 
       case 'NOMINATION_PHASE':
         msgClass = '';
         html = '<div>📋 提名阶段</div>';
-        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击左侧玩家提名；全员确认后结束提名</div>';
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击右侧玩家提名；全员确认后结束提名</div>';
         if (state.nominations && state.nominations.length > 0) {
           html += '<div style="margin-top:8px;">今日提名：</div>';
           html += '<div class="ss-grid">' + state.nominations.map((n, idx) => {
@@ -2297,6 +2297,110 @@ function renderWhisperPlayerList() {
 }
 
 // ========== 左侧会话列表（房间 / 死者 / 私聊） ==========
+// ========== 身份标记（本机推理记录，仅自己可见，存 localStorage） ==========
+// 结构：{ [roomId]: { [playerId]: { roleId, name, color, short } } }
+const IDENTITY_MARKS_KEY = 'xrzl_identity_marks';
+let identityMarks = (() => {
+  try { return JSON.parse(localStorage.getItem(IDENTITY_MARKS_KEY)) || {}; } catch (e) { return {}; }
+})();
+let identityMarkTargetId = null;
+
+function getIdentityMark(pid) {
+  const roomId = (currentState && currentState.roomId) || myRoomId || '';
+  if (!roomId || !pid) return null;
+  return (identityMarks[roomId] || {})[pid] || null;
+}
+
+function setIdentityMark(pid, mark) {
+  const roomId = (currentState && currentState.roomId) || myRoomId || '';
+  if (!roomId || !pid) return;
+  if (!identityMarks[roomId]) identityMarks[roomId] = {};
+  if (mark) identityMarks[roomId][pid] = mark;
+  else delete identityMarks[roomId][pid];
+  try { localStorage.setItem(IDENTITY_MARKS_KEY, JSON.stringify(identityMarks)); } catch (e) {}
+  renderSessionList();
+}
+
+// 角色显示名去掉「（村民）」这类分类后缀
+function getRoleShortName(opt) {
+  return String((opt && opt.name) || '').replace(/（[^）]*）\s*$/, '');
+}
+
+// #RRGGBB → rgba(r,g,b,a)，用于标记标签的浅色底与描边
+function hexToRgba(hex, alpha) {
+  const h = String(hex || '').replace('#', '');
+  if (h.length !== 6) return `rgba(0, 0, 0, ${alpha})`;
+  const n = parseInt(h, 16);
+  if (isNaN(n)) return `rgba(0, 0, 0, ${alpha})`;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+function openIdentityMarkPanel(pid) {
+  const p = ((currentState && currentState.players) || []).find(x => x.id === pid);
+  if (!p) return;
+  identityMarkTargetId = pid;
+  const title = $('identityMarkTitle');
+  if (title) title.textContent = `标记身份：${p.seat >= 0 ? (p.seat + 1) + '号 ' : ''}${p.name}`;
+  renderIdentityMarkOptions();
+  const panel = $('identityMarkPanel');
+  if (panel) panel.style.display = 'flex';
+}
+
+function closeIdentityMarkPanel() {
+  const panel = $('identityMarkPanel');
+  if (panel) panel.style.display = 'none';
+  identityMarkTargetId = null;
+}
+
+// 按当前剧本列出角色，分村民 / 外来者 / 爪牙 / 恶魔四组
+function renderIdentityMarkOptions() {
+  const box = $('identityMarkOptions');
+  if (!box) return;
+  const scriptId = (currentState && currentState.script) || 'tb';
+  const current = getIdentityMark(identityMarkTargetId);
+  const groups = [
+    { key: 'townsfolk', name: '村民', color: '#07C160' },
+    { key: 'outsider', name: '外来者', color: '#FF9500' },
+    { key: 'minion', name: '爪牙', color: '#FA5151' },
+    { key: 'demon', name: '恶魔', color: '#E64340' }
+  ];
+  const roles = CUSTOM_ROLE_OPTIONS.filter(o => o.id && ROLE_SCRIPT_MAP[o.id] === scriptId);
+
+  let html = '';
+  groups.forEach(g => {
+    const list = roles.filter(r => ROLE_CATEGORY[r.id] === g.key);
+    if (list.length === 0) return;
+    html += `<div class="im-group">
+      <div class="im-group-title" style="color:${g.color}">${g.name}</div>
+      <div class="im-role-list">${list.map(r => {
+        const name = getRoleShortName(r);
+        const active = current && current.roleId === r.id ? ' active' : '';
+        return `<button type="button" class="im-role-btn${active}" style="--im-color:${r.color}" onclick="pickIdentityMark('${r.id}')">${escapeHtml(name)}</button>`;
+      }).join('')}</div>
+    </div>`;
+  });
+  box.innerHTML = html || '<div class="im-empty">没有匹配的角色</div>';
+}
+
+function pickIdentityMark(roleId) {
+  const opt = CUSTOM_ROLE_OPTIONS.find(o => o.id === roleId);
+  if (!opt) return;
+  const pid = identityMarkTargetId;
+  const name = getRoleShortName(opt);
+  setIdentityMark(pid, { roleId, name, color: opt.color });
+  const p = ((currentState && currentState.players) || []).find(x => x.id === pid);
+  showToast(`已标记 ${p ? p.name : '该玩家'} 为「${name}」`, 'success');
+  closeIdentityMarkPanel();
+}
+
+function clearIdentityMark() {
+  const pid = identityMarkTargetId;
+  if (!pid) return;
+  setIdentityMark(pid, null);
+  showToast('已清除身份标记');
+  closeIdentityMarkPanel();
+}
+
 function renderSessionList() {
   const container = $('sessionList');
   if (!container) return;
@@ -2350,12 +2454,19 @@ function renderSessionList() {
       const m = chatMessages[i];
       if (m.channel === 'whisper' && (m.fromId === p.id || m.toId === p.id)) { last = m; break; }
     }
+    // 头像可点击标记身份（阻止冒泡，避免同时切换会话）
+    const mark = getIdentityMark(p.id);
+    const markChip = mark
+      ? `<span class="wx-session-mark" style="color:${mark.color}; background:${hexToRgba(mark.color, 0.12)}; border-color:${hexToRgba(mark.color, 0.38)}" title="已标记：${escapeHtml(mark.name)}">${escapeHtml(mark.name)}</span>`
+      : '';
+    const avatarTitle = mark ? `已标记：${mark.name}（点击修改）` : '点击标记身份';
     html += `<div class="wx-session-item ${isActive ? 'active' : ''}" onclick="selectSession('whisper','${p.id}')">
-      <div class="wx-avatar${p.isDead ? ' dead' : ''}">${p.seat + 1}</div>
+      <div class="wx-avatar markable${p.isDead ? ' dead' : ''}" onclick="event.stopPropagation(); openIdentityMarkPanel('${p.id}')" title="${escapeHtml(avatarTitle)}">${p.seat + 1}</div>
       <div class="wx-session-body">
         <div class="wx-session-title">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</div>
         <div class="wx-session-preview">${escapeHtml(previewText(last, '点击开始私聊'))}</div>
       </div>
+      ${markChip}
       ${badge(unreadWhispers[p.id] || 0)}
     </div>`;
   });

@@ -335,6 +335,29 @@ body.resizing-active * {
   font-weight: 500;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
+}
+/* 头像可点击标记身份（私聊列表） */
+.wx-avatar.markable { cursor: pointer; }
+.wx-avatar.markable:hover { box-shadow: 0 0 0 2px rgba(7, 193, 96, 0.55); }
+/* 身份标记标签：完整角色名（颜色随阵营，见内联 style） */
+.wx-session-mark {
+  flex-shrink: 0;
+  max-width: 42%;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 选中态（绿色底）：标签换成白底，避免阵营色被行背景吃掉而看不清 */
+.wx-session-item.active .wx-session-mark {
+  background: #FFFFFF !important;
+  border-color: transparent !important;
 }
 .wx-avatar.room { background: linear-gradient(135deg, #07C160, #06AD56); font-size: 17px; }
 .wx-avatar.dead { background: #9E9E9E; }
@@ -624,6 +647,54 @@ body.resizing-active * {
   background: #F7F7F7;
   border-radius: 8px;
 }
+/* ---------- 身份标记弹窗（本机推理记录） ---------- */
+.im-tip {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #7F7F7F;
+  background: #F7F7F7;
+  border-radius: 8px;
+}
+.im-group { margin-bottom: 14px; }
+.im-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.im-role-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.im-role-btn {
+  padding: 6px 12px;
+  border: 1px solid #E7E7E7;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #191919;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.im-role-btn:hover {
+  border-color: var(--im-color, #07C160);
+  color: var(--im-color, #07C160);
+}
+.im-role-btn.active {
+  background: var(--im-color, #07C160);
+  border-color: var(--im-color, #07C160);
+  color: #FFFFFF;
+}
+.im-empty {
+  padding: 20px 0;
+  text-align: center;
+  font-size: 13px;
+  color: #B2B2B2;
+}
+
 /* 角色总览：剧本切换 */
 .wx-ro-scripts {
   display: flex;

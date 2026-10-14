@@ -340,6 +340,23 @@
     </div>
   </div>
 
+  <!-- 身份标记（本机推理记录，仅自己可见，存 localStorage） -->
+  <div id="identityMarkPanel" class="wx-modal" style="display:none; z-index:420;">
+    <div class="wx-modal-dialog" style="max-width:520px; max-height:min(640px, 82vh);">
+      <div class="wx-modal-header">
+        <h1 class="wx-modal-title" id="identityMarkTitle">标记身份</h1>
+        <button class="btn btn-sm btn-secondary" onclick="closeIdentityMarkPanel()">关闭</button>
+      </div>
+      <div class="wx-modal-body">
+        <p class="im-tip">仅本机可见的推理记录：选择你对该玩家身份的判断，会以角色名标签显示在私聊列表中。</p>
+        <div id="identityMarkOptions"></div>
+      </div>
+      <div class="wx-modal-footer">
+        <button class="btn btn-sm btn-secondary" onclick="clearIdentityMark()">清除标记</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 通用确认弹窗 -->
   <div id="wxConfirm" class="wx-modal" style="display:none; z-index:450;">
     <div class="wx-modal-dialog" style="max-width:340px;">
