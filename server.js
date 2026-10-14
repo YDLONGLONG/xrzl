@@ -1116,13 +1116,29 @@ ${playerInfo}
   }
 
   // 聊天
-  socket.on('chat:send', ({ content, channel, targetId }) => {
+  // 图片消息上限（压缩后的 base64 字符数，约 320KB）
+  const CHAT_IMAGE_MAX_CHARS = 320 * 1024;
+  // 服务端只做格式与体积兜底校验，压缩工作由客户端完成
+  function sanitizeChatImage(image) {
+    if (!image || typeof image.data !== 'string') return null;
+    if (!image.data.startsWith('data:image/')) return null;
+    if (image.data.length > CHAT_IMAGE_MAX_CHARS) return null;
+    return {
+      data: image.data,
+      w: Math.max(1, Math.min(2000, Number(image.w) || 0)),
+      h: Math.max(1, Math.min(2000, Number(image.h) || 0))
+    };
+  }
+
+  socket.on('chat:send', ({ content, channel, targetId, image }) => {
     const result = getPlayerRoom(socket.id);
     if (!result) return;
     const { roomId, room } = result;
     const engine = gameEngines.get(roomId);
+    const safeImage = sanitizeChatImage(image);
+    const text = String(content == null ? '' : content);
     if (engine && room.gameStarted) {
-      engine.sendChat(socket.id, content, channel, targetId);
+      engine.sendChat(socket.id, text, channel, targetId, safeImage);
     } else {
       // 大厅聊天
       const from = room.players.get(socket.id);
@@ -1133,19 +1149,105 @@ ${playerInfo}
         fromName: from.name,
         fromSeat: from.seat,
         isDead: false,
-        content: content.substring(0, 500),
+        content: text.substring(0, 500),
         timestamp: Date.now()
+      };
+      if (safeImage) baseMsg.image = safeImage;
+      // 大厅消息同样入档，便于撤回（同样不限制时间）
+      const pushLobbyLog = (m) => {
+        if (!room.lobbyChatLog) room.lobbyChatLog = [];
+        room.lobbyChatLog.push(m);
+        if (room.lobbyChatLog.length > 200) room.lobbyChatLog.shift();
       };
       if (channel === 'whisper' && targetId) {
         const to = room.players.get(targetId);
         if (!to) { socket.emit('room:error', { message: '私聊对象不存在' }); return; }
         if (to.id === socket.id) { socket.emit('room:error', { message: '不能和自己私聊' }); return; }
-        io.to(targetId).emit('chat:message', { ...baseMsg, channel: 'whisper', toId: targetId });
-        io.to(socket.id).emit('chat:message', { ...baseMsg, channel: 'whisper', toId: targetId });
+        const whMsg = { ...baseMsg, channel: 'whisper', toId: targetId };
+        io.to(targetId).emit('chat:message', whMsg);
+        io.to(socket.id).emit('chat:message', whMsg);
+        pushLobbyLog(whMsg);
       } else {
-        io.to(roomId).emit('chat:message', { ...baseMsg, channel: 'public' });
+        const pubMsg = { ...baseMsg, channel: 'public' };
+        io.to(roomId).emit('chat:message', pubMsg);
+        pushLobbyLog(pubMsg);
       }
     }
+  });
+
+  // 公开公告（伪装身份用：仅作为公聊消息展示，不触发任何角色能力）
+  // 仅允许真实具备公开公告能力的角色，前缀与该角色真实公告格式一致
+  const ANNOUNCE_ROLE_PRESETS = {
+    gossip: { prefix: '【造谣者声明】', maxLen: 120, script: 'bmr' },
+    moonchild: { prefix: '【月之子选择】我选择 ', maxLen: 60, script: 'bmr' }
+  };
+  socket.on('chat:announce', ({ roleId, text }) => {
+    const preset = ANNOUNCE_ROLE_PRESETS[roleId];
+    if (!preset) return;
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId, room } = result;
+    // 剧本校验：该角色必须存在于当前房间所用剧本中
+    if (preset.script !== (room.script || 'tb')) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    const body = String(text || '').trim().slice(0, preset.maxLen);
+    if (!body) return;
+
+    // 每人 3 秒节流，避免刷屏
+    if (!room.announceCooldown) room.announceCooldown = {};
+    const now = Date.now();
+    if (now - (room.announceCooldown[socket.id] || 0) < 3000) {
+      socket.emit('room:error', { message: '公告发送过于频繁，请稍候' });
+      return;
+    }
+    room.announceCooldown[socket.id] = now;
+
+    // 与真实公开公告（造谣者声明 / 月之子选择）保持完全一致的消息结构：
+    // 带发送者的公聊消息，不使用 isSystem 广播样式
+    const annMsg = {
+      id: Date.now() + Math.random(),
+      fromId: socket.id,
+      fromName: player.name,
+      fromSeat: player.seat,
+      isDead: !player.isAlive,
+      content: preset.prefix + body,
+      channel: 'public',
+      timestamp: now
+    };
+    if (room.gameState && room.gameState.chatLog) room.gameState.chatLog.push(annMsg);
+    io.to(roomId).emit('chat:message', annMsg);
+  });
+
+  // 撤回消息：仅能撤回本人发送的消息，且不限制时间
+  socket.on('chat:recall', ({ id }) => {
+    if (id === undefined || id === null) return;
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId, room } = result;
+    if (!room.players.get(socket.id)) return;
+
+    // 游戏内与大厅的消息分别存放，两处都找一遍
+    const logs = [];
+    if (room.gameState && Array.isArray(room.gameState.chatLog)) logs.push(room.gameState.chatLog);
+    if (Array.isArray(room.lobbyChatLog)) logs.push(room.lobbyChatLog);
+
+    let target = null;
+    for (const log of logs) {
+      const found = log.find(m => String(m.id) === String(id));
+      if (found) { target = found; break; }
+    }
+    if (!target) { socket.emit('room:error', { message: '该消息无法撤回' }); return; }
+    if (target.fromId !== socket.id) { socket.emit('room:error', { message: '只能撤回自己的消息' }); return; }
+    if (target.recalled) return;
+
+    target.recalled = true;
+    // 释放图片等大字段占用的内存
+    target.content = '';
+    delete target.image;
+
+    io.to(roomId).emit('chat:recall', { id: target.id });
   });
 
   // ========== AI 小助手 ==========
@@ -1162,9 +1264,14 @@ ${playerInfo}
 - 使用中文回复
 - 不要透露具体玩家的角色信息`;
 
-  socket.on('ai:chat', async ({ message, history }) => {
+  socket.on('ai:chat', async ({ message, history, channel }) => {
     const result = getPlayerRoom(socket.id);
     if (!result) return;
+    // 仅主房间（公聊）可呼叫小染，私聊与死者频道拒绝
+    if (channel !== 'public') {
+      socket.emit('ai:error', { message: '只有主房间内才能呼叫小染 AI' });
+      return;
+    }
     const { roomId } = result;
     const playerName = (result.room.players.get(socket.id) || {}).name || '玩家';
 

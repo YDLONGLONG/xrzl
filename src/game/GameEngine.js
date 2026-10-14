@@ -688,7 +688,7 @@ class GameEngine {
   }
 
   // 发送聊天消息
-  sendChat(fromId, message, type, toId) {
+  sendChat(fromId, message, type, toId, image) {
     const gs = this.room.gameState;
     const from = this.room.players.get(fromId);
     if (!from) return;
@@ -703,6 +703,8 @@ class GameEngine {
       timestamp: Date.now(),
       type: type // 'public', 'whisper', 'dead'
     };
+    // 图片消息：已由客户端压缩，服务端只做体积/格式兜底校验
+    if (image && image.data) chatMsg.image = image;
 
     if (type === 'public') {
       // 夜晚禁言（死者频道和私聊不禁）
@@ -751,6 +753,7 @@ class GameEngine {
           fromName: '系统',
           fromSeat: -1,
           isDead: false,
+          isSystem: true,
           content: `${from.name} 和 ${to.name} 正在私聊`,
           timestamp: now,
           type: 'public',

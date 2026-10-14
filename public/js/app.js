@@ -27,10 +27,14 @@ window.addEventListener('DOMContentLoaded', () => {
   // 初始化语音模块
   VoiceManager.init(socket);
   checkReconnectInfo();
+  // 进入系统：弹出昵称登录框
+  showLoginModal();
+  // 初始化中央聊天框（显示空状态提示）
+  renderChatMessages();
+  renderSessionList();
+  updateChatInputVisibility();
   
   // 回车提交
-  $('createName').addEventListener('keydown', e => { if (e.key === 'Enter') createRoom(); });
-  $('joinName').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
   $('joinRoomId').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
 
   // 移动端：点击聊天标签栏（拖拽区域）切换聊天面板
@@ -167,6 +171,7 @@ function initSocketEvents() {
     clearReconnectInfo();
     saveSession();
     showGameView();
+    addSystemChatMessage(`已创建房间 ${roomId}，等待其他玩家加入`);
   });
 
   socket.on('room:joined', ({ roomId, playerId }) => {
@@ -177,6 +182,7 @@ function initSocketEvents() {
     clearReconnectInfo();
     saveSession();
     showGameView();
+    addSystemChatMessage(`已进入房间 ${roomId}`);
   });
 
   socket.on('room:reconnected', ({ roomId, playerId, gameStarted }) => {
@@ -188,6 +194,7 @@ function initSocketEvents() {
     saveSession();
     showGameView();
     showToast('重新连接成功！', 'success');
+    addSystemChatMessage(`已重新连接到房间 ${roomId}`);
     // 关闭可能打开的断线遮罩
     const overlay = $('disconnectOverlay');
     if (overlay) overlay.style.display = 'none';
@@ -196,26 +203,25 @@ function initSocketEvents() {
   socket.on('room:playerDisconnected', ({ name }) => {
     if (hasLeftRoom) return;
     showToast(`玩家 ${name} 已断线，AI将托管其行动`);
+    addSystemChatMessage(`${name} 已断线，暂由 AI 托管`);
   });
 
   socket.on('room:playerReconnected', ({ name }) => {
     if (hasLeftRoom) return;
     showToast(`玩家 ${name} 已重新连接`, 'success');
+    addSystemChatMessage(`${name} 已重新连接`);
   });
 
   socket.on('room:stateUpdate', (state) => {
     if (hasLeftRoom) return;
     const prevScript = currentState && currentState.script;
+    // 房间动态（玩家加入/离开、游戏开始）→ 系统消息
+    diffRoomDynamics(currentState, state);
     currentState = state;
-    // 房主才显示设置按钮
-    const settingsBtn = $('settingsBtn');
-    if (settingsBtn) {
-      settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
-    }
     renderGameState(state);
     // 如果角色总览面板已打开，重新渲染以反映剧本切换
     const roPanel = document.getElementById('roleOverviewPanel');
-    if (roPanel && roPanel.style.display !== 'none') openRoleOverview();
+    if (roPanel && roPanel.style.display !== 'none') renderRoleOverview();
     // 剧本切换时：概率面板若已打开，重载配置和 META（服务端会重置 probConfig）
     if (prevScript && prevScript !== state.script) {
       const probPanel = document.getElementById('probSettingsPanel');
@@ -231,15 +237,10 @@ function initSocketEvents() {
   socket.on('game:stateUpdate', (state) => {
     if (hasLeftRoom) return;
     currentState = state;
-    // 房主才显示设置按钮
-    const settingsBtn = $('settingsBtn');
-    if (settingsBtn) {
-      settingsBtn.style.display = state.isHost ? 'inline-block' : 'none';
-    }
     renderGameState(state);
     // 如果角色总览面板已打开，重新渲染以反映剧本切换
     const roPanel = document.getElementById('roleOverviewPanel');
-    if (roPanel && roPanel.style.display !== 'none') openRoleOverview();
+    if (roPanel && roPanel.style.display !== 'none') renderRoleOverview();
   });
 
   socket.on('room:error', ({ message }) => {
@@ -322,10 +323,23 @@ function initSocketEvents() {
     addChatMessage(msg);
   });
 
+  // 消息撤回（不限时间）
+  socket.on('chat:recall', ({ id }) => {
+    if (hasLeftRoom) return;
+    if (id === undefined || id === null) return;
+    const target = chatMessages.find(m => String(m.id) === String(id));
+    if (!target) return;
+    target.recalled = true;
+    target.content = '';
+    delete target.image;
+    renderChatMessages();
+  });
+
   // AI 小助手事件
   socket.on('ai:start', ({ id, playerName }) => {
     isAiThinking = true;
-    aiPendingMessages[id] = { content: '', playerName, chunks: [] };
+    // 记录触发本次请求的本地消息，便于撤回时配对
+    aiPendingMessages[id] = { content: '', playerName, chunks: [], triggerId: lastAiUserMsgId };
     renderChatMessages();
   });
 
@@ -340,9 +354,10 @@ function initSocketEvents() {
     if (pending) {
       aiChatHistory.push({ role: 'assistant', content: pending.content });
       aiChatHistory = aiChatHistory.slice(-20);
+      const aiMsgId = 'ai_msg_' + id;
       // 将 AI 消息转为普通聊天消息存入 chatMessages
       chatMessages.push({
-        id: 'ai_msg_' + id,
+        id: aiMsgId,
         fromId: 'ai_assistant',
         fromName: '小染 AI',
         fromSeat: -1,
@@ -350,18 +365,40 @@ function initSocketEvents() {
         isAi: true,
         content: pending.content,
         channel: 'public',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        // 与触发它的本地消息配对
+        aiTriggerId: pending.triggerId
       });
+      // 反向记录，便于从本地消息定位这条回复
+      const trigger = chatMessages.find(m => m.id === pending.triggerId);
+      if (trigger) trigger.aiReplyId = aiMsgId;
       delete aiPendingMessages[id];
       renderChatMessages();
     }
     isAiThinking = false;
+    lastAiUserMsgId = null;
   });
 
   socket.on('ai:error', ({ message }) => {
     isAiThinking = false;
     aiPendingMessages = {};
-    showToast(message || 'AI请求失败');
+    // 失败同样以聊天气泡呈现，不用提示框
+    const errId = 'ai_err_' + Date.now() + Math.random();
+    chatMessages.push({
+      id: errId,
+      fromId: 'ai_assistant',
+      fromName: '小染 AI',
+      fromSeat: -1,
+      isDead: false,
+      isAi: true,
+      content: message || '抱歉，我暂时无法回答，请稍后再试。',
+      channel: 'public',
+      timestamp: Date.now(),
+      aiTriggerId: lastAiUserMsgId
+    });
+    const trigger = chatMessages.find(m => m.id === lastAiUserMsgId);
+    if (trigger) trigger.aiReplyId = errId;
+    lastAiUserMsgId = null;
     renderChatMessages();
   });
 
@@ -421,11 +458,11 @@ function initSocketEvents() {
     godState = null;
     $('godPanel').style.display = 'none';
     $('godContent').style.display = 'none';
-    $('godLoginForm').style.display = 'block';
+    $('godLoginForm').style.display = 'flex';
     $('godPassword').value = '';
     $('godLoginError').style.display = 'none';
-    $('godBtn').style.background = 'rgba(155,89,182,0.3)';
-    $('godBtn').style.color = '#d4a5e8';
+    $('godBtn').style.background = 'rgba(155,89,182,0.1)';
+    $('godBtn').style.color = '#8E44AD';
   });
 }
 
@@ -530,10 +567,10 @@ function onResizeEnd() {
   _resizerState.active = null;
 }
 
-// ========== 连接状态 ==========
+// ========== 连接状态（未加入房间时显示在页面顶部居中） ==========
 function updateConnStatus(status) {
-  const dot = $('connStatusDot');
-  const text = $('connStatusText');
+  const dot = $('connStatusDotTop');
+  const text = $('connStatusTextTop');
   if (!dot || !text) return;
 
   dot.className = 'conn-dot';
@@ -541,27 +578,49 @@ function updateConnStatus(status) {
     case 'connected':
       dot.classList.add('conn-connected');
       text.textContent = '已连接';
-      text.style.color = '#2ecc71';
+      text.style.color = '#07C160';
       break;
     case 'disconnected':
       dot.classList.add('conn-disconnected');
       text.textContent = '已断开';
-      text.style.color = '#e74c3c';
+      text.style.color = '#FA5151';
       break;
     case 'connecting':
     default:
       dot.classList.add('conn-connecting');
       text.textContent = '连接中...';
-      text.style.color = '#f39c12';
+      text.style.color = '#FF9500';
       break;
   }
 }
 
 // ========== 视图切换 ==========
 function showGameView() {
-  $('homeView').style.display = 'none';
-  $('gameView').style.display = 'grid';
+  // 兜底：自动重连成功时关闭登录框
+  const loginModal = $('loginModal');
+  if (loginModal) loginModal.style.display = 'none';
+  updateRailAvatar();
+  // 左侧：隐藏大厅表单，显示房间信息 + 会话列表
+  const lobby = $('homeView');
+  const roomPanel = $('roomPanel');
+  if (lobby) lobby.style.display = 'none';
+  if (roomPanel) roomPanel.style.display = 'flex';
+  // 右侧区域：仅加入房间后显示
+  const memberPanel = $('memberPanel');
+  if (memberPanel) memberPanel.style.display = 'flex';
+  // 已加入房间：隐藏顶部连接状态
+  const topConn = $('topConn');
+  if (topConn) topConn.style.display = 'none';
+  const gameView = $('gameView');
+  if (gameView) {
+    gameView.classList.add('with-member');
+    gameView.style.display = 'grid';
+  }
+  // 顶部右侧操作（上帝视角 / 退出群聊）：仅房间内显示
+  const headerActions = $('headerActions');
+  if (headerActions) headerActions.style.display = 'flex';
   $('gameOverPanel').style.display = 'none';
+  updateChatInputVisibility();
 }
 
 function backToHome() {
@@ -608,20 +667,115 @@ function backToHome() {
   isGodView = false;
   godState = null;
   isReconnecting = false;
+  roleInfoHtml = '';
+  systemMessageHtml = '';
+  systemMessageClass = '';
+  const cmEl = $('centerMessage');
+  if (cmEl) { cmEl.innerHTML = ''; cmEl.style.display = 'none'; }
+  const cmBtn = $('cmToggle');
+  if (cmBtn) cmBtn.style.display = 'none';
 
-  $('homeView').style.display = 'flex';
-  $('gameView').style.display = 'none';
+  // 清空顶部栏信息（当前聊天对象 / 天数 / 阶段 / 人数配置）
+  const chatTargetEl = $('headerChatTarget');
+  if (chatTargetEl) chatTargetEl.textContent = '';
+  const dayCountEl = $('headerDayCount');
+  if (dayCountEl) dayCountEl.textContent = '';
+  const phaseEl = $('headerPhase');
+  if (phaseEl) {
+    phaseEl.textContent = '';
+    phaseEl.className = 'phase-badge';
+    phaseEl.style.display = 'none';
+  }
+  const roomCompEl = $('headerRoomComp');
+  if (roomCompEl) roomCompEl.innerHTML = '';
+
+  // 左侧：恢复大厅表单，隐藏房间信息/会话列表
+  const lobbyEl = $('homeView');
+  const roomPanelEl = $('roomPanel');
+  if (lobbyEl) lobbyEl.style.display = 'flex';
+  if (roomPanelEl) roomPanelEl.style.display = 'none';
+  // 右侧区域：回到大厅时隐藏
+  const memberPanelEl = $('memberPanel');
+  if (memberPanelEl) memberPanelEl.style.display = 'none';
+  const scriptPanelEl = $('scriptPanel');
+  if (scriptPanelEl) {
+    scriptPanelEl.style.display = 'none';
+    scriptPanelEl.innerHTML = '';
+  }
+  const gv = $('gameView');
+  if (gv) {
+    gv.classList.remove('with-member');
+    gv.style.display = 'grid';
+  }
   $('gameOverPanel').style.display = 'none';
   $('godPanel').style.display = 'none';
-  $('createName').value = '';
+  systemMessageHtml = '';
+  systemMessageClass = '';
+  renderChatMessages();
   $('joinRoomId').value = '';
-  $('joinName').value = '';
+
+  updateChatInputVisibility();
+
+  // 顶部右侧操作按钮：无房间时隐藏
+  const headerActionsEl = $('headerActions');
+  if (headerActionsEl) headerActionsEl.style.display = 'none';
+
+  // 回到首页：重新显示顶部连接状态
+  const topConnEl = $('topConn');
+  if (topConnEl) topConnEl.style.display = 'flex';
 
   checkReconnectInfo();
 
   setTimeout(() => {
     hasLeftRoom = false;
   }, 300);
+}
+
+// ========== 登录（昵称） ==========
+const LOGIN_NAME_KEY = 'xrzl_login_name';
+
+function getLoginName() {
+  try { return localStorage.getItem(LOGIN_NAME_KEY) || ''; } catch (e) { return ''; }
+}
+
+// 左侧栏头像：显示当前昵称的首字符
+function updateRailAvatar() {
+  const el = $('railAvatar');
+  if (!el) return;
+  const name = (myName || getLoginName() || '').trim();
+  // 用 Array.from 兼容 emoji 等代理对字符
+  el.textContent = name ? Array.from(name)[0] : '血';
+}
+
+// 进入系统时弹出昵称登录框
+function showLoginModal() {
+  const modal = $('loginModal');
+  if (!modal) return;
+  updateRailAvatar();
+  const input = $('loginName');
+  const saved = getLoginName();
+  if (input && saved) input.value = saved;
+  const err = $('loginError');
+  if (err) err.classList.remove('show');
+  modal.style.display = 'flex';
+  setTimeout(() => { if (input) input.focus(); }, 60);
+}
+
+function confirmLogin() {
+  const input = $('loginName');
+  const name = (input && input.value ? input.value : '').trim();
+  if (!name) {
+    const err = $('loginError');
+    if (err) err.classList.add('show');
+    if (input) input.focus();
+    return;
+  }
+  try { localStorage.setItem(LOGIN_NAME_KEY, name); } catch (e) {}
+  myName = name;
+  updateRailAvatar();
+  const modal = $('loginModal');
+  if (modal) modal.style.display = 'none';
+  showToast(`欢迎，${name}`, 'success');
 }
 
 // ========== 首页操作 ==========
@@ -642,7 +796,7 @@ function checkReconnectInfo() {
       card.style.display = 'none';
       return;
     }
-    $('reconnectInfo').innerHTML = `房间码：<b style="color:#f39c12;">${roomId}</b>　昵称：<b style="color:#f39c12;">${escapeHtml(name)}</b>`;
+    $('reconnectInfo').innerHTML = `房间码：<b style="color:#FF9500;">${roomId}</b>　昵称：<b style="color:#FF9500;">${escapeHtml(name)}</b>`;
     card.style.display = 'block';
   } catch(e) {
     card.style.display = 'none';
@@ -655,6 +809,36 @@ function clearReconnectInfo() {
     sessionStorage.removeItem('reconnect_name');
     sessionStorage.removeItem('reconnect_time');
   } catch(e) {}
+}
+
+// ========== 通用确认弹窗 ==========
+let _wxConfirmHandler = null;
+
+function showWxConfirm(message, onOk, okText) {
+  const panel = $('wxConfirm');
+  if (!panel) {
+    if (window.confirm(message)) { if (onOk) onOk(); }
+    return;
+  }
+  const textEl = $('wxConfirmText');
+  if (textEl) textEl.textContent = message;
+  const okBtn = $('wxConfirmOk');
+  if (okBtn) {
+    okBtn.textContent = okText || '确定';
+    okBtn.onclick = () => {
+      const fn = _wxConfirmHandler;
+      closeWxConfirm();
+      if (fn) fn();
+    };
+  }
+  _wxConfirmHandler = onOk || null;
+  panel.style.display = 'flex';
+}
+
+function closeWxConfirm() {
+  const panel = $('wxConfirm');
+  if (panel) panel.style.display = 'none';
+  _wxConfirmHandler = null;
 }
 
 function reconnectRoom() {
@@ -672,12 +856,38 @@ function reconnectRoom() {
   socket.emit('room:join', { roomId, playerName: name, isReconnect: true });
 }
 
+// 是否存在可重新连接的游戏房间
+function hasPendingReconnect() {
+  const card = $('reconnectCard');
+  return !!(card && card.style.display !== 'none');
+}
+
+// 放弃重连：清空本地记录
+function abandonReconnect() {
+  clearReconnectInfo();
+  checkReconnectInfo();
+}
+
 function createRoom() {
-  const name = $('createName').value.trim();
+  const name = getLoginName() || myName || '';
   if (!name) {
-    showError('请输入昵称', 'createError');
+    showLoginModal();
+    showError('请先输入昵称', 'createError');
     return;
   }
+  if (hasPendingReconnect()) {
+    showWxConfirm(
+      '你还有一个可以重新连接的游戏房间，创建新房间将放弃该对局。确定继续吗？',
+      () => doCreateRoom(name),
+      '放弃并创建'
+    );
+    return;
+  }
+  doCreateRoom(name);
+}
+
+function doCreateRoom(name) {
+  abandonReconnect();
   hasLeftRoom = false;
   myName = name;
   socket.emit('room:create', { playerName: name });
@@ -685,7 +895,7 @@ function createRoom() {
 
 function joinRoom() {
   const roomId = $('joinRoomId').value.trim().toUpperCase();
-  const name = $('joinName').value.trim();
+  const name = getLoginName() || myName || '';
   if (!roomId || roomId.length !== 4) {
     showError('请输入4位房间码', 'joinError');
     return;
@@ -694,6 +904,19 @@ function joinRoom() {
     showError('请输入昵称', 'joinError');
     return;
   }
+  if (hasPendingReconnect()) {
+    showWxConfirm(
+      '你还有一个可以重新连接的游戏房间，加入其他房间将放弃该对局。确定继续吗？',
+      () => doJoinRoom(roomId, name),
+      '放弃并加入'
+    );
+    return;
+  }
+  doJoinRoom(roomId, name);
+}
+
+function doJoinRoom(roomId, name) {
+  abandonReconnect();
   hasLeftRoom = false;
   myName = name;
   socket.emit('room:join', { roomId, playerName: name });
@@ -701,7 +924,7 @@ function joinRoom() {
 
 async function leaveRoom() {
   if (hasLeftRoom) return;
-  const ok = await showConfirm('确定要离开房间吗？', { type: 'warning', title: '离开房间', confirmText: '离开', cancelText: '取消' });
+  const ok = await showConfirm('确定要退出群聊吗？', { type: 'warning', title: '退出群聊', confirmText: '退出', cancelText: '取消' });
   if (ok) {
     backToHome();
   }
@@ -791,23 +1014,14 @@ function renderGameState(state) {
   updateHeader(state);
   renderSeats(state);
   renderCenter(state);
+  renderScriptPanel(state);
   renderRoleCard(state);
   if (state.players) updateWhisperTargets(state.players);
+  renderSessionList();
   handleNightOverlay(state);
 }
 
 function updateHeader(state) {
-  $('headerRoomId').textContent = `房间: ${state.roomId || myRoomId}`;
-  $('headerRoomId').title = '点击复制房间号';
-  $('headerRoomId').style.cursor = 'pointer';
-  $('headerRoomId').onclick = () => {
-    const roomId = state.roomId || myRoomId;
-    if (roomId) {
-      copyToClipboard(roomId);
-      showToast('房间号已复制', 'success');
-    }
-  };
-
   // 显示角色数量配置
   const playerCount = state.players ? state.players.filter(p => p.seat !== -1).length : 0;
   const compEl = $('headerRoomComp');
@@ -840,6 +1054,41 @@ function updateHeader(state) {
   const phaseBadge = $('headerPhase');
   phaseBadge.textContent = phaseText;
   phaseBadge.className = 'phase-badge ' + phaseClass;
+  // 大厅阶段不显示阶段徽章；顶部中间改为展示当前会话对象
+  phaseBadge.style.display = (!state.gameStarted || state.phase === 'LOBBY') ? 'none' : 'inline-block';
+  updateHeaderChatTarget();
+}
+
+// 顶部中间：动态显示当前聊天对象（房间名 / 私聊对象）
+function updateHeaderChatTarget() {
+  const el = $('headerChatTarget');
+  if (!el) return;
+  let text = '';
+  if (currentChatChannel === 'whisper') {
+    const target = (currentState && currentState.players)
+      ? currentState.players.find(p => p.id === whisperTargetId) : null;
+    text = target
+      ? `${target.seat >= 0 ? (target.seat + 1) + '号 ' : ''}${target.name}`
+      : '私聊';
+  } else if (currentChatChannel === 'dead') {
+    text = '死者频道';
+  } else {
+    const roomId = (currentState && currentState.roomId) || myRoomId || '';
+    text = roomId ? `房间 ${roomId}` : '游戏房间';
+  }
+  el.textContent = text;
+}
+
+// 有聊天对象（已进入房间 / 已选择私聊对象）时才显示底部输入框
+function updateChatInputVisibility() {
+  const area = $('chatInputArea');
+  if (!area) return;
+  const inRoom = !!myRoomId;
+  const hasTarget = currentChatChannel === 'whisper' ? !!whisperTargetId : true;
+  area.style.display = (inRoom && hasTarget) ? 'flex' : 'none';
+  // 🤖 小染按钮：仅主房间（公聊）可用
+  const aiBtn = area.querySelector('.ai-trigger-btn:not(.announce-trigger-btn)');
+  if (aiBtn) aiBtn.style.display = currentChatChannel === 'public' ? '' : 'none';
 }
 
 function renderSeats(state) {
@@ -863,10 +1112,10 @@ function renderSeats(state) {
 
       let markHtml = '';
       if (isDead) markHtml += '<span class="seat-mark dead-mark">死亡</span>';
-      if (p.isHost) markHtml += '<span class="seat-mark" style="color:#d4af37;">房主</span>';
-      if (state.gameStarted && p.voteToken > 0 && isDead) markHtml += '<span class="seat-mark" style="color:#3498db;">余1票</span>';
+      if (p.isHost) markHtml += '<span class="seat-mark" style="color:#07C160;">房主</span>';
+      if (state.gameStarted && p.voteToken > 0 && isDead) markHtml += '<span class="seat-mark" style="color:#10AEFF;">余1票</span>';
       if (!state.gameStarted && p.isReady) markHtml += '<span class="seat-mark good">已准备</span>';
-      if (p.isConnected === false) markHtml += '<span class="seat-mark" style="color:#e67e22; background:rgba(230,126,34,0.15);">断线</span>';
+      if (p.isConnected === false) markHtml += '<span class="seat-mark" style="color:#F5822B; background:rgba(245,130,43,0.15);">断线</span>';
 
       const canNominate = (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE') &&
                           state.gameStarted && me && me.isAlive && !isDead;
@@ -882,10 +1131,9 @@ function renderSeats(state) {
         ${kickBtn}
       </div>`;
     } else if (!state.gameStarted) {
-      html += `<div class="game-seat" onclick="sitDown(${i})">
+      html += `<div class="game-seat" onclick="sitDown(${i})" title="点击入座">
         <div class="seat-num">${i+1}</div>
-        <div style="color:#666; font-size:12px;">空座位</div>
-        <div style="color:#d4af37; font-size:11px;">点击入座</div>
+        <div class="seat-name" style="color:#B2B2B2;">空位</div>
       </div>`;
     }
     // 游戏开始后空座位不显示
@@ -893,10 +1141,108 @@ function renderSeats(state) {
   container.innerHTML = html;
 }
 
+// 右侧剧本选择（仅大厅阶段显示）
+function renderScriptPanel(state) {
+  const panel = $('scriptPanel');
+  if (!panel) return;
+  if (!state || state.gameStarted) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  const isHost = state.hostId === myId;
+  const currentScript = state.script || 'tb';
+  const scriptList = state.scriptList || [{ id: 'tb', name: '灾祸之酿' }, { id: 'bmr', name: '黯月初升' }];
+
+  const cardsHtml = scriptList.map(s => {
+    const info = SCRIPT_INFO[s.id] || { icon: '📜', desc: '', color: '#888', nameEn: '' };
+    const isActive = s.id === currentScript;
+    const cursor = isHost ? 'cursor:pointer;' : 'cursor:default; opacity:0.85;';
+    const onClickAttr = isHost ? `onclick="setScript('${s.id}')"` : '';
+    const borderColor = isActive ? info.color : 'rgba(0,0,0,0.06)';
+    const bgGrad = isActive
+      ? `linear-gradient(145deg, ${info.color}1a 0%, ${info.color}08 40%, rgba(0,0,0,0.015) 100%)`
+      : 'linear-gradient(145deg, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.01) 100%)';
+    const shadow = isActive
+      ? `0 4px 24px ${info.color}33, inset 0 1px 0 rgba(0,0,0,0.05)`
+      : '0 2px 12px rgba(0,0,0,0.05), inset 0 1px 0 rgba(0,0,0,0.03)';
+    const textColor = isActive ? info.color : '#191919';
+    return `<div ${onClickAttr} class="script-card" style="border:1px solid ${borderColor}; background:${bgGrad}; box-shadow:${shadow}; ${cursor} transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
+      <div class="script-card-highlight" style="position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, ${info.color}66, transparent); opacity:${isActive ? '1' : '0.3'};"></div>
+      <div class="script-card-head">
+        <div class="script-icon" style="width:32px; height:32px; border-radius:8px; background:${isActive ? info.color + '22' : 'rgba(0,0,0,0.04)'}; display:flex; align-items:center; justify-content:center; font-size:1.15em; flex-shrink:0; transition:all 0.3s;">${info.icon}</div>
+        <div class="script-card-titles">
+          <div class="script-card-name" style="font-weight:600; color:${textColor}; font-size:14px; letter-spacing:0.3px;">${s.name}</div>
+          <div class="script-card-en" style="font-size:10.5px; color:#8c8c8c; font-weight:400; letter-spacing:0.5px; margin-top:2px;">${info.nameEn}</div>
+        </div>
+        ${isActive ? `<div class="script-card-check" style="width:18px; height:18px; border-radius:50%; background:${info.color}; display:flex; align-items:center; justify-content:center; font-size:11px; color:#fff; font-weight:bold; flex-shrink:0;">✓</div>` : ''}
+      </div>
+      <div class="script-card-desc" style="font-size:11.5px; color:${isActive ? '#4f4f4f' : '#8c8c8c'}; line-height:1.5; transition:color 0.3s;">${info.desc}</div>
+    </div>`;
+  }).join('');
+
+  panel.style.display = 'block';
+  panel.innerHTML = `<div class="wx-script-title">选择剧本${isHost ? '（房主可切换）' : ''}</div><div class="script-list">${cardsHtml}</div>`;
+}
+
+// 中央系统信息（游戏状态 / 操作提示）
+let systemMessageHtml = '';
+let systemMessageClass = '';
+// 我的身份信息（HTML）
+let roleInfoHtml = '';
+
+// 组装中央系统信息区（我的身份 + 当前状态）
+function renderCenterMessage() {
+  const el = $('centerMessage');
+  if (!el) return;
+  const btn = $('cmToggle');
+  const hideAll = () => {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+  };
+  // 未加入房间时不显示该区域
+  if (!myRoomId) return hideAll();
+  const parts = [];
+  if (roleInfoHtml) parts.push(roleInfoHtml);
+  if (systemMessageHtml) {
+    parts.push(`<div class="system-status ${systemMessageClass}">${systemMessageHtml}</div>`);
+  }
+  if (parts.length === 0) return hideAll();
+  // 用 flex 保持左右并排（勿用 block，会覆盖 CSS 的 flex 布局）
+  el.style.display = 'flex';
+  el.innerHTML = parts.join('');
+  if (btn) btn.style.display = 'flex';
+  applyCenterMessageCollapsed();
+  positionCmToggle();
+}
+
+// ========== 系统信息区收起 / 展开 ==========
+let centerMessageCollapsed = (() => {
+  try { return localStorage.getItem('xrzl_cm_collapsed') === '1'; } catch (e) { return false; }
+})();
+
+function applyCenterMessageCollapsed() {
+  const el = $('centerMessage');
+  const btn = $('cmToggle');
+  if (el) el.classList.toggle('collapsed', centerMessageCollapsed);
+  if (btn) {
+    btn.classList.toggle('collapsed', centerMessageCollapsed);
+    btn.title = centerMessageCollapsed ? '展开信息区' : '收起信息区';
+  }
+}
+
+function toggleCenterMessage() {
+  centerMessageCollapsed = !centerMessageCollapsed;
+  try { localStorage.setItem('xrzl_cm_collapsed', centerMessageCollapsed ? '1' : '0'); } catch (e) {}
+  applyCenterMessageCollapsed();
+}
+
 function renderCenter(state) {
-  const msg = $('centerMessage');
   const actionPanel = $('actionPanel');
   const confirmBar = $('confirmBar');
+  // 公开公告按钮随当前剧本动态显隐
+  updateAnnounceButtonVisibility();
   
   let html = '';
   let msgClass = '';
@@ -907,43 +1253,8 @@ function renderCenter(state) {
     const me = state.players?.find(p => p.id === myId);
     const seatedCount = (state.players || []).filter(p => p.seat !== -1).length;
     const isHost = state.hostId === myId;
-    const currentScript = state.script || 'tb';
-    const scriptList = state.scriptList || [{ id: 'tb', name: '灾祸之酿' }, { id: 'bmr', name: '黯月初升' }];
-
-    // 构建剧本卡片
-    const scriptCardsHtml = scriptList.map(s => {
-      const info = SCRIPT_INFO[s.id] || { icon: '📜', desc: '', color: '#888', nameEn: '' };
-      const isActive = s.id === currentScript;
-      const cursor = isHost ? 'cursor:pointer;' : 'cursor:default; opacity:0.85;';
-      const onClickAttr = isHost ? `onclick="setScript('${s.id}')"` : '';
-      const borderColor = isActive ? info.color : 'rgba(255,255,255,0.1)';
-      const bgGrad = isActive
-        ? `linear-gradient(145deg, ${info.color}1a 0%, ${info.color}08 40%, rgba(255,255,255,0.02) 100%)`
-        : 'linear-gradient(145deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)';
-      const shadow = isActive
-        ? `0 4px 24px ${info.color}33, inset 0 1px 0 rgba(255,255,255,0.08)`
-        : '0 2px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)';
-      const textColor = isActive ? info.color : '#e8e8e8';
-      return `<div ${onClickAttr} class="script-card" style="border:1px solid ${borderColor}; background:${bgGrad}; box-shadow:${shadow}; ${cursor} transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
-        <div class="script-card-highlight" style="position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, ${info.color}66, transparent); opacity:${isActive ? '1' : '0.3'};"></div>
-        <div class="script-card-head">
-          <div class="script-icon" style="width:40px; height:40px; border-radius:10px; background:${isActive ? info.color + '22' : 'rgba(255,255,255,0.06)'}; display:flex; align-items:center; justify-content:center; font-size:1.5em; flex-shrink:0; transition:all 0.3s;">${info.icon}</div>
-          <div class="script-card-titles">
-            <div class="script-card-name" style="font-weight:700; color:${textColor}; font-size:15px; letter-spacing:0.3px;">${s.name}</div>
-            <div class="script-card-en" style="font-size:11px; color:#999; font-weight:400; letter-spacing:0.5px; margin-top:2px;">${info.nameEn}</div>
-          </div>
-          ${isActive ? `<div class="script-card-check" style="width:22px; height:22px; border-radius:50%; background:${info.color}; display:flex; align-items:center; justify-content:center; font-size:12px; color:#1a1a2e; font-weight:bold; box-shadow:0 0 10px ${info.color}88;">✓</div>` : ''}
-        </div>
-        <div class="script-card-desc" style="font-size:12px; color:${isActive ? '#bbb' : '#777'}; line-height:1.5; transition:color 0.3s;">${info.desc}</div>
-      </div>`;
-    }).join('');
-
-    html = `<div class="lobby-content" style="text-align:center;">
-      <h2 style="color:#d4af37; margin-bottom:14px;">游戏大厅</h2>
-      <div class="script-list">${scriptCardsHtml}</div>
-      <p>入座玩家: ${seatedCount}/15（至少需要5人）</p>
-      <p style="margin-top:10px; color:#aaa;">点击左侧空座位入座，准备后房主开始游戏</p>
-    </div>`;
+    // 大厅阶段不在聊天框内显示状态卡片（相关信息由右侧剧本区 / 成员区呈现）
+    html = '';
 
     showAction = true;
     $('actionTitle').textContent = '操作';
@@ -971,9 +1282,9 @@ function renderCenter(state) {
         msgClass = 'night';
         html = '<div style="color:#9b59b6;">🌙 夜幕降临</div>';
         if (state.isYourTurn) {
-          html += '<div style="margin-top:10px; color:#f39c12;">正在等待你的行动...</div>';
+          html += '<div style="margin-top:10px; color:#FF9500;">正在等待你的行动...</div>';
         } else {
-          html += '<div style="margin-top:10px; color:#666;">等待其他玩家行动...</div>';
+          html += '<div style="margin-top:10px; color:#999999;">等待其他玩家行动...</div>';
         }
         break;
 
@@ -984,16 +1295,14 @@ function renderCenter(state) {
 
       case 'DAY_DAWN':
         msgClass = 'dawn';
-        html = '<div style="color:#f39c12;">☀️ 天亮了</div>';
+        html = '<div style="color:#FF9500;">☀️ 天亮了</div>';
         if (state.deathsToAnnounce && state.deathsToAnnounce.length > 0) {
-          html += '<div style="margin-top:15px;">昨晚死亡的玩家：</div>';
-          html += state.deathsToAnnounce.map(d =>
-            `<div style="color:#e74c3c; font-size:1.2em; margin-top:5px;">${d.seat+1}号 ${d.name}</div>`
-          ).join('');
-        } else if (state.nightCount === 0) {
-          html += '<div style="margin-top:15px; color:#27ae60;">平安夜，无人死亡</div>';
+          html += '<div style="margin-top:8px;">昨晚死亡的玩家：</div>';
+          html += `<div class="ss-row">${state.deathsToAnnounce.map(d =>
+            `<span class="ss-chip dead">${d.seat+1}号 ${escapeHtml(d.name)}</span>`
+          ).join('')}</div>`;
         } else {
-          html += '<div style="margin-top:15px; color:#27ae60;">平安夜，无人死亡</div>';
+          html += '<div style="margin-top:8px; color:#06AD56;">平安夜，无人死亡</div>';
         }
         showConfirm = true;
         break;
@@ -1001,17 +1310,17 @@ function renderCenter(state) {
       case 'DAY_DISCUSSION':
         msgClass = '';
         html = `<div>💬 自由讨论中 - 第${state.dayCount}天</div>`;
-        html += '<div style="margin-top:10px; color:#aaa; font-size:0.9em;">点击左侧玩家可提名；全员确认后进入提名投票</div>';
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击左侧玩家可提名；全员确认后进入提名投票</div>';
         showConfirm = true;
         break;
 
       case 'NOMINATION_PHASE':
         msgClass = '';
         html = '<div>📋 提名阶段</div>';
-        html += '<div style="margin-top:10px; color:#aaa; font-size:0.9em;">点击左侧玩家提名；全员确认后结束提名</div>';
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击左侧玩家提名；全员确认后结束提名</div>';
         if (state.nominations && state.nominations.length > 0) {
-          html += '<div style="margin-top:15px;">今日提名：</div>';
-          html += state.nominations.map((n, idx) => {
+          html += '<div style="margin-top:8px;">今日提名：</div>';
+          html += '<div class="ss-grid">' + state.nominations.map((n, idx) => {
             const nom = state.players.find(p => p.id === n.nominatorId);
             const nm = state.players.find(p => p.id === n.nomineeId);
             let resultHtml = '';
@@ -1029,25 +1338,25 @@ function renderCenter(state) {
                 else abstain.push(p);
               });
               const passTag = n.passed
-                ? `<span style="color:#2ecc71; font-weight:bold;">✅ 通过 (${n.voteCount}票)</span>`
-                : `<span style="color:#e74c3c; font-weight:bold;">❌ 未通过 (${n.voteCount}票)</span>`;
-              resultHtml = `<div style="margin:6px 0 8px 0; padding:8px 10px; background:rgba(0,0,0,0.25); border-radius:6px; border-left:3px solid ${n.passed ? '#2ecc71' : '#e74c3c'};">
+                ? `<span style="color:#07C160; font-weight:bold;">✅ 通过 (${n.voteCount}票)</span>`
+                : `<span style="color:#FA5151; font-weight:bold;">❌ 未通过 (${n.voteCount}票)</span>`;
+              resultHtml = `<div style="margin:6px 0 8px 0; padding:8px 10px; background:rgba(0,0,0,0.04); border-radius:6px; border-left:3px solid ${n.passed ? '#07C160' : '#FA5151'};">
                 <div style="margin-bottom:4px;">${passTag}</div>
                 <div style="font-size:0.85em; line-height:1.6;">
-                  <div><span style="color:#2ecc71;">✅ 赞成(${yesVoters.length})：</span><span style="color:#ccc;">${yesVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
-                  <div><span style="color:#e74c3c;">❌ 反对(${noVoters.length})：</span><span style="color:#ccc;">${noVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
-                  ${abstain.length > 0 ? `<div><span style="color:#95a5a6;">⏳ 未投票(${abstain.length})：</span><span style="color:#777;">${abstain.map(p => `${p.seat+1}号`).join(' ')}</span></div>` : ''}
+                  <div><span style="color:#07C160;">✅ 赞成(${yesVoters.length})：</span><span style="color:#4f4f4f;">${yesVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
+                  <div><span style="color:#FA5151;">❌ 反对(${noVoters.length})：</span><span style="color:#4f4f4f;">${noVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
+                  ${abstain.length > 0 ? `<div><span style="color:#999999;">⏳ 未投票(${abstain.length})：</span><span style="color:#999999;">${abstain.map(p => `${p.seat+1}号`).join(' ')}</span></div>` : ''}
                 </div>
               </div>`;
             } else {
               // 投票中或待投票
-              resultHtml = ` <span style="color:#f39c12;">⏳ 投票中</span>`;
+              resultHtml = ` <span style="color:#FF9500;">⏳ 投票中</span>`;
             }
-            return `<div style="margin-top:8px; font-size:0.95em;">
+            return `<div style="font-size:0.95em;">
               <div>${nom ? nom.seat+1 : '?'}号提名 <strong>${nm ? nm.seat+1 : '?'}号 ${nm ? escapeHtml(nm.name) : ''}</strong></div>
               ${resultHtml}
             </div>`;
-          }).join('');
+          }).join('') + '</div>';
         }
         showConfirm = true;
         break;
@@ -1059,8 +1368,8 @@ function renderCenter(state) {
         const nominatorText = defNominator ? `${defNominator.seat+1}号 ${defNominator.name}` : '?';
         const nomineeText = defNominee ? `${defNominee.seat+1}号 ${defNominee.name}` : '?';
         if (state.currentDefensePlayerId === myId) {
-          html = '<div style="color:#e74c3c;">⚖️ 你被提名了！请辩护</div>';
-          html += `<div style="margin-top:8px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominatorText}</span></div>`;
+          html = '<div style="color:#FA5151;">⚖️ 你被提名了！请辩护</div>';
+          html += `<div style="margin-top:8px; font-size:0.9em; color:#666666;">提名者：<span style="color:#FF9500;">${nominatorText}</span></div>`;
           html += '<div style="margin-top:10px;">辩护完毕后点击按钮进入投票</div>';
           showAction = true;
           $('actionTitle').textContent = '辩护';
@@ -1068,20 +1377,20 @@ function renderCenter(state) {
           $('actionButtons').innerHTML = `<button class="btn btn-primary" onclick="endDefense()">辩护完毕</button>`;
         } else {
           const def = state.players.find(p => p.id === state.currentDefensePlayerId);
-          html = `<div style="color:#f39c12;">⚖️ ${def ? def.seat+1+'号 '+def.name : ''} 正在辩护...</div>`;
-          html += `<div style="margin-top:8px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominatorText}</span></div>`;
+          html = `<div style="color:#FF9500;">⚖️ ${def ? def.seat+1+'号 '+def.name : ''} 正在辩护...</div>`;
+          html += `<div style="margin-top:8px; font-size:0.9em; color:#666666;">提名者：<span style="color:#FF9500;">${nominatorText}</span></div>`;
         }
         break;
 
       case 'VOTING':
-        html = '<div style="color:#e74c3c;">🗳️ 投票中</div>';
+        html = '<div style="color:#FA5151;">🗳️ 投票中</div>';
         const curNom = state.nominations ? state.nominations[state.nominations.length-1] : null;
         const nominee = curNom ? state.players.find(p => p.id === curNom.nomineeId) : null;
         const nominator = curNom ? state.players.find(p => p.id === curNom.nominatorId) : null;
         if (nominee) {
           html += `<div style="margin-top:10px; font-size:1.2em;">是否处决 ${nominee.seat+1}号 ${nominee.name}？</div>`;
           if (nominator) {
-            html += `<div style="margin-top:6px; font-size:0.9em; color:#bbb;">提名者：<span style="color:#f39c12;">${nominator.seat+1}号 ${nominator.name}</span></div>`;
+            html += `<div style="margin-top:6px; font-size:0.9em; color:#666666;">提名者：<span style="color:#FF9500;">${nominator.seat+1}号 ${nominator.name}</span></div>`;
           }
         }
 
@@ -1124,15 +1433,15 @@ function renderCenter(state) {
         if (myVote === true || myVote === false) {
           // 已投票：显示当前选择 + 撤回投票按钮（还有人未投时可撤回）
           const voteLabel = myVote === true
-            ? '<span style="color:#2ecc71; font-weight:bold;">✅ 已投赞成</span>'
-            : '<span style="color:#e74c3c; font-weight:bold;">❌ 已投反对</span>';
+            ? '<span style="color:#07C160; font-weight:bold;">✅ 已投赞成</span>'
+            : '<span style="color:#FA5151; font-weight:bold;">❌ 已投反对</span>';
           if (hasUnvoted) {
             $('actionButtons').innerHTML = `
               <div style="text-align:center; margin-bottom:8px;">${voteLabel}</div>
               <button class="btn btn-sm btn-warning" onclick="revokeVote()" style="width:100%;">↩️ 撤回投票</button>
             `;
           } else {
-            $('actionButtons').innerHTML = `<div style="text-align:center;">${voteLabel}<br><span style="color:#aaa; font-size:0.85em;">投票即将结束...</span></div>`;
+            $('actionButtons').innerHTML = `<div style="text-align:center;">${voteLabel}<br><span style="color:#7f7f7f; font-size:0.85em;">投票即将结束...</span></div>`;
           }
         } else {
           // 未投票：显示投票按钮
@@ -1156,7 +1465,7 @@ function renderCenter(state) {
           msgClass = 'victory-evil';
           html = '<div style="font-size:1.5em;">💀 邪恶阵营胜利！</div>';
         }
-        html += `<div style="margin-top:10px; color:#aaa;">${state.winReason || ''}</div>`;
+        html += `<div style="margin-top:10px; color:#7f7f7f;">${state.winReason || ''}</div>`;
         showAction = true;
         $('actionTitle').textContent = '游戏结束';
         $('selectedTargets').innerHTML = '';
@@ -1180,34 +1489,32 @@ function renderCenter(state) {
       let infoHtml = '';
       days.forEach(day => {
         const dayLabel = day === 0 ? '首夜' : `第${day}夜`;
-        infoHtml += `<div style="margin-bottom:6px;">
-          <div style="color:#d4af37; font-size:0.8em; margin-bottom:4px; opacity:0.8;">${dayLabel}</div>`;
+        infoHtml += `<div style="min-width:0;">
+          <div style="color:#07C160; font-size:0.8em; margin-bottom:4px; opacity:0.8;">${dayLabel}</div>
+          <div class="ss-grid" style="margin-top:0;">`;
         byDay[day].forEach(info => {
           // 多行信息用独立卡片承载，避免多条信息连在一起难以分辨
-        infoHtml += `<div style="color:#f0d78c; line-height:1.6; font-size:0.9em; margin-bottom:6px; padding:6px 9px; background:rgba(0,0,0,0.18); border-radius:4px; white-space:pre-wrap;">${escapeHtml(info.message).replace(/\n/g, '<br>')}</div>`;
+        infoHtml += `<div style="color:#0FA958; line-height:1.5; font-size:0.85em; padding:6px 9px; background:rgba(0,0,0,0.03); border-radius:4px; white-space:pre-wrap;">${escapeHtml(info.message).replace(/\n/g, '<br>')}</div>`;
         });
-        infoHtml += '</div>';
+        infoHtml += '</div></div>';
       });
 
-      html += `<div style="margin-top:15px; padding:12px; background:rgba(212,175,55,0.08); border-left:3px solid #d4af37; border-radius:4px;">
-        <div style="color:#d4af37; font-size:0.85em; margin-bottom:8px; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
+      html += `<div class="ss-block" style="padding:10px 12px; background:rgba(7,193,96,0.08); border-left:3px solid #07C160; border-radius:4px;">
+        <div style="color:#07C160; font-size:0.85em; margin-bottom:6px; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
           <span>📜 你的信息</span>
           <span style="font-size:0.85em; opacity:0.6;">共 ${infoList.length} 条</span>
         </div>
-        ${infoHtml}
+        <div class="ss-grid" style="margin-top:0;">${infoHtml}</div>
       </div>`;
     }
   }
 
-  msg.className = 'center-message ' + msgClass;
-  msg.innerHTML = html;
+  // 系统状态 / 操作说明 → 渲染到中央系统信息区
+  systemMessageHtml = html;
+  systemMessageClass = msgClass;
+  renderCenterMessage();
   actionPanel.style.display = showAction || (state.phase === 'DEFENSE' && state.currentDefensePlayerId === myId) || state.phase === 'VOTING' ? 'block' : 'none';
   confirmBar.style.display = showConfirm ? 'block' : 'none';
-  const bottomVisible = (actionPanel.style.display === 'block') || (confirmBar.style.display === 'block');
-  const centerBottom = document.querySelector('.center-bottom');
-  if (centerBottom) {
-    centerBottom.style.display = bottomVisible ? 'block' : 'none';
-  }
 
   if (showConfirm) {
     const confirmed = state.confirmedCount || 0;
@@ -1235,6 +1542,37 @@ function renderCenter(state) {
   }
 }
 
+// 生成「我的身份」信息卡片 HTML
+function buildRoleInfoHtml(state, role, me) {
+  if (!role || !me) return '';
+  const isGood = role.team === 'GOOD';
+  const teamText = isGood ? '善良阵营' : '邪恶阵营';
+  const seatText = me.seat >= 0 ? `${me.seat + 1}号 ` : '';
+
+  let html = `<div class="my-role-card${isGood ? '' : ' evil'}">
+    <div class="my-role-head">
+      <span class="my-role-icon${isGood ? '' : ' evil'}">${isGood ? '善' : '恶'}</span>
+      <span class="my-role-name">${escapeHtml(role.name)}</span>
+      <span class="my-role-team${isGood ? '' : ' evil'}">${teamText}</span>
+      <span class="my-role-seat">${escapeHtml(seatText + me.name)}</span>
+    </div>`;
+
+  if (role.abilityDesc) {
+    html += `<div class="my-role-desc">${escapeHtml(role.abilityDesc)}</div>`;
+  }
+  if (state.evilTeam && role.team === 'EVIL') {
+    const mates = state.evilTeam
+      .filter(p => p.id !== myId)
+      .map(p => `${p.seat + 1}号${p.name}【${p.roleName}】`)
+      .join('、');
+    if (mates) html += `<div class="my-role-teammates">队友：${escapeHtml(mates)}</div>`;
+    if (state.notInPlay && role.category === 'DEMON') {
+      html += `<div class="my-role-teammates">不在场身份：${escapeHtml(state.notInPlay.join('、'))}</div>`;
+    }
+  }
+  return html + '</div>';
+}
+
 function renderRoleCard(state) {
   const card = $('roleCard');
   const me = state.players?.find(p => p.id === myId);
@@ -1244,7 +1582,9 @@ function renderRoleCard(state) {
     return;
   }
 
-  card.style.display = 'flex';
+  // 底部身份卡不再展示：身份信息展示在中央系统信息区
+  card.style.display = 'none';
+  roleInfoHtml = buildRoleInfoHtml(state, state.yourRole, me);
   
   const role = state.yourRole;
   const icon = $('roleIcon');
@@ -1305,9 +1645,20 @@ function renderRoleCard(state) {
     moonchildBtn.style.display = 'none';
   }
 
-  if (me.isDead) {
-    $('deadChatTab').style.display = 'block';
+  const deadTab = $('deadChatTab');
+  if (deadTab) deadTab.style.display = me.isDead ? 'block' : 'none';
+
+  // 身份技能按钮栏（右栏）
+  const abilityBar = $('roleAbilityBar');
+  if (abilityBar) {
+    const anyShown = slayerBtn.style.display === 'block'
+      || gossipBtn.style.display === 'block'
+      || moonchildBtn.style.display === 'block';
+    abilityBar.style.display = anyShown ? 'flex' : 'none';
   }
+
+  renderCenterMessage();
+  renderSessionList();
 }
 
 // ========== 夜晚交互 ==========
@@ -1376,26 +1727,29 @@ function showNightWake(data) {
       btn.textContent = `${p.seat + 1}号 ${p.name}${p.isDead ? ' (死者)' : ''}`;
       btn.dataset.pid = p.id;
       btn.onclick = () => {
-        const idx = nightSelectedTargets.indexOf(p.id);
-        if (idx >= 0) {
-          nightSelectedTargets.splice(idx, 1);
-          btn.classList.remove('selected');
-          nightSelectedPlayerForRole = null;
-          nightSelectedRoleId = null;
-          if (nightSelectType === 'playerAndRole') {
+        if (nightSelectType === 'playerAndRole') {
+          // 猜角色玩法（如赌徒）：只需一名玩家 + 一个角色
+          const idx = nightSelectedTargets.indexOf(p.id);
+          if (idx >= 0) {
+            nightSelectedTargets.splice(idx, 1);
+            btn.classList.remove('selected');
+            nightSelectedPlayerForRole = null;
+            nightSelectedRoleId = null;
             nightPlayerAndRoleStep = 'player';
             renderPlayerAndRole();
-          }
-        } else {
-          document.querySelectorAll('.night-player-btn.selected').forEach(b => b.classList.remove('selected'));
-          nightSelectedTargets = [p.id];
-          btn.classList.add('selected');
-          nightSelectedPlayerForRole = p.id;
-          if (nightSelectType === 'playerAndRole') {
+          } else {
+            document.querySelectorAll('.night-player-btn.selected').forEach(b => b.classList.remove('selected'));
+            nightSelectedTargets = [p.id];
+            btn.classList.add('selected');
+            nightSelectedPlayerForRole = p.id;
             nightPlayerAndRoleStep = 'role';
             renderPlayerAndRole();
           }
+          updateConfirmState();
+          return;
         }
+        // 普通选人：按 canSelectCount 支持多选（如占卜师需选两名玩家）
+        toggleNightTarget(p.id, btn);
         updateConfirmState();
       };
       selectArea.appendChild(btn);
@@ -1405,7 +1759,7 @@ function showNightWake(data) {
   function renderRoleButtons(onConfirm) {
     if (!data.selectRoles) return;
     const roleHint = document.createElement('div');
-    roleHint.style.cssText = 'color:#d4af37;margin:12px 0 8px;font-size:14px;';
+    roleHint.style.cssText = 'color:#07C160;margin:12px 0 8px;font-size:14px;';
     roleHint.textContent = '猜测该玩家的角色：';
     selectArea.appendChild(roleHint);
 
@@ -1433,8 +1787,8 @@ function showNightWake(data) {
     const playerSection = document.createElement('div');
     playerSection.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;';
     const playerTitle = document.createElement('div');
-    playerTitle.style.cssText = 'color:#3498db;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
-    playerTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#3498db;border-radius:50%;color:#fff;text-align:center;line-height:18px;font-size:11px;">1</span>选择玩家';
+    playerTitle.style.cssText = 'color:#10AEFF;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
+    playerTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#10AEFF;border-radius:50%;color:#191919;text-align:center;line-height:18px;font-size:11px;">1</span>选择玩家';
     playerSection.appendChild(playerTitle);
     const playerGrid = document.createElement('div');
     playerGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:5px;overflow-y:auto;padding-right:4px;';
@@ -1470,19 +1824,19 @@ function showNightWake(data) {
     selectArea.appendChild(playerSection);
 
     const divider = document.createElement('div');
-    divider.style.cssText = 'width:1px;background:rgba(255,255,255,0.15);flex-shrink:0;';
+    divider.style.cssText = 'width:1px;background:rgba(0,0,0,0.09);flex-shrink:0;';
     selectArea.appendChild(divider);
 
     const roleSection = document.createElement('div');
     roleSection.style.cssText = 'flex:1.5;min-width:0;display:flex;flex-direction:column;';
     const roleTitle = document.createElement('div');
-    roleTitle.style.cssText = 'color:#d4af37;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
-    roleTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#d4af37;border-radius:50%;color:#000;text-align:center;line-height:18px;font-size:11px;">2</span>猜测角色';
+    roleTitle.style.cssText = 'color:#07C160;margin-bottom:6px;font-size:13px;font-weight:bold;display:flex;align-items:center;gap:6px;flex-shrink:0;';
+    roleTitle.innerHTML = '<span style="display:inline-block;width:18px;height:18px;background:#07C160;border-radius:50%;color:#000;text-align:center;line-height:18px;font-size:11px;">2</span>猜测角色';
     roleSection.appendChild(roleTitle);
 
     const hint = document.createElement('div');
     hint.className = 'role-selected-hint';
-    hint.style.cssText = 'color:#888;font-size:11px;margin-bottom:6px;flex-shrink:0;';
+    hint.style.cssText = 'color:#8c8c8c;font-size:11px;margin-bottom:6px;flex-shrink:0;';
     const selectedP = nightSelectedTargets.length > 0 ? currentState.players.find(p=>p.id===nightSelectedTargets[0]) : null;
     hint.textContent = selectedP ? `${selectedP.seat+1}号${selectedP.name}` : '请先选玩家';
     roleSection.appendChild(hint);
@@ -1799,12 +2153,12 @@ function showPlayerSelect(title, players, options = {}) {
     };
 
     overlay.querySelectorAll('.slayer-player-btn').forEach(btn => {
-      btn.style.cssText = 'padding:8px 6px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#e0e0e0;cursor:pointer;font-size:13px;font-family:inherit;transition:all 0.15s;';
-      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(231,76,60,0.3)'; btn.style.borderColor = 'rgba(231,76,60,0.6)'; });
+      btn.style.cssText = 'padding:8px 6px;background:rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.09);border-radius:6px;color:#191919;cursor:pointer;font-size:13px;font-family:inherit;transition:all 0.15s;';
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(250,81,81,0.3)'; btn.style.borderColor = 'rgba(250,81,81,0.6)'; });
       btn.addEventListener('mouseleave', () => {
         if (!btn.classList.contains('psel')) {
-          btn.style.background = 'rgba(255,255,255,0.08)';
-          btn.style.borderColor = 'rgba(255,255,255,0.15)';
+          btn.style.background = 'rgba(0,0,0,0.05)';
+          btn.style.borderColor = 'rgba(0,0,0,0.09)';
         }
       });
       btn.addEventListener('click', () => { close(btn.dataset.pid); });
@@ -1851,6 +2205,7 @@ function showPlayerDied(data) {
 let aiChatHistory = [];      // AI 对话历史（用于上下文）
 let aiPendingMessages = {};   // 正在接收的 AI 消息 { id: { content, playerName } }
 let isAiThinking = false;     // AI 正在响应中
+let lastAiUserMsgId = null;   // 最近一条触发 AI 的本地消息 id（用于撤回配对）
 let chatMessages = [];
 let unreadPublic = 0;       // 公聊未读数
 let unreadDead = 0;         // 死者频道未读数
@@ -1926,109 +2281,144 @@ function updateChatTabBadges() {
       badge.remove();
     }
   }
+  // 同步左侧会话列表的未读红点
+  renderSessionList();
 }
 
 function renderWhisperPlayerList() {
-  // 重新渲染私聊玩家列表以显示未读红点
-  if (currentState && currentState.players) {
-    updateWhisperTargets(currentState.players);
-  }
+  // 私聊对象列表已合并到左侧会话列表中
+  renderSessionList();
 }
 
-function switchChatChannel(channel) {
-  currentChatChannel = channel;
-  document.querySelectorAll('.chat-tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.channel === channel);
+// ========== 左侧会话列表（房间 / 死者 / 私聊） ==========
+function renderSessionList() {
+  const container = $('sessionList');
+  if (!container) return;
+  const state = currentState;
+  const players = (state && state.players) ? state.players : [];
+  const roomId = (state && state.roomId) || myRoomId || '';
+
+  const lastOf = (ch) => {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const m = chatMessages[i];
+      if (ch === 'public' && m.channel === 'public') return m;
+      if (ch === 'dead' && m.channel === 'dead') return m;
+    }
+    return null;
+  };
+  const previewText = (m, fallback) => {
+    if (!m) return fallback;
+    const who = m.fromId === myId ? '我' : (m.fromName || '');
+    const text = String(m.content || '').replace(/\s+/g, ' ').slice(0, 40);
+    return who ? `${who}：${text}` : text;
+  };
+  const badge = (n) => (n > 0 ? `<span class="wx-session-badge">${n > 99 ? '99+' : n}</span>` : '');
+
+  let html = '';
+  html += `<div class="wx-session-item ${currentChatChannel === 'public' ? 'active' : ''}" onclick="selectSession('public')">
+    <div class="wx-avatar room">🏠</div>
+    <div class="wx-session-body">
+      <div class="wx-session-title">${escapeHtml(roomId ? '房间 ' + roomId : '游戏房间')}</div>
+      <div class="wx-session-preview">${escapeHtml(previewText(lastOf('public'), '游戏大厅 · 公聊'))}</div>
+    </div>
+    ${badge(unreadPublic)}
+  </div>`;
+
+  const me = players.find(p => p.id === myId);
+  // 死者频道仅在自己出局后才出现（其他玩家出局与我无关）
+  if (me && me.isDead) {
+    html += `<div class="wx-session-item ${currentChatChannel === 'dead' ? 'active' : ''}" onclick="selectSession('dead')">
+      <div class="wx-avatar dead">💀</div>
+      <div class="wx-session-body">
+        <div class="wx-session-title">死者频道</div>
+        <div class="wx-session-preview">${escapeHtml(previewText(lastOf('dead'), '仅死者可见'))}</div>
+      </div>
+      ${badge(unreadDead)}
+    </div>`;
+  }
+
+  players.filter(p => p.id !== myId && p.seat !== -1).forEach(p => {
+    const isActive = currentChatChannel === 'whisper' && whisperTargetId === p.id;
+    let last = null;
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const m = chatMessages[i];
+      if (m.channel === 'whisper' && (m.fromId === p.id || m.toId === p.id)) { last = m; break; }
+    }
+    html += `<div class="wx-session-item ${isActive ? 'active' : ''}" onclick="selectSession('whisper','${p.id}')">
+      <div class="wx-avatar${p.isDead ? ' dead' : ''}">${p.seat + 1}</div>
+      <div class="wx-session-body">
+        <div class="wx-session-title">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</div>
+        <div class="wx-session-preview">${escapeHtml(previewText(last, '点击开始私聊'))}</div>
+      </div>
+      ${badge(unreadWhispers[p.id] || 0)}
+    </div>`;
   });
 
-  // 清除对应频道的未读标记
-  clearUnreadForChannel(channel);
+  container.innerHTML = html;
+}
 
-  // 移动端：切换频道时自动打开聊天面板
-  if (window.innerWidth <= 768) {
-    const chatArea = document.querySelector('.chat-area');
-    if (chatArea && !chatArea.classList.contains('mobile-open')) {
-      chatArea.classList.add('mobile-open');
-    }
-  }
-
-  // 显示/隐藏私聊相关UI
-  const whisperPanel = $('whisperPanel');
-  const whisperCurrent = $('whisperCurrent');
-  const chatInput = $('chatInput');
-  const chatMessages = $('chatMessages');
-  const voicePanel = $('voicePanel');
-  const chatInputArea = $('chatInputArea');
-
+// 切换会话（左栏点击）
+function selectSession(channel, pid) {
+  const input = $('chatInput');
   if (channel === 'whisper') {
-    // 显示聊天消息和输入区
-    if (chatMessages) chatMessages.style.display = '';
-    if (chatInputArea) chatInputArea.style.display = '';
-    if (voicePanel) voicePanel.style.display = 'none';
-
-    if (whisperTargetId) {
-      // 已有私聊对象，清除该对象未读
-      clearUnreadForWhisper(whisperTargetId);
-      // 已有私聊对象，显示当前私聊状态
-      whisperPanel.style.display = 'none';
-      whisperCurrent.style.display = 'flex';
-      const target = (currentState && currentState.players) 
-        ? currentState.players.find(p => p.id === whisperTargetId) : null;
-      $('whisperCurrentName').textContent = target 
-        ? `${target.seat >= 0 ? target.seat+1+'号 ' : ''}${target.name}` 
-        : '(未知)';
-      chatInput.placeholder = `私聊 ${target ? target.name : ''}...`;
-    } else {
-      // 未选择对象，清除所有私聊未读
-      unreadWhispers = {};
-      updateChatTabBadges();
-      renderWhisperPlayerList();
-      // 未选择对象，显示选择面板
-      whisperPanel.style.display = 'block';
-      whisperCurrent.style.display = 'none';
-      chatInput.placeholder = '请先选择私聊对象...';
-    }
-  } else if (channel === 'voice') {
-    // 语音频道：显示语音面板，隐藏聊天消息和输入区
-    if (chatMessages) chatMessages.style.display = 'none';
-    if (chatInputArea) chatInputArea.style.display = 'none';
-    whisperPanel.style.display = 'none';
-    whisperCurrent.style.display = 'none';
-    if (voicePanel) voicePanel.style.display = 'flex';
-    if (typeof VoiceManager !== 'undefined') VoiceManager.updateVoiceUI();
+    currentChatChannel = 'whisper';
+    whisperTargetId = pid || null;
+    if (pid) clearUnreadForWhisper(pid);
+    const target = (currentState && currentState.players)
+      ? currentState.players.find(p => p.id === pid) : null;
+    if (input) input.placeholder = target ? `私聊 ${target.name}...` : '选择左侧联系人开始私聊';
+  } else if (channel === 'dead' || channel === 'public') {
+    currentChatChannel = channel;
+    whisperTargetId = null;
+    clearUnreadForChannel(channel);
+    if (input) input.placeholder = channel === 'dead' ? '死者频道（仅死者可见）...' : '输入消息... @小染 可问AI';
   } else {
-    // 其他频道：显示聊天消息和输入区，隐藏语音面板
-    if (chatMessages) chatMessages.style.display = '';
-    if (chatInputArea) chatInputArea.style.display = '';
-    if (voicePanel) voicePanel.style.display = 'none';
-    whisperPanel.style.display = 'none';
-    whisperCurrent.style.display = 'none';
-    chatInput.placeholder = '输入消息...';
+    currentChatChannel = 'public';
+    whisperTargetId = null;
   }
 
+  document.querySelectorAll('.chat-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.channel === currentChatChannel);
+  });
   renderChatMessages();
+  renderSessionList();
+  updateChatTabBadges();
+  updateHeaderChatTarget();
+  updateChatInputVisibility();
+  // 移动端：选中会话后进入聊天页
+  if (isMobileView()) openMobileChat();
+}
+
+// 兼容旧调用入口
+function switchChatChannel(channel) {
+  if (channel === 'voice') return;
+  selectSession(channel, channel === 'whisper' ? whisperTargetId : null);
 }
 
 function showWhisperPanel() {
-  $('whisperPanel').style.display = 'block';
-  $('whisperCurrent').style.display = 'none';
-  $('chatInput').placeholder = '请先选择私聊对象...';
+  // 私聊对象选择已由左侧会话列表承担
+  renderSessionList();
+  showToast('请在左侧会话列表中选择私聊对象');
 }
 
 function selectWhisperTarget(pid) {
-  whisperTargetId = pid;
-  clearUnreadForWhisper(pid);
-  switchChatChannel('whisper');
+  selectSession('whisper', pid);
 }
 
 function sendChat() {
   const input = $('chatInput');
   const content = input.value.trim();
-  if (!content) return;
+  // 有待发送图片时，允许不带文字直接发送
+  if (!content && !pendingChatImage) return;
 
   // 检测 AI 小助手触发：@小染 / @AI / @ai
   const aiMatch = content.match(/^@(?:小染|AI|ai)\s+(.+)/);
-  if (aiMatch && currentChatChannel === 'public') {
+  // 只有主房间（公聊）才能呼叫小染，私聊与死者频道不支持
+  if (aiMatch && currentChatChannel !== 'public') {
+    showToast('只有主房间内才能呼叫小染 AI');
+    return;
+  }
+  if (aiMatch && !pendingChatImage) {
     const aiMessage = aiMatch[1].trim();
     if (!aiMessage) return;
     if (isAiThinking) {
@@ -2045,19 +2435,23 @@ function sendChat() {
       isDead: false,
       content: content,
       channel: 'public',
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      // 该消息只在本地存在（不经过服务端 chat 通道），撤回时走本地逻辑
+      localOnly: true
     };
     chatMessages.push(userMsg);
+    lastAiUserMsgId = userMsg.id;
     renderChatMessages();
 
     // 记录到 AI 历史
     aiChatHistory.push({ role: 'user', content: aiMessage });
     aiChatHistory = aiChatHistory.slice(-20);
 
-    // 发送给后端
+    // 发送给后端（附带频道，服务端据此校验仅主房间可用）
     socket.emit('ai:chat', {
       message: aiMessage,
-      history: aiChatHistory.filter(h => h.role === 'user' || h.role === 'assistant')
+      history: aiChatHistory.filter(h => h.role === 'user' || h.role === 'assistant'),
+      channel: 'public'
     });
 
     input.value = '';
@@ -2073,12 +2467,156 @@ function sendChat() {
     }
   }
 
-  socket.emit('chat:send', { content, channel: currentChatChannel, targetId });
+  // 组装载荷：可带图片（图片消息正文用 [图片] 占位）
+  const payload = {
+    content: content || (pendingChatImage ? '[图片]' : ''),
+    channel: currentChatChannel,
+    targetId
+  };
+  if (pendingChatImage) {
+    const now = Date.now();
+    if (now - lastChatImageAt < 3000) { showToast('发送图片过于频繁，请稍候'); return; }
+    lastChatImageAt = now;
+    payload.image = pendingChatImage;
+  }
+
+  socket.emit('chat:send', payload);
   input.value = '';
+  clearPendingChatImage();
 }
 
-// 插入 @小染 触发前缀
+// ========== 聊天图片（粘贴发送） ==========
+// 客户端先等比缩放 + JPEG 压缩，再以 base64 传输，显著降低带宽与内存占用
+const CHAT_IMAGE_MAX_DIM = 720;             // 最长边像素上限
+const CHAT_IMAGE_QUALITY = 0.62;            // JPEG 压缩质量
+const CHAT_IMAGE_MAX_CHARS = 300 * 1024;    // 压缩后 base64 字符数上限
+let lastChatImageAt = 0;                    // 发送节流
+
+// 将图片文件压缩为 dataURL（等比缩放，不裁剪）
+function compressChatImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, CHAT_IMAGE_MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+      const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve({ dataUrl: canvas.toDataURL('image/jpeg', CHAT_IMAGE_QUALITY), w, h });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片解析失败')); };
+    img.src = url;
+  });
+}
+
+// 待发送的图片（粘贴后先预览，确认发送才真正发出）
+let pendingChatImage = null;
+
+// 粘贴事件：命中图片则拦截默认粘贴，进入待发送预览
+function handleChatPaste(e) {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const it of items) {
+    if (it.kind === 'file' && it.type && it.type.indexOf('image/') === 0) {
+      const file = it.getAsFile();
+      if (file) {
+        e.preventDefault();
+        stageChatImage(file);
+        return;
+      }
+    }
+  }
+}
+
+// 压缩后放入待发送预览，不直接发送
+async function stageChatImage(file) {
+  if (!myRoomId) { showToast('请先加入房间'); return; }
+  try {
+    const { dataUrl, w, h } = await compressChatImage(file);
+    if (dataUrl.length > CHAT_IMAGE_MAX_CHARS) {
+      showToast('图片过大，请裁剪后重试');
+      return;
+    }
+    pendingChatImage = { data: dataUrl, w, h };
+    renderPendingChatImage();
+    const input = $('chatInput');
+    if (input) input.focus();
+  } catch (err) {
+    showToast('图片处理失败，请重试');
+  }
+}
+
+function renderPendingChatImage() {
+  const box = $('chatImagePreview');
+  const img = $('chatImagePreviewImg');
+  if (!box) return;
+  if (pendingChatImage) {
+    if (img) img.src = pendingChatImage.data;
+    box.style.display = 'flex';
+  } else {
+    if (img) img.removeAttribute('src');
+    box.style.display = 'none';
+  }
+}
+
+function clearPendingChatImage() {
+  pendingChatImage = null;
+  renderPendingChatImage();
+}
+
+// 撤回消息（不限时间，仅能撤回自己的消息）
+// @小染 的触发消息只在本地存在，走本地撤回并连带撤回 AI 回复
+function recallMessage(id) {
+  const msg = chatMessages.find(m => String(m.id) === String(id));
+  if (msg && msg.localOnly) {
+    recallLocalMessagePair(msg);
+    return;
+  }
+  socket.emit('chat:recall', { id });
+}
+
+function recallLocalMessagePair(msg) {
+  msg.recalled = true;
+  msg.content = '';
+  delete msg.image;
+  // 连带撤回该消息触发的 AI 回复
+  const reply = chatMessages.find(m => String(m.id) === String(msg.aiReplyId));
+  if (reply) {
+    reply.recalled = true;
+    reply.content = '';
+    delete reply.image;
+  }
+  renderChatMessages();
+}
+
+// 点击图片放大预览
+function openChatImage(el) {
+  const img = el && el.querySelector('img');
+  if (!img) return;
+  let mask = $('chatImageMask');
+  if (!mask) {
+    mask = document.createElement('div');
+    mask.id = 'chatImageMask';
+    mask.className = 'chat-image-mask';
+    mask.innerHTML = '<img alt="图片预览">';
+    mask.onclick = () => { mask.style.display = 'none'; };
+    document.body.appendChild(mask);
+  }
+  const big = mask.querySelector('img');
+  if (big) big.src = img.src;
+  mask.style.display = 'flex';
+}
+
+// 插入 @小染 触发前缀（仅主房间可用）
 function insertAiTrigger() {
+  if (currentChatChannel !== 'public') {
+    showToast('只有主房间内才能呼叫小染 AI');
+    return;
+  }
   const input = $('chatInput');
   const current = input.value.trim();
   if (current.startsWith('@小染') || current.startsWith('@AI') || current.startsWith('@ai')) {
@@ -2089,6 +2627,41 @@ function insertAiTrigger() {
   input.focus();
   // 光标移到末尾
   input.setSelectionRange(input.value.length, input.value.length);
+}
+
+// 系统消息 / 房间动态（统一显示在中央聊天框）
+function addSystemChatMessage(text) {
+  if (!text) return;
+  chatMessages.push({
+    id: 'sys-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+    fromId: 'system',
+    fromName: '系统',
+    fromSeat: -1,
+    isDead: false,
+    isSystem: true,
+    content: text,
+    channel: 'public',
+    timestamp: Date.now()
+  });
+  renderChatMessages();
+  renderSessionList();
+}
+
+// 对比房间状态，生成房间动态系统消息
+function diffRoomDynamics(prev, next) {
+  if (!next || !Array.isArray(next.players)) return;
+  if (!prev || !Array.isArray(prev.players)) return;
+  const prevIds = new Set(prev.players.map(p => p.id));
+  const nextIds = new Set(next.players.map(p => p.id));
+  next.players.forEach(p => {
+    if (!prevIds.has(p.id) && p.id !== myId) addSystemChatMessage(`${p.name} 加入了房间`);
+  });
+  prev.players.forEach(p => {
+    if (!nextIds.has(p.id) && p.id !== myId) addSystemChatMessage(`${p.name} 离开了房间`);
+  });
+  if (!prev.gameStarted && next.gameStarted) {
+    addSystemChatMessage('游戏开始，系统已分配身份');
+  }
 }
 
 function addChatMessage(msg) {
@@ -2125,13 +2698,27 @@ function addChatMessage(msg) {
   }
 }
 
+// 格式化聊天时间（HH:MM）
+function formatChatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 function renderChatMessages() {
   const container = $('chatMessages');
   const visible = chatMessages.filter(m => {
-    if (currentChatChannel === 'public') return m.channel === 'public';
-    if (currentChatChannel === 'dead') return m.channel === 'dead';
+    // 系统消息 / 房间动态只在公聊（房间）中显示，不出现在私聊与死者频道
+    if (m.isSystem) return currentChatChannel === 'public';
+    // 兼容游戏内消息（type 字段）与大厅消息（channel 字段）
+    const ch = m.channel || m.type;
+    if (currentChatChannel === 'public') return ch === 'public';
+    if (currentChatChannel === 'dead') return ch === 'dead';
     if (currentChatChannel === 'whisper') {
-      if (m.channel !== 'whisper') return false;
+      if (ch !== 'whisper') return false;
       // 只显示与当前私聊对象的对话
       if (whisperTargetId) {
         return m.fromId === whisperTargetId || m.toId === whisperTargetId ||
@@ -2142,46 +2729,89 @@ function renderChatMessages() {
     return false;
   });
 
+  if (visible.length === 0 && Object.keys(aiPendingMessages).length === 0) {
+    const emptyText = myRoomId
+      ? '暂无消息，在下方输入框开始聊天吧'
+      : '创建或加入房间后，游戏动态与聊天会显示在这里';
+    container.innerHTML = `<div class="chat-empty">${emptyText}</div>`;
+    return;
+  }
+
   container.innerHTML = visible.map(msg => {
-    // AI 消息特殊渲染
+    // 系统消息 / 房间动态
+    if (msg.isSystem) {
+      return `<div class="chat-msg system"><span>${escapeHtml(msg.content)}</span></div>`;
+    }
+    // 已撤回的消息 → 居中灰色提示（微信风格，不保留头像与气泡）
+    if (msg.recalled) {
+      const seatText = msg.fromSeat >= 0 ? `${msg.fromSeat + 1}号 ` : '';
+      const who = msg.fromId === myId ? '你' : `${seatText}${msg.fromName || '对方'}`;
+      return `<div class="chat-msg recalled-system"><span>${escapeHtml(who)} 撤回了一条消息</span></div>`;
+    }
+    // AI 小助手消息：与普通聊天气泡同构，仅头像与气泡配色不同
     if (msg.isAi) {
-      return `<div class="chat-msg ai-msg">
-        <span class="msg-sender ai-sender">🤖 小染 AI:</span>
-        <span class="ai-content">${escapeHtml(msg.content)}</span>
+      const aiTime = formatChatTime(msg.timestamp);
+      return `<div class="chat-msg">
+        <div class="msg-col">
+          <div class="msg-name">小染</div>
+          <div class="msg-avatar ai-avatar">🤖</div>
+        </div>
+        <div class="msg-main">
+          <div class="msg-time-line">${aiTime ? `<span class="msg-time">${aiTime}</span>` : ''}</div>
+          <div class="msg-row">
+            <div class="msg-bubble ai-bubble">${escapeHtml(msg.content)}</div>
+          </div>
+        </div>
       </div>`;
     }
 
-    const senderClass = msg.fromId === myId ? 'you' : '';
-    const deadClass = msg.isDead ? 'dead' : '';
-    const privateClass = msg.channel === 'whisper' ? 'private' : '';
-    const seatText = msg.fromSeat >= 0 ? `${msg.fromSeat + 1}号 ` : '';
-    let senderDisplay = '';
-    if (msg.channel === 'whisper') {
-      if (msg.fromId === myId) {
-        const toSeat = msg.toSeat !== undefined ? msg.toSeat : '';
-        const toSeatText = typeof toSeat === 'number' && toSeat >= 0 ? `${toSeat+1}号 ` : '';
-        senderDisplay = `[悄悄对 ${toSeatText}${msg.toName || '某人'}说] ${seatText}${msg.fromName}`;
-      } else {
-        senderDisplay = `[${seatText}${msg.fromName}悄悄对你说]`;
-      }
-    } else {
-      const deadPrefix = msg.isDead && msg.channel === 'public' ? '[死者] ' : '';
-      senderDisplay = `${deadPrefix}${seatText}${msg.fromName}`;
-    }
-    return `<div class="chat-msg ${privateClass}">
-      <span class="msg-sender ${senderClass} ${deadClass}">${senderDisplay}:</span>
-      <span>${escapeHtml(msg.content)}</span>
+    const isSelf = msg.fromId === myId;
+    const msgCh = msg.channel || msg.type;
+    const privateClass = msgCh === 'whisper' ? 'private' : '';
+    const avatarLabel = msg.fromSeat >= 0 ? (msg.fromSeat + 1) : '?';
+    const timeStr = formatChatTime(msg.timestamp);
+    // 昵称不显示座位号
+    const nameText = isSelf ? '我' : (msg.fromName || '');
+    // 图片消息：只接受 data:image/ 前缀，避免注入
+    const imgData = (msg.image && typeof msg.image.data === 'string' && /^data:image\//.test(msg.image.data))
+      ? msg.image.data : '';
+    const imgHtml = imgData
+      ? `<div class="msg-image" onclick="openChatImage(this)"><img src="${imgData}" alt="图片" loading="lazy"${msg.image.w ? ` width="${msg.image.w}" height="${msg.image.h}"` : ''}></div>`
+      : '';
+    // 撤回按钮：仅自己的消息可撤回（不限时间），与气泡同行显示
+    const recallHtml = isSelf ? `<span class="msg-recall" onclick="recallMessage('${msg.id}')">撤回</span>` : '';
+    const textHtml = (imgData && msg.content === '[图片]') ? '' : escapeHtml(msg.content || '');
+    return `<div class="chat-msg ${privateClass}${isSelf ? ' self' : ''}">
+      <div class="msg-col">
+        <div class="msg-name${msg.isDead ? ' dead' : ''}">${escapeHtml(nameText)}</div>
+        <div class="msg-avatar${msg.isDead ? ' dead' : ''}">${avatarLabel}</div>
+      </div>
+      <div class="msg-main">
+        <div class="msg-time-line">${timeStr ? `<span class="msg-time">${timeStr}</span>` : ''}</div>
+        <div class="msg-row">
+          <div class="msg-bubble">${imgHtml}${textHtml}</div>
+          ${recallHtml}
+        </div>
+      </div>
     </div>`;
   }).join('');
 
-  // 渲染正在接收的 AI 流式消息
+  // 渲染正在接收的 AI 流式消息（同样使用气泡）
   if (currentChatChannel === 'public') {
     const pendingHtml = Object.values(aiPendingMessages).map(p => {
-      const displayContent = p.content || '思考中...';
+      const displayContent = p.content || '思考中';
       const cursor = p.content ? '' : '<span class="ai-thinking-dots">●●●</span>';
-      return `<div class="chat-msg ai-msg ai-msg-pending">
-        <span class="msg-sender ai-sender">🤖 小染 AI:</span>
-        <span class="ai-content">${escapeHtml(displayContent)}${cursor}</span>
+      return `<div class="chat-msg" data-ai-pending="1">
+        <div class="msg-col">
+          <div class="msg-name">小染</div>
+          <div class="msg-avatar ai-avatar">🤖</div>
+        </div>
+        <div class="msg-main">
+          <div class="msg-time-line"></div>
+          <div class="msg-row">
+            <div class="msg-bubble ai-bubble">${escapeHtml(displayContent)}${cursor}</div>
+          </div>
+        </div>
       </div>`;
     }).join('');
     container.innerHTML += pendingHtml;
@@ -2197,7 +2827,7 @@ function updateWhisperTargets(players) {
   if (!list) return;
   const others = players.filter(p => p.id !== myId && p.seat !== -1);
   if (others.length === 0) {
-    list.innerHTML = '<div style="color:#888; font-size:12px;">暂无其他玩家</div>';
+    list.innerHTML = '<div style="color:#8c8c8c; font-size:12px;">暂无其他玩家</div>';
     return;
   }
   list.innerHTML = others.map(p => {
@@ -2226,10 +2856,10 @@ function showGameOverRoles(allRoles) {
 
   if (currentState.winner === 'GOOD') {
     title.textContent = '🎉 善良阵营胜利！';
-    title.style.color = '#2ecc71';
+    title.style.color = '#07C160';
   } else {
     title.textContent = '💀 邪恶阵营胜利！';
-    title.style.color = '#e74c3c';
+    title.style.color = '#FA5151';
   }
   reason.textContent = currentState.winReason || '';
 
@@ -2273,8 +2903,8 @@ function toggleGodView() {
     showToast('游戏开始后才能使用上帝视角');
     return;
   }
-  $('godPanel').style.display = 'block';
-  $('godLoginForm').style.display = 'block';
+  $('godPanel').style.display = 'flex';
+  $('godLoginForm').style.display = 'flex';
   $('godContent').style.display = 'none';
   $('godLoginError').style.display = 'none';
   $('godPassword').value = '';
@@ -2328,11 +2958,11 @@ function renderGodView() {
   if (gs.currentDefensePlayerId) {
     const dp = players.find(p => p.id === gs.currentDefensePlayerId);
     if (dp) {
-      statusHtml += `<div style="color:#f39c12;"><strong>辩护中：</strong>${dp.seat+1}号 ${dp.name}</div>`;
+      statusHtml += `<div style="color:#FF9500;"><strong>辩护中：</strong>${dp.seat+1}号 ${dp.name}</div>`;
     }
   }
   if (gs.nightActions && Object.keys(gs.nightActions).length > 0) {
-    let nightInfo = '<div style="margin-top:8px; color:#aaa;"><strong>夜晚行动记录：</strong><ul style="margin:5px 0 0 20px;">';
+    let nightInfo = '<div style="margin-top:8px; color:#7f7f7f;"><strong>夜晚行动记录：</strong><ul style="margin:5px 0 0 20px;">';
     for (const [role, action] of Object.entries(gs.nightActions)) {
       if (action.targetId) {
         const t = players.find(p => p.id === action.targetId);
@@ -2343,7 +2973,7 @@ function renderGodView() {
     statusHtml += nightInfo;
   }
   if (gs.nominations && gs.nominations.length > 0) {
-    let nomInfo = '<div style="margin-top:8px; color:#aaa;"><strong>今日提名：</strong><ul style="margin:5px 0 0 20px;">';
+    let nomInfo = '<div style="margin-top:8px; color:#7f7f7f;"><strong>今日提名：</strong><ul style="margin:5px 0 0 20px;">';
     gs.nominations.forEach(n => {
       const nomPlayer = players.find(p => p.id === n.nominatorId);
       const nmPlayer = players.find(p => p.id === n.nomineeId);
@@ -2360,23 +2990,23 @@ function renderGodView() {
           else abstainList.push(p.seat+1+'号');
         });
         const passTag = n.passed
-          ? `<span style="color:#2ecc71;">✅通过(${n.voteCount}票)</span>`
-          : `<span style="color:#e74c3c;">❌未通过(${n.voteCount}票)</span>`;
+          ? `<span style="color:#07C160;">✅通过(${n.voteCount}票)</span>`
+          : `<span style="color:#FA5151;">❌未通过(${n.voteCount}票)</span>`;
         nomInfo += `<li>${nomSeat}号提名${nmSeat}号${nmName} - ${passTag}
-          <div style="font-size:0.9em; margin-top:2px; color:#ccc;">
+          <div style="font-size:0.9em; margin-top:2px; color:#4f4f4f;">
             赞成: ${yesList.join(' ') || '—'} | 反对: ${noList.join(' ') || '—'}${abstainList.length > 0 ? ' | 未投: '+abstainList.join(' ') : ''}
           </div>
         </li>`;
       } else {
-        nomInfo += `<li>${nomSeat}号提名${nmSeat}号${nmName} - <span style="color:#f39c12;">⏳进行中</span></li>`;
+        nomInfo += `<li>${nomSeat}号提名${nmSeat}号${nmName} - <span style="color:#FF9500;">⏳进行中</span></li>`;
       }
     });
     nomInfo += '</ul></div>';
     statusHtml += nomInfo;
   }
   if (gs.winner) {
-    statusHtml += `<div style="margin-top:10px; font-size:1.2em; color:${gs.winner==='GOOD'?'#2ecc71':'#e74c3c'};"><strong>${gs.winner==='GOOD'?'🎉善良阵营获胜！':'💀邪恶阵营获胜！'}</strong></div>`;
-    statusHtml += `<div style="color:#aaa;">${gs.winReason||''}</div>`;
+    statusHtml += `<div style="margin-top:10px; font-size:1.2em; color:${gs.winner==='GOOD'?'#07C160':'#FA5151'};"><strong>${gs.winner==='GOOD'?'🎉善良阵营获胜！':'💀邪恶阵营获胜！'}</strong></div>`;
+    statusHtml += `<div style="color:#7f7f7f;">${gs.winReason||''}</div>`;
   }
   $('godStatus').innerHTML = statusHtml;
 
@@ -2384,33 +3014,33 @@ function renderGodView() {
   if (gs.nightQueue && gs.nightQueue.length > 0) {
     const queue = gs.nightQueue;
     const idx = gs.currentNightIndex ?? -1;
-    let debugHtml = '<div style="margin-top:12px; padding:10px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.25); border-radius:6px;">';
-    debugHtml += `<div style="color:#e74c3c; font-weight:bold; margin-bottom:6px;">🔍 夜晚流程调试</div>`;
+    let debugHtml = '<div style="margin-top:12px; padding:10px; background:rgba(250,81,81,0.08); border:1px solid rgba(250,81,81,0.25); border-radius:6px;">';
+    debugHtml += `<div style="color:#FA5151; font-weight:bold; margin-bottom:6px;">🔍 夜晚流程调试</div>`;
     debugHtml += `<div><strong>队列进度：</strong>${idx >= 0 ? idx + 1 : 0} / ${queue.length} （索引：${idx}）</div>`;
     if (idx >= 0 && idx < queue.length) {
       const current = queue[idx];
       const cp = players.find(p => p.id === current.playerId);
-      debugHtml += `<div style="color:#f39c12; margin-top:4px;"><strong>当前等待：</strong>${current.roleId}${current.isDrunk?'(酒鬼假身份)':''}${current.isFakeDemon?'(假恶魔)':''} → ${cp?cp.seat+1+'号 '+cp.name:'未知玩家'}</div>`;
+      debugHtml += `<div style="color:#FF9500; margin-top:4px;"><strong>当前等待：</strong>${current.roleId}${current.isDrunk?'(酒鬼假身份)':''}${current.isFakeDemon?'(假恶魔)':''} → ${cp?cp.seat+1+'号 '+cp.name:'未知玩家'}</div>`;
       if (cp && cp.isBot !== undefined) {
-        debugHtml += `<div style="color:#aaa; font-size:0.9em;">玩家状态：${cp.isAlive?'存活':'💀死亡'} | ${cp.isBot?'🤖机器人':'👤真人'} | ${cp.isConnected?'✅在线':'❌断线'}</div>`;
+        debugHtml += `<div style="color:#7f7f7f; font-size:0.9em;">玩家状态：${cp.isAlive?'存活':'💀死亡'} | ${cp.isBot?'🤖机器人':'👤真人'} | ${cp.isConnected?'✅在线':'❌断线'}</div>`;
       }
     } else if (idx >= queue.length) {
-      debugHtml += `<div style="color:#2ecc71; margin-top:4px;"><strong>状态：</strong>夜晚队列已全部执行完毕，等待进入天亮/结算</div>`;
+      debugHtml += `<div style="color:#07C160; margin-top:4px;"><strong>状态：</strong>夜晚队列已全部执行完毕，等待进入天亮/结算</div>`;
     }
     if (gs.pendingRavenkeeper) {
       const rp = players.find(p => p.id === gs.pendingRavenkeeper);
       debugHtml += `<div style="color:#9b59b6; margin-top:4px;"><strong>待处理守鸦人：</strong>${rp?rp.seat+1+'号 '+rp.name:gs.pendingRavenkeeper}</div>`;
     }
     // 完整队列列表
-    debugHtml += `<div style="margin-top:8px;"><strong>完整队列：</strong><div style="margin-top:4px; font-size:0.9em; max-height:180px; overflow-y:auto; padding:6px; background:rgba(0,0,0,0.2); border-radius:4px;">`;
+    debugHtml += `<div style="margin-top:8px;"><strong>完整队列：</strong><div style="margin-top:4px; font-size:0.9em; max-height:180px; overflow-y:auto; padding:6px; background:rgba(0,0,0,0.035); border-radius:4px;">`;
     queue.forEach((item, i) => {
       const p = players.find(pp => pp.id === item.playerId);
       const doneTag = i < idx ? '✅ ' : (i === idx ? '👉 ' : '⏳ ');
-      const statusColor = i < idx ? 'color:#888;' : (i === idx ? 'color:#f1c40f; font-weight:bold;' : '');
+      const statusColor = i < idx ? 'color:#8c8c8c;' : (i === idx ? 'color:#FFB800; font-weight:bold;' : '');
       const extraTags = [];
       if (item.isDrunk) extraTags.push('酒鬼');
       if (item.isFakeDemon) extraTags.push('假恶魔');
-      const extra = extraTags.length > 0 ? ` <span style="color:#e67e22;">(${extraTags.join('/')})</span>` : '';
+      const extra = extraTags.length > 0 ? ` <span style="color:#F5822B;">(${extraTags.join('/')})</span>` : '';
       debugHtml += `<div style="${statusColor} line-height:1.6;">${doneTag}[${i}] ${item.roleId}${extra} → ${p?p.seat+1+'号 '+p.name:'?'}</div>`;
     });
     debugHtml += `</div></div></div>`;
@@ -2436,30 +3066,30 @@ function updateGodPlayers() {
   // 完整玩家表格
   $('godPlayersTable').innerHTML = players.sort((a,b) => a.seat - b.seat).map(p => {
     const statusText = p.isAlive ? '存活' : '💀死亡';
-    const statusColor = p.isAlive ? '#2ecc71' : '#888';
+    const statusColor = p.isAlive ? '#07C160' : '#888';
     let marks = [];
     if (p.isPoisoned) marks.push('<span style="color:#9b59b6;">中毒</span>');
-    if (p.isProtected) marks.push('<span style="color:#3498db;">守护</span>');
-    if (p.isDrunk) marks.push('<span style="color:#e67e22;">醉酒</span>');
-    if (p.isBot) marks.push('<span style="color:#888;">AI</span>');
-    if (p.isConnected === false) marks.push('<span style="color:#e67e22;">断线</span>');
-    if (p.voteToken > 0 && p.isDead) marks.push('<span style="color:#3498db;">余1票</span>');
-    const teamColor = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
+    if (p.isProtected) marks.push('<span style="color:#10AEFF;">守护</span>');
+    if (p.isDrunk) marks.push('<span style="color:#F5822B;">醉酒</span>');
+    if (p.isBot) marks.push('<span style="color:#8c8c8c;">AI</span>');
+    if (p.isConnected === false) marks.push('<span style="color:#F5822B;">断线</span>');
+    if (p.voteToken > 0 && p.isDead) marks.push('<span style="color:#10AEFF;">余1票</span>');
+    const teamColor = p.team === 'GOOD' ? '#07C160' : '#FA5151';
     const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
-    let infoCell = '<span style="color:#555;">-</span>';
+    let infoCell = '<span style="color:#b2b2b2;">-</span>';
     const hist = p.privateInfoHistory && p.privateInfoHistory.length > 0 ? p.privateInfoHistory : (p.privateInfo ? [p.privateInfo] : []);
     if (hist.length > 0) {
       const latest = hist[hist.length - 1];
-      const falseStyle = latest.isFalse ? 'color:#e74c3c;' : 'color:#f0d78c;';
+      const falseStyle = latest.isFalse ? 'color:#FA5151;' : 'color:#0FA958;';
       // 表格单元格只显示第一行摘要（完整内容用 title 悬浮查看），避免多行信息被挤成一串
       const firstLine = String(latest.message || '').split('\n')[0];
       infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message)}">${escapeHtml(firstLine).substring(0, 30)}${firstLine.length > 30 ? '...' : ''}</span>
-        <span style="color:#888; font-size:11px;">(${hist.length}条)</span>`;
+        <span style="color:#8c8c8c; font-size:11px;">(${hist.length}条)</span>`;
     }
-    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05); opacity:${p.isAlive?1:0.5};">
+    return `<tr style="border-bottom:1px solid rgba(0,0,0,0.03); opacity:${p.isAlive?1:0.5};">
       <td style="padding:8px;">${p.seat+1}</td>
       <td style="padding:8px;">${escapeHtml(p.name)}</td>
-      <td style="padding:8px; color:#d4af37; font-weight:bold;">${p.roleName}</td>
+      <td style="padding:8px; color:#07C160; font-weight:bold;">${p.roleName}</td>
       <td style="padding:8px; color:${teamColor};">${teamText}</td>
       <td style="padding:8px; color:${statusColor};">${statusText}</td>
       <td style="padding:8px;">${marks.join(' ')}</td>
@@ -2469,7 +3099,7 @@ function updateGodPlayers() {
 }
 
 function renderGodPlayer(p, team) {
-  const color = team === 'good' ? '#2ecc71' : '#e74c3c';
+  const color = team === 'good' ? '#07C160' : '#FA5151';
   const deadStyle = p.isDead ? 'opacity:0.5; text-decoration:line-through;' : '';
   let marks = '';
   if (p.isPoisoned) marks += ' 🟣';
@@ -2490,23 +3120,23 @@ function renderGodPlayer(p, team) {
     let dayHtml = '';
     days.forEach(day => {
       const dayLabel = day === 0 ? '第一夜' : `第${day}夜`;
-      dayHtml += `<div style="margin-bottom:3px;"><span style="color:#d4af37; font-size:11px; opacity:0.7;">${dayLabel}</span></div>`;
+      dayHtml += `<div style="margin-bottom:3px;"><span style="color:#07C160; font-size:11px; opacity:0.7;">${dayLabel}</span></div>`;
       byDay[day].forEach(info => {
         const falseMark = info.isFalse 
-          ? '<span style="color:#e74c3c; font-weight:bold; font-size:11px;"> ⚠️假</span>' 
-          : '<span style="color:#2ecc71; font-size:11px;"> ✓</span>';
-        dayHtml += `<div style="font-size:11.5px; line-height:1.5; color:${info.isFalse ? '#e74c3c' : '#f0d78c'}; margin-left:10px; margin-bottom:6px; white-space:pre-wrap;">· ${escapeHtml(info.message).replace(/\n/g, '<br>')}${falseMark}</div>`;
+          ? '<span style="color:#FA5151; font-weight:bold; font-size:11px;"> ⚠️假</span>' 
+          : '<span style="color:#07C160; font-size:11px;"> ✓</span>';
+        dayHtml += `<div style="font-size:11.5px; line-height:1.5; color:${info.isFalse ? '#FA5151' : '#0FA958'}; margin-left:10px; margin-bottom:6px; white-space:pre-wrap;">· ${escapeHtml(info.message).replace(/\n/g, '<br>')}${falseMark}</div>`;
       });
     });
-    infoHtml = `<div style="margin-left:20px; margin-top:3px; padding:6px 8px; background:rgba(0,0,0,0.2); border-radius:3px;">
-      <div style="color:#d4af37; font-size:11px; margin-bottom:3px;">💬 信息（${infoHist.length}条）</div>
+    infoHtml = `<div style="margin-left:20px; margin-top:3px; padding:6px 8px; background:rgba(0,0,0,0.035); border-radius:3px;">
+      <div style="color:#07C160; font-size:11px; margin-bottom:3px;">💬 信息（${infoHist.length}条）</div>
       ${dayHtml}
     </div>`;
   }
-  return `<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05); ${deadStyle}">
-    <span style="color:#888;">${p.seat+1}号</span>
+  return `<div style="padding:6px 0; border-bottom:1px solid rgba(0,0,0,0.03); ${deadStyle}">
+    <span style="color:#8c8c8c;">${p.seat+1}号</span>
     <span style="color:${color}; font-weight:bold; margin-left:5px;">${escapeHtml(p.name)}</span>
-    <span style="color:#d4af37; margin-left:8px;">【${p.roleName}】</span>
+    <span style="color:#07C160; margin-left:8px;">【${p.roleName}】</span>
     ${marks}
     ${infoHtml}
   </div>`;
@@ -2527,7 +3157,7 @@ function formatProbInfo(pi) {
   } else {
     resultText = pi.result ? '✅ 命中' : '❌ 未命中';
   }
-  resultColor = pi.result ? '#2ecc71' : '#e74c3c';
+  resultColor = pi.result ? '#07C160' : '#FA5151';
   
   let scenarioText = '';
   if (pi.scenario === 'good_weak') scenarioText = '好人弱势（帮好人）';
@@ -2542,7 +3172,7 @@ function formatProbInfo(pi) {
   
   let extraInfo = '';
   if (pi.baseProbability !== undefined) {
-    extraInfo += `<div>基础概率：<span style="color:#f0d78c;">${(pi.baseProbability * 100).toFixed(1)}%</span></div>`;
+    extraInfo += `<div>基础概率：<span style="color:#0FA958;">${(pi.baseProbability * 100).toFixed(1)}%</span></div>`;
   }
   if (pi.goodWeakThreshold !== undefined) {
     extraInfo += `<div>好人弱势阈值：${(pi.goodWeakThreshold * 100).toFixed(0)}%</div>`;
@@ -2554,10 +3184,10 @@ function formatProbInfo(pi) {
     extraInfo += `<div>选中玩家：${pi.selectedName}</div>`;
   }
   
-  return `<div style="margin-left:20px; margin-top:4px; padding:6px 10px; background:rgba(0,0,0,0.25); border-radius:4px; border-left:2px solid #d4af37; font-size:12px; color:#ccc; line-height:1.6;">
-    <div><span style="color:#d4af37;">📊 ${pi.description || '概率事件'}</span></div>
+  return `<div style="margin-left:20px; margin-top:4px; padding:6px 10px; background:rgba(0,0,0,0.04); border-radius:4px; border-left:2px solid #07C160; font-size:12px; color:#4f4f4f; line-height:1.6;">
+    <div><span style="color:#07C160;">📊 ${pi.description || '概率事件'}</span></div>
     <div>局势：${scenarioText}（平衡分：${pi.balanceScore !== undefined ? pi.balanceScore.toFixed(3) : 'N/A'}）</div>
-    <div>概率：<span style="color:#f0d78c; font-weight:bold;">${probPct}%</span>（阈值：${threshPct}%）</div>
+    <div>概率：<span style="color:#0FA958; font-weight:bold;">${probPct}%</span>（阈值：${threshPct}%）</div>
     ${extraInfo}
     <div>结果：<span style="color:${resultColor}; font-weight:bold;">${resultText}</span></div>
   </div>`;
@@ -2568,24 +3198,24 @@ function appendGodLogEntry(entry) {
   if (!logContainer) return;
   
   const typeColors = {
-    'ROLE_ASSIGN': '#d4af37',
-    'GAME_START': '#fff',
+    'ROLE_ASSIGN': '#07C160',
+    'GAME_START': '#191919',
     'NIGHT_WAKE': '#9b59b6',
     'NIGHT_ACTION': '#9b59b6',
-    'NIGHT_END': '#3498db',
-    'DEATH': '#e74c3c',
-    'NOMINATION': '#f39c12',
-    'VOTE_RESULT': '#f39c12',
-    'EXECUTION': '#e74c3c',
-    'GAME_OVER': '#fff',
-    'PRIVATE_INFO': '#1abc9c',
-    'ABILITY': '#e67e22',
-    'CUSTOM_ASSIGN': '#d4af37'
+    'NIGHT_END': '#10AEFF',
+    'DEATH': '#FA5151',
+    'NOMINATION': '#FF9500',
+    'VOTE_RESULT': '#FF9500',
+    'EXECUTION': '#FA5151',
+    'GAME_OVER': '#191919',
+    'PRIVATE_INFO': '#00B578',
+    'ABILITY': '#F5822B',
+    'CUSTOM_ASSIGN': '#07C160'
   };
   const color = typeColors[entry.type] || '#aaa';
   let msg = entry.message;
   if (entry.type === 'PRIVATE_INFO' && entry.data && entry.data.isFalse) {
-    msg = `<span style="color:#e74c3c;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
+    msg = `<span style="color:#FA5151;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
   } else {
     msg = escapeHtml(msg);
   }
@@ -2600,7 +3230,7 @@ function appendGodLogEntry(entry) {
 
   const div = document.createElement('div');
   div.style.cssText = `color:${color}; padding:2px 0; line-height:1.5;`;
-  div.innerHTML = `<span style="color:#666;">[${entry.time}]</span> ${msg}${probHtml}`;
+  div.innerHTML = `<span style="color:#999999;">[${entry.time}]</span> ${msg}${probHtml}`;
   logContainer.appendChild(div);
 }
 
@@ -2609,176 +3239,315 @@ const ALL_ROLE_INFO = [
   // TB 村民
   { id: 'washerwoman', name: '洗衣妇', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的村民角色。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'librarian', name: '图书管理员', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的外来者角色（若无外来者则获知此信息）。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'investigator', name: '调查员', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知两名玩家以及其中一名玩家的爪牙角色。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'chef', name: '厨师', team: 'GOOD', category: '村民', script: 'tb',
     ability: '首个夜晚，你得知邪恶玩家相邻的对数。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'empath', name: '共情者', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚，你得知你的左右存活邻居中有多少名邪恶玩家。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'fortuneteller', name: '占卜师', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚，选择两名玩家：你得知他们之中是否有恶魔。有一名善良玩家会被你当作恶魔（红鲱鱼）。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'monk', name: '僧侣', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚（首个夜晚除外），选择除你以外的一名玩家：该玩家今晚不会被恶魔杀害。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'ravenkeeper', name: '守鸦人', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果你在夜晚死亡，你被唤醒并选择一名玩家：你得知他的角色。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'virgin', name: '圣女', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果你首次被提名，提名你的玩家若是村民则立即死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'slayer', name: '杀手', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每局限一次，白天时可以公开选择一名玩家，如果是恶魔则恶魔死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'soldier', name: '士兵', team: 'GOOD', category: '村民', script: 'tb',
     ability: '你不会被恶魔杀害。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'mayor', name: '市长', team: 'GOOD', category: '村民', script: 'tb',
     ability: '如果只剩三名玩家存活且你未被处决，你的阵营获胜。如果你在夜晚死亡，可能有其他玩家替你死去。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'undertaker', name: '掘墓人', team: 'GOOD', category: '村民', script: 'tb',
     ability: '每个夜晚（首个夜晚除外），你得知今天白天被处决玩家的角色。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   // TB 外来者
   { id: 'saint', name: '圣徒', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '如果你被处决，邪恶阵营获胜。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'butler', name: '管家', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '每个夜晚，选择一名玩家（非自己）：明天你只能在该玩家投赞成票时投赞成票。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'drunk', name: '酒鬼', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '你不知道自己是酒鬼。你以为自己是一个村民角色，但实际上你没有技能，你的信息是不可靠的。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'recluse', name: '隐士', team: 'GOOD', category: '外来者', script: 'tb',
     ability: '你可能被登记为邪恶阵营、爪牙或恶魔。你可能在夜晚死亡，即使没人想杀你。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   // TB 爪牙
   { id: 'poisoner', name: '下毒者', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '每个夜晚，选择一名玩家：该玩家今晚和明天中毒，技能异常或失效。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'scarletwoman', name: '红唇女郎', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '如果恶魔死亡时存活玩家数≥5，你成为新恶魔。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'baron', name: '男爵', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '有两名额外的外来者在场（因此少两名村民）。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'spy', name: '间谍', team: 'EVIL', category: '爪牙', script: 'tb',
     ability: '每个夜晚，你查看恶魔魔典（得知所有玩家身份）。你可能被登记为善良阵营、村民或外来者。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   // TB 恶魔
   { id: 'imp', name: '小恶魔', team: 'EVIL', category: '恶魔', script: 'tb',
     ability: '每个夜晚（除首夜），选择一名玩家将其杀害。首夜得知爪牙和3个不在场身份。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   // BMR 村民
   { id: 'grandmother', name: '祖母', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '首夜得知一名善良玩家及其角色（作为你的"孙子"）；若孙子被恶魔杀死，你也会死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'sailor', name: '水手', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '每个夜晚，选择一名存活玩家，你或该玩家醉酒直到下一个黄昏；水手不会死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'maid', name: '侍女', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '每个夜晚，选择除自己外的两名存活玩家，得知他们中有几人在当晚因自身能力被唤醒。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'exorcist', name: '驱魔人', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '每个夜晚，选择一名玩家（不能与上夜相同），若选中恶魔：恶魔得知驱魔人是谁，该恶魔能力失效。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'innkeeper', name: '旅店老板', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '第二夜起，选择两名玩家，他们当晚不会死亡，但其中一人会醉酒到下一个黄昏。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'gambler', name: '赌徒', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '第二夜起，选择一名玩家并猜测其角色，猜错则赌徒死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'gossip', name: '造谣者', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '每个白天可公开发表一个声明，若声明为真，当晚一名玩家死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'courtier', name: '侍臣', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '每局游戏限一次在夜晚时，选择一个角色：如果该角色在场，该角色之一从当晚开始醉酒三天三夜。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'professor', name: '教授', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '选择一名死亡玩家，若该玩家是镇民则复活（一次性能力）。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'bard', name: '吟游诗人', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '当一名爪牙死于处决时，除了你以外的所有其他玩家醉酒直到明天黄昏。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'tealady', name: '茶艺师', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '如果与你邻近的两名存活的玩家是善良的，他们不会死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'pacifist', name: '和平主义者', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '被处决的善良玩家可能不会死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   { id: 'fool', name: '弄臣', team: 'GOOD', category: '村民', script: 'bmr',
     ability: '当你首次将要死亡时，你不会死亡。',
-    color: '#2ecc71' },
+    color: '#07C160' },
   // BMR 外来者
   { id: 'tinker', name: '修补匠', team: 'GOOD', category: '外来者', script: 'bmr',
     ability: '可能会在夜晚死亡（由说书人决定）。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'moonchild', name: '月之子', team: 'GOOD', category: '外来者', script: 'bmr',
     ability: '当你得知你死亡时，你要公开选择一名存活的玩家。如果他是善良的，在当晚他会死亡。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'lunatic', name: '莽夫', team: 'GOOD', category: '外来者', script: 'bmr',
     ability: '每个夜晚，首个使用其自身能力选择了你的玩家会醉酒直到下个黄昏。你会转变为他的阵营。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   { id: 'madman', name: '疯子', team: 'GOOD', category: '外来者', script: 'bmr',
     ability: '你以为你是一个恶魔，但其实你不是。恶魔知道你是疯子以及你在每个夜晚选择了哪些玩家。',
-    color: '#f39c12' },
+    color: '#FF9500' },
   // BMR 爪牙
   { id: 'godfather', name: '教父', team: 'EVIL', category: '爪牙', script: 'bmr',
     ability: '在你的首个夜晚，你会得知有哪些外来者角色在场。如果有外来者在白天死亡，你会在当晚被唤醒并且你要选择一名玩家：他死亡。在场时人数配置会变动外来者+1或-1。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'devilsadvocate', name: '魔鬼代言人', team: 'EVIL', category: '爪牙', script: 'bmr',
     ability: '每个夜晚，选择一名存活玩家（与上个夜晚不同）：如果该玩家明天白天被处决则不会死。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'assassin', name: '刺客', team: 'EVIL', category: '爪牙', script: 'bmr',
     ability: '在夜晚时，选择一名玩家杀死（一次性能力），无论什么情况选择的玩家都会死亡。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   { id: 'mastermind', name: '主谋', team: 'EVIL', category: '爪牙', script: 'bmr',
     ability: '如果恶魔因为死于处决而因此导致游戏结束时，再额外进行一个夜晚和一个白天。在那个白天如果有玩家被处决，他的阵营落败。',
-    color: '#e74c3c' },
+    color: '#FA5151' },
   // BMR 恶魔
   { id: 'zombuul', name: '僵怖', team: 'EVIL', category: '恶魔', script: 'bmr',
     ability: '每个夜晚，若白天无人死亡，选择一名玩家杀死。当你首次死亡后，你仍存活，但是会被当作死亡。',
-    color: '#c0392b' },
+    color: '#E64340' },
   { id: 'pukka', name: '普卡', team: 'EVIL', category: '恶魔', script: 'bmr',
     ability: '每个夜晚，选择一名玩家中毒，上一夜被毒的玩家在当晚死亡并恢复健康。',
-    color: '#c0392b' },
+    color: '#E64340' },
   { id: 'shabaloth', name: '沙巴洛斯', team: 'EVIL', category: '恶魔', script: 'bmr',
     ability: '每个夜晚，选择两名玩家杀死；你上个夜晚选择过且当前死亡的玩家之一可能会被你反刍（复活）。',
-    color: '#c0392b' },
+    color: '#E64340' },
   { id: 'po', name: '珀', team: 'EVIL', category: '恶魔', script: 'bmr',
     ability: '每个夜晚，你可以选择一名玩家：他死亡。如果你上次选择时没有选择任何玩家，当晚你要选择三名玩家：他们死亡。',
-    color: '#c0392b' }
+    color: '#E64340' }
 ];
 
 // 剧本信息映射（用于卡片显示和角色总览标题）
 const SCRIPT_INFO = {
-  tb: { id: 'tb', name: '灾祸之酿', nameEn: 'Trouble Brewing', icon: '🍺', color: '#d4af37',
+  tb: { id: 'tb', name: '灾祸之酿', nameEn: 'Trouble Brewing', icon: '🍺', color: '#07C160',
         desc: '新手友好，推荐入门' },
   bmr: { id: 'bmr', name: '黯月初升', nameEn: 'Bad Moon Rising', icon: '🌑', color: '#9b59b6',
          desc: '进阶剧本，更多恶魔' }
 };
 
+// ========== 公开公告（伪装用，不触发任何角色能力） ==========
+// 仅列出真正具备「公开公告」能力的角色，并按剧本标注（前缀与真实公告格式一致）
+// inputType: text = 自由输入；player = 从当前房间存活玩家中选择
+const ANNOUNCE_ROLE_PRESETS = [
+  { id: 'gossip', name: '造谣者', script: 'bmr', inputType: 'text', prefix: '【造谣者声明】', placeholder: '例如：3号 是恶魔', maxLen: 120 },
+  { id: 'moonchild', name: '月之子', script: 'bmr', inputType: 'player', prefix: '【月之子选择】我选择 ', maxLen: 60 }
+];
+
+// 当前剧本下可发起公告的角色（剧本内没有此类角色时返回空数组）
+function getAvailableAnnouncePresets() {
+  const scriptId = (currentState && currentState.script) || 'tb';
+  return ANNOUNCE_ROLE_PRESETS.filter(p => p.script === scriptId);
+}
+
+// 根据当前剧本动态显示 / 隐藏「公开公告」按钮
+function updateAnnounceButtonVisibility() {
+  const btn = document.querySelector('.announce-trigger-btn');
+  if (!btn) return;
+  btn.style.display = getAvailableAnnouncePresets().length > 0 ? '' : 'none';
+}
+
+function openAnnouncePanel() {
+  const panel = $('announcePanel');
+  if (!panel) return;
+  if (getAvailableAnnouncePresets().length === 0) {
+    showToast('当前剧本没有可发起公告的角色');
+    return;
+  }
+  renderAnnounceRoleOptions();
+  const ta = $('announceText');
+  if (ta) ta.value = '';
+  renderAnnouncePlayerOptions();
+  updateAnnouncePreview();
+  panel.style.display = 'flex';
+  setTimeout(() => { if (ta) ta.focus(); }, 80);
+}
+
+// 月之子：只能从当前房间存活玩家中选择
+function renderAnnouncePlayerOptions() {
+  const sel = $('announcePlayer');
+  if (!sel) return;
+  const players = ((currentState && currentState.players) || [])
+    .filter(p => p.seat !== -1 && p.isAlive)
+    .sort((a, b) => a.seat - b.seat);
+  sel.innerHTML = players.length
+    ? players.map(p => `<option value="${p.id}">${p.seat + 1}号 ${escapeHtml(p.name)}</option>`).join('')
+    : '<option value="">（没有可选玩家）</option>';
+}
+
+// 取当前角色对应的公告正文
+function getAnnounceTargetText() {
+  const preset = getAnnouncePreset();
+  if (preset.inputType === 'player') {
+    const sel = $('announcePlayer');
+    if (!sel || !sel.value) return '';
+    const p = ((currentState && currentState.players) || []).find(x => x.id === sel.value);
+    return p ? `${p.seat + 1}号 ${p.name}` : '';
+  }
+  const ta = $('announceText');
+  return ta ? ta.value.trim() : '';
+}
+
+function closeAnnouncePanel() {
+  const panel = $('announcePanel');
+  if (panel) panel.style.display = 'none';
+}
+
+function getAnnouncePreset() {
+  const sel = $('announceRole');
+  const id = sel ? sel.value : '';
+  const list = getAvailableAnnouncePresets();
+  return list.find(p => p.id === id) || list[0];
+}
+
+function renderAnnounceRoleOptions() {
+  const sel = $('announceRole');
+  if (!sel) return;
+  sel.innerHTML = getAvailableAnnouncePresets()
+    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+    .join('');
+}
+
+function updateAnnouncePreview() {
+  const preset = getAnnouncePreset();
+  const ta = $('announceText');
+  const prev = $('announcePreview');
+  const cnt = $('announceCount');
+  const textField = $('annTextField');
+  const playerField = $('annPlayerField');
+  const isPlayer = preset.inputType === 'player';
+
+  // 按角色切换输入方式：造谣者=自由文本，月之子=选择存活玩家
+  if (textField) textField.style.display = isPlayer ? 'none' : '';
+  if (playerField) playerField.style.display = isPlayer ? '' : 'none';
+
+  if (ta) {
+    ta.maxLength = preset.maxLen;
+    ta.placeholder = preset.placeholder || '';
+    if (cnt) cnt.textContent = `${ta.value.length}/${preset.maxLen}`;
+  }
+
+  const body = getAnnounceTargetText();
+  if (prev) prev.textContent = `${preset.prefix}${body || '……'}`;
+}
+
+function sendAnnouncement() {
+  const preset = getAnnouncePreset();
+  const text = getAnnounceTargetText();
+  if (!text) {
+    showToast(preset.inputType === 'player' ? '请选择一名存活玩家' : '请输入公告内容');
+    return;
+  }
+  socket.emit('chat:announce', { roleId: preset.id, text });
+  closeAnnouncePanel();
+}
+
+// 角色总览当前查看的剧本（可在弹窗内手动切换）
+let _roScriptId = null;
+
 function openRoleOverview() {
   const panel = document.getElementById('roleOverviewPanel');
   if (!panel) return;
-  panel.style.display = 'block';
+  panel.style.display = 'flex';
+  // 默认展示当前房间使用的剧本
+  _roScriptId = (currentState && currentState.script) || 'tb';
+  renderRoleOverview();
+}
 
-  // 根据当前剧本过滤角色
-  const scriptId = (currentState && currentState.script) || 'tb';
-  const info = SCRIPT_INFO[scriptId] || { icon: '📜', name: '角色总览', nameEn: '', color: '#3498db' };
+// 弹窗内手动切换剧本查看
+function switchRoleOverviewScript(scriptId) {
+  if (!SCRIPT_INFO[scriptId]) return;
+  _roScriptId = scriptId;
+  renderRoleOverview();
+}
+
+function renderRoleOverview() {
+  const scriptId = _roScriptId || (currentState && currentState.script) || 'tb';
+  const info = SCRIPT_INFO[scriptId] || { icon: '📜', name: '角色总览', nameEn: '', color: '#10AEFF' };
   const rolesForScript = ALL_ROLE_INFO.filter(r => r.script === scriptId);
+
+  // 剧本切换按钮
+  const tabsEl = document.getElementById('roScriptTabs');
+  if (tabsEl) {
+    tabsEl.innerHTML = Object.values(SCRIPT_INFO).map(s => {
+      const active = s.id === scriptId ? ' active' : '';
+      return `<button class="wx-ro-tab${active}" onclick="switchRoleOverviewScript('${s.id}')">${s.icon} ${s.name}</button>`;
+    }).join('');
+  }
 
   // 更新标题
   const titleEl = document.getElementById('roleOverviewTitle');
   if (titleEl) {
-    titleEl.innerHTML = `<span style="font-size:1.1em;">${info.icon}</span> ${info.name} <span style="font-size:0.75em; color:#888; font-weight:normal;">${info.nameEn}</span>`;
+    titleEl.innerHTML = `<span style="font-size:1.1em;">${info.icon}</span> ${info.name} <span style="font-size:0.75em; color:#8c8c8c; font-weight:normal;">${info.nameEn}</span>`;
     titleEl.style.color = info.color;
   }
 
@@ -2795,12 +3564,12 @@ function openRoleOverview() {
     if (!container) continue;
     const roles = rolesForScript.filter(r => r.category === cat);
     if (roles.length === 0) {
-      container.innerHTML = '<div style="color:#666; font-size:12px; padding:8px; text-align:center;">本剧本无此类角色</div>';
+      container.innerHTML = '<div style="color:#999999; font-size:12px; padding:8px; text-align:center;">本剧本无此类角色</div>';
       continue;
     }
     container.innerHTML = roles.map(r => {
       const teamLabel = r.team === 'GOOD' ? '善良阵营' : '邪恶阵营';
-      const teamBg = r.team === 'GOOD' ? 'rgba(46,204,113,0.2)' : 'rgba(231,76,60,0.2)';
+      const teamBg = r.team === 'GOOD' ? 'rgba(7,193,96,0.2)' : 'rgba(250,81,81,0.2)';
       return `<div class="role-card">
         <div class="role-card-name" style="color:${r.color};">${r.name}</div>
         <div class="role-card-team" style="background:${teamBg}; color:${r.color};">${teamLabel}</div>
@@ -2953,66 +3722,66 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId) {
 const CUSTOM_ROLE_OPTIONS = [
   { id: '', name: '随机分配', color: '#888' },
   // TB 村民
-  { id: 'washerwoman', name: '洗衣妇（村民）', color: '#2ecc71' },
-  { id: 'librarian', name: '图书管理员（村民）', color: '#2ecc71' },
-  { id: 'investigator', name: '调查员（村民）', color: '#2ecc71' },
-  { id: 'chef', name: '厨师（村民）', color: '#2ecc71' },
-  { id: 'empath', name: '共情者（村民）', color: '#2ecc71' },
-  { id: 'fortuneteller', name: '占卜师（村民）', color: '#2ecc71' },
-  { id: 'monk', name: '僧侣（村民）', color: '#2ecc71' },
-  { id: 'ravenkeeper', name: '守鸦人（村民）', color: '#2ecc71' },
-  { id: 'virgin', name: '圣女（村民）', color: '#2ecc71' },
-  { id: 'slayer', name: '杀手（村民）', color: '#2ecc71' },
-  { id: 'soldier', name: '士兵（村民）', color: '#2ecc71' },
-  { id: 'mayor', name: '市长（村民）', color: '#2ecc71' },
-  { id: 'undertaker', name: '掘墓人（村民）', color: '#2ecc71' },
+  { id: 'washerwoman', name: '洗衣妇（村民）', color: '#07C160' },
+  { id: 'librarian', name: '图书管理员（村民）', color: '#07C160' },
+  { id: 'investigator', name: '调查员（村民）', color: '#07C160' },
+  { id: 'chef', name: '厨师（村民）', color: '#07C160' },
+  { id: 'empath', name: '共情者（村民）', color: '#07C160' },
+  { id: 'fortuneteller', name: '占卜师（村民）', color: '#07C160' },
+  { id: 'monk', name: '僧侣（村民）', color: '#07C160' },
+  { id: 'ravenkeeper', name: '守鸦人（村民）', color: '#07C160' },
+  { id: 'virgin', name: '圣女（村民）', color: '#07C160' },
+  { id: 'slayer', name: '杀手（村民）', color: '#07C160' },
+  { id: 'soldier', name: '士兵（村民）', color: '#07C160' },
+  { id: 'mayor', name: '市长（村民）', color: '#07C160' },
+  { id: 'undertaker', name: '掘墓人（村民）', color: '#07C160' },
   // TB 外来者
-  { id: 'saint', name: '圣徒（外来者）', color: '#f39c12' },
-  { id: 'butler', name: '管家（外来者）', color: '#f39c12' },
-  { id: 'drunk', name: '酒鬼（外来者）', color: '#f39c12' },
-  { id: 'recluse', name: '隐士（外来者）', color: '#f39c12' },
+  { id: 'saint', name: '圣徒（外来者）', color: '#FF9500' },
+  { id: 'butler', name: '管家（外来者）', color: '#FF9500' },
+  { id: 'drunk', name: '酒鬼（外来者）', color: '#FF9500' },
+  { id: 'recluse', name: '隐士（外来者）', color: '#FF9500' },
   // TB 爪牙
-  { id: 'poisoner', name: '下毒者（爪牙）', color: '#e74c3c' },
-  { id: 'scarletwoman', name: '红唇女郎（爪牙）', color: '#e74c3c' },
-  { id: 'baron', name: '男爵（爪牙）', color: '#e74c3c' },
-  { id: 'spy', name: '间谍（爪牙）', color: '#e74c3c' },
+  { id: 'poisoner', name: '下毒者（爪牙）', color: '#FA5151' },
+  { id: 'scarletwoman', name: '红唇女郎（爪牙）', color: '#FA5151' },
+  { id: 'baron', name: '男爵（爪牙）', color: '#FA5151' },
+  { id: 'spy', name: '间谍（爪牙）', color: '#FA5151' },
   // TB 恶魔
-  { id: 'imp', name: '小恶魔（恶魔）', color: '#c0392b' },
+  { id: 'imp', name: '小恶魔（恶魔）', color: '#E64340' },
   // BMR 村民
-  { id: 'grandmother', name: '祖母（村民）', color: '#2ecc71' },
-  { id: 'sailor', name: '水手（村民）', color: '#2ecc71' },
-  { id: 'maid', name: '侍女（村民）', color: '#2ecc71' },
-  { id: 'exorcist', name: '驱魔人（村民）', color: '#2ecc71' },
-  { id: 'innkeeper', name: '旅店老板（村民）', color: '#2ecc71' },
-  { id: 'gambler', name: '赌徒（村民）', color: '#2ecc71' },
-  { id: 'gossip', name: '造谣者（村民）', color: '#2ecc71' },
-  { id: 'courtier', name: '侍臣（村民）', color: '#2ecc71' },
-  { id: 'professor', name: '教授（村民）', color: '#2ecc71' },
-  { id: 'bard', name: '吟游诗人（村民）', color: '#2ecc71' },
-  { id: 'tealady', name: '茶艺师（村民）', color: '#2ecc71' },
-  { id: 'pacifist', name: '和平主义者（村民）', color: '#2ecc71' },
-  { id: 'fool', name: '弄臣（村民）', color: '#2ecc71' },
+  { id: 'grandmother', name: '祖母（村民）', color: '#07C160' },
+  { id: 'sailor', name: '水手（村民）', color: '#07C160' },
+  { id: 'maid', name: '侍女（村民）', color: '#07C160' },
+  { id: 'exorcist', name: '驱魔人（村民）', color: '#07C160' },
+  { id: 'innkeeper', name: '旅店老板（村民）', color: '#07C160' },
+  { id: 'gambler', name: '赌徒（村民）', color: '#07C160' },
+  { id: 'gossip', name: '造谣者（村民）', color: '#07C160' },
+  { id: 'courtier', name: '侍臣（村民）', color: '#07C160' },
+  { id: 'professor', name: '教授（村民）', color: '#07C160' },
+  { id: 'bard', name: '吟游诗人（村民）', color: '#07C160' },
+  { id: 'tealady', name: '茶艺师（村民）', color: '#07C160' },
+  { id: 'pacifist', name: '和平主义者（村民）', color: '#07C160' },
+  { id: 'fool', name: '弄臣（村民）', color: '#07C160' },
   // BMR 外来者
-  { id: 'tinker', name: '修补匠（外来者）', color: '#f39c12' },
-  { id: 'moonchild', name: '月之子（外来者）', color: '#f39c12' },
-  { id: 'lunatic', name: '莽夫（外来者）', color: '#f39c12' },
-  { id: 'madman', name: '疯子（外来者）', color: '#f39c12' },
+  { id: 'tinker', name: '修补匠（外来者）', color: '#FF9500' },
+  { id: 'moonchild', name: '月之子（外来者）', color: '#FF9500' },
+  { id: 'lunatic', name: '莽夫（外来者）', color: '#FF9500' },
+  { id: 'madman', name: '疯子（外来者）', color: '#FF9500' },
   // BMR 爪牙
-  { id: 'godfather', name: '教父（爪牙）', color: '#e74c3c' },
-  { id: 'devilsadvocate', name: '魔鬼代言人（爪牙）', color: '#e74c3c' },
-  { id: 'assassin', name: '刺客（爪牙）', color: '#e74c3c' },
-  { id: 'mastermind', name: '主谋（爪牙）', color: '#e74c3c' },
+  { id: 'godfather', name: '教父（爪牙）', color: '#FA5151' },
+  { id: 'devilsadvocate', name: '魔鬼代言人（爪牙）', color: '#FA5151' },
+  { id: 'assassin', name: '刺客（爪牙）', color: '#FA5151' },
+  { id: 'mastermind', name: '主谋（爪牙）', color: '#FA5151' },
   // BMR 恶魔
-  { id: 'zombuul', name: '僵怖（恶魔）', color: '#c0392b' },
-  { id: 'pukka', name: '普卡（恶魔）', color: '#c0392b' },
-  { id: 'shabaloth', name: '沙巴洛斯（恶魔）', color: '#c0392b' },
-  { id: 'po', name: '珀（恶魔）', color: '#c0392b' }
+  { id: 'zombuul', name: '僵怖（恶魔）', color: '#E64340' },
+  { id: 'pukka', name: '普卡（恶魔）', color: '#E64340' },
+  { id: 'shabaloth', name: '沙巴洛斯（恶魔）', color: '#E64340' },
+  { id: 'po', name: '珀（恶魔）', color: '#E64340' }
 ];
 
 function openCustomRolePanel() {
   const panel = $('customRolePanel');
   if (!panel) return;
-  panel.style.display = 'block';
+  panel.style.display = 'flex';
   renderCustomRoleList();
 }
 
@@ -3025,7 +3794,7 @@ function renderCustomRoleList() {
   if (!container || !currentState) return;
   const seated = (currentState.players || []).filter(p => p.seat !== -1).sort((a, b) => a.seat - b.seat);
   if (seated.length === 0) {
-    container.innerHTML = '<p style="color:#888; text-align:center; padding:20px;">暂无入座玩家</p>';
+    container.innerHTML = '<p style="color:#8c8c8c; text-align:center; padding:20px;">暂无入座玩家</p>';
     return;
   }
 
@@ -3052,11 +3821,11 @@ function renderCustomRoleList() {
     const currentOpt = CUSTOM_ROLE_OPTIONS.find(o => o.id === currentVal);
     const isWrongScript = currentVal && currentOpt && ROLE_SCRIPT_MAP[currentVal] !== scriptId;
     const isDuplicate = currentVal && usedRoles[currentVal] > 1;
-    const borderColor = isDuplicate ? '#e74c3c' : (currentVal ? (isWrongScript ? '#f39c12' : '#2ecc71') : 'rgba(255,255,255,0.1)');
-    html += `<div style="display:flex; align-items:center; padding:8px 12px; margin-bottom:6px; background:rgba(0,0,0,0.3); border-radius:6px; border-left:3px solid ${borderColor};">
-      <span style="width:50px; color:#d4af37; font-weight:bold;">${p.seat+1}号</span>
-      <span style="flex:1; color:#fff; margin-right:10px;">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</span>
-      <select onchange="setCustomRole(${p.seat}, this.value)" style="background:#1a1a2e; color:#fff; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:4px 8px; min-width:180px; font-size:13px;">
+    const borderColor = isDuplicate ? '#FA5151' : (currentVal ? (isWrongScript ? '#FF9500' : '#07C160') : 'rgba(0,0,0,0.06)');
+    html += `<div style="display:flex; align-items:center; padding:8px 12px; margin-bottom:6px; background:rgba(0,0,0,0.05); border-radius:6px; border-left:3px solid ${borderColor};">
+      <span style="width:50px; color:#07C160; font-weight:bold;">${p.seat+1}号</span>
+      <span style="flex:1; color:#191919; margin-right:10px;">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</span>
+      <select onchange="setCustomRole(${p.seat}, this.value)" style="background:#ffffff; color:#191919; border:1px solid rgba(0,0,0,0.12); border-radius:4px; padding:4px 8px; min-width:180px; font-size:13px;">
         ${filteredOptions.map(opt =>
           `<option value="${opt.id}" ${currentVal === opt.id ? 'selected' : ''} style="color:${opt.color};">${opt.name}</option>`
         ).join('')}
@@ -3065,16 +3834,16 @@ function renderCustomRoleList() {
   });
 
   // 配置概览面板
-  const setupTag = v.hasSetupChar ? ` <span style="color:#e74c3c;">(${v.setupCharName}在场${v.comp.setupType === 'godfather' ? ': 外来者±1' : ': 村民-2, 外来者+2'})</span>` : '';
-  html += `<div style="margin-top:10px; padding:10px; background:rgba(52,73,94,0.4); border-radius:6px; font-size:12px;">
-    <div style="color:#d4af37; font-weight:bold; margin-bottom:6px;">当前人数配置 (${playerCount}人)${setupTag}</div>
+  const setupTag = v.hasSetupChar ? ` <span style="color:#FA5151;">(${v.setupCharName}在场${v.comp.setupType === 'godfather' ? ': 外来者±1' : ': 村民-2, 外来者+2'})</span>` : '';
+  html += `<div style="margin-top:10px; padding:10px; background:rgba(0,0,0,0.08); border-radius:6px; font-size:12px;">
+    <div style="color:#07C160; font-weight:bold; margin-bottom:6px;">当前人数配置 (${playerCount}人)${setupTag}</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
-      <span style="color:#2ecc71;">村民: ${v.counts.townsfolk}/${v.comp.townsfolk}</span>
-      <span style="color:#f39c12;">外来者: ${v.counts.outsider}/${v.comp.outsider}</span>
-      <span style="color:#e74c3c;">爪牙: ${v.counts.minion}/${v.comp.minion}</span>
-      <span style="color:#c0392b;">恶魔: ${v.counts.demon}/${v.comp.demon}</span>
+      <span style="color:#07C160;">村民: ${v.counts.townsfolk}/${v.comp.townsfolk}</span>
+      <span style="color:#FF9500;">外来者: ${v.counts.outsider}/${v.comp.outsider}</span>
+      <span style="color:#FA5151;">爪牙: ${v.counts.minion}/${v.comp.minion}</span>
+      <span style="color:#E64340;">恶魔: ${v.counts.demon}/${v.comp.demon}</span>
     </div>
-    <div style="color:#aaa;">
+    <div style="color:#7f7f7f;">
       已指定 ${Object.values(customRoleMap).filter(r=>r).length} 个，剩余 ${v.remaining} 个空位
       ${v.valid && v.remaining > 0 ? `（还需自动分配：村民${v.needs.townsfolk}、外来者${v.needs.outsider}、爪牙${v.needs.minion}、恶魔${v.needs.demon}）` : ''}
     </div>
@@ -3082,9 +3851,9 @@ function renderCustomRoleList() {
 
   // 错误提示
   if (!v.valid) {
-    html += `<div style="margin-top:8px; padding:10px; background:rgba(231,76,60,0.15); border:1px solid rgba(231,76,60,0.4); border-radius:6px;">
-      <div style="color:#e74c3c; font-weight:bold; margin-bottom:4px;">⚠️ 配置有误：</div>
-      ${v.errors.map(e => `<div style="color:#e74c3c; font-size:12px;">• ${e}</div>`).join('')}
+    html += `<div style="margin-top:8px; padding:10px; background:rgba(250,81,81,0.15); border:1px solid rgba(250,81,81,0.4); border-radius:6px;">
+      <div style="color:#FA5151; font-weight:bold; margin-bottom:4px;">⚠️ 配置有误：</div>
+      ${v.errors.map(e => `<div style="color:#FA5151; font-size:12px;">• ${e}</div>`).join('')}
     </div>`;
   }
 
@@ -3141,13 +3910,114 @@ function clearCustomRoles() {
   renderCustomRoleList();
 }
 
-// ========== 移动端适配 ==========
-function toggleMobileChat() {
-  const chatArea = document.querySelector('.chat-area');
-  if (!chatArea) return;
-  chatArea.classList.toggle('mobile-open');
+// ========== 移动端适配（微信式两页：会话列表 ↔ 聊天） ==========
+const MOBILE_BREAKPOINT = 768;
 
+function isMobileView() {
+  return window.innerWidth <= MOBILE_BREAKPOINT;
 }
+
+// 聊天页标题：当前会话名称
+function updateMobileChatTitle() {
+  const el = $('mobileChatTitle');
+  if (!el) return;
+  let title = '聊天';
+  if (currentChatChannel === 'dead') {
+    title = '死者频道';
+  } else if (currentChatChannel === 'whisper') {
+    const target = (currentState && currentState.players)
+      ? currentState.players.find(p => p.id === whisperTargetId) : null;
+    title = target ? target.name : '私聊';
+  } else {
+    const roomId = (currentState && currentState.roomId) || myRoomId || '';
+    title = roomId ? `房间 ${roomId}` : '游戏房间';
+  }
+  el.textContent = title;
+}
+
+// 移动端：把成员/操作区搬进聊天页，返回时还原到原位置
+// （顶部信息栏保持在首页展示，不参与搬移）
+function moveMobilePanelsIntoChat(open) {
+  const chatArea = $('centerChat');
+  const member = document.querySelector('.wx-member');
+  if (!chatArea || !member) return;
+  const inputArea = $('chatInputArea');
+
+  if (open) {
+    if (!member._mobileHome) {
+      member._mobileHome = { parent: member.parentNode, next: member.nextSibling };
+    }
+    // 成员与操作区 → 输入栏之上
+    if (inputArea && inputArea.parentNode === chatArea) {
+      chatArea.insertBefore(member, inputArea);
+    } else {
+      chatArea.appendChild(member);
+    }
+  } else {
+    const home = member._mobileHome;
+    if (!home) return;
+    if (home.next && home.next.parentNode === home.parent) {
+      home.parent.insertBefore(member, home.next);
+    } else {
+      home.parent.appendChild(member);
+    }
+    delete member._mobileHome;
+  }
+}
+
+// 信息区收起按钮：移动端定位到聊天页导航栏之下
+function positionCmToggle() {
+  const btn = $('cmToggle');
+  if (!btn) return;
+  if (!isMobileView()) { btn.style.top = ''; return; }
+  const chatArea = $('centerChat');
+  if (!chatArea) return;
+  const nav = chatArea.querySelector('.mobile-chat-nav');
+  btn.style.top = ((nav ? nav.offsetHeight : 0) + 5) + 'px';
+}
+
+// 进入聊天页
+function openMobileChat() {
+  if (!isMobileView()) return;
+  const container = $('gameView');
+  if (!container) return;
+  container.classList.add('mobile-chat-open');
+  // 顶部信息栏与成员/操作区只在「房间」会话中显示
+  moveMobilePanelsIntoChat(currentChatChannel === 'public');
+  updateMobileChatTitle();
+  positionCmToggle();
+}
+
+// 返回会话列表
+function closeMobileChat() {
+  const container = $('gameView');
+  if (!container) return;
+  container.classList.remove('mobile-chat-open');
+  moveMobilePanelsIntoChat(false);
+}
+
+function toggleMobileChat() {
+  const container = $('gameView');
+  if (!container) return;
+  const open = container.classList.toggle('mobile-chat-open');
+  if (open) {
+    moveMobilePanelsIntoChat(currentChatChannel === 'public');
+    updateMobileChatTitle();
+    positionCmToggle();
+  } else {
+    moveMobilePanelsIntoChat(false);
+  }
+}
+
+// 回到桌面尺寸时退出聊天页状态并还原面板位置
+window.addEventListener('resize', () => {
+  if (isMobileView()) return;
+  const container = $('gameView');
+  if (container && container.classList.contains('mobile-chat-open')) {
+    container.classList.remove('mobile-chat-open');
+    moveMobilePanelsIntoChat(false);
+  }
+});
 
 // 点击遮罩关闭移动端聊天
 document.addEventListener('click', (e) => {
@@ -3263,7 +4133,7 @@ function openProbSettings() {
   } else {
     socket.emit('room:getProbConfig');
   }
-  $('probSettingsPanel').style.display = 'block';
+  $('probSettingsPanel').style.display = 'flex';
   const gameStarted = currentState && currentState.gameStarted;
   $('probSaveBtn').disabled = !!gameStarted;
   $('probResetBtn').disabled = !!gameStarted;
@@ -3309,21 +4179,21 @@ function _updateModeButtons() {
   const btnA = $('probModeAdvanced');
   const desc = $('probModeDesc');
   if (_probMode === 'standard') {
-    btnS.style.background = 'linear-gradient(135deg,#f39c12,#e67e22)';
+    btnS.style.background = 'linear-gradient(135deg,#FF9500,#F5822B)';
     btnS.style.color = '#fff';
     btnS.style.fontWeight = 'bold';
-    btnA.style.background = 'rgba(255,255,255,0.08)';
+    btnA.style.background = 'rgba(0,0,0,0.05)';
     btnA.style.color = '#ccc';
     btnA.style.fontWeight = 'normal';
-    desc.innerHTML = '<b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统<b>必帮弱方</b>，中毒/醉酒/酒鬼信息与BMR修补匠/和平主义者概率<b>由平衡系统自动处理</b>，适合快速开始游戏。';
+    desc.innerHTML = '<b style="color:#0FA958;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统<b>必帮弱方</b>，中毒/醉酒/酒鬼信息与BMR修补匠/和平主义者概率<b>由平衡系统自动处理</b>，适合快速开始游戏。';
   } else {
-    btnS.style.background = 'rgba(255,255,255,0.08)';
+    btnS.style.background = 'rgba(0,0,0,0.05)';
     btnS.style.color = '#ccc';
     btnS.style.fontWeight = 'normal';
-    btnA.style.background = 'linear-gradient(135deg,#3498db,#2980b9)';
+    btnA.style.background = 'linear-gradient(135deg,#10AEFF,#0E93D6)';
     btnA.style.color = '#fff';
     btnA.style.fontWeight = 'bold';
-    desc.innerHTML = '<b style="color:#85c1e9;">🔧 高级模式：</b>可自由调节固定概率与Bot行为。平衡偏袒系统<b>始终内置启用</b>（偏袒强度、权重、信息真伪判断均不可调），适合想自定义概率体验的玩家。';
+    desc.innerHTML = '<b style="color:#7ECBF0;">🔧 高级模式：</b>可自由调节固定概率与Bot行为。平衡偏袒系统<b>始终内置启用</b>（偏袒强度、权重、信息真伪判断均不可调），适合想自定义概率体验的玩家。';
   }
 }
 
@@ -3338,14 +4208,14 @@ function renderProbSettings(config, meta, mode) {
 
 // 格式化概率显示
 function _fmtProb(v) {
-  if (v === 1) return '<b style="color:#2ecc71;">100%</b>';
-  if (v === 0) return '<b style="color:#e74c3c;">0%</b>';
-  return '<b style="color:#f9e79f;">' + Math.round(v * 100) + '%</b>';
+  if (v === 1) return '<b style="color:#07C160;">100%</b>';
+  if (v === 0) return '<b style="color:#FA5151;">0%</b>';
+  return '<b style="color:#0FA958;">' + Math.round(v * 100) + '%</b>';
 }
 
 // 格式化Bot行为概率（非0/50/100的固定值）
 function _fmtBotProb(v) {
-  return '<b style="color:#f9e79f;">' + Math.round(v * 100) + '%</b>';
+  return '<b style="color:#0FA958;">' + Math.round(v * 100) + '%</b>';
 }
 
 function _renderProbSettingsUI() {
@@ -3360,16 +4230,16 @@ function _renderProbSettingsUI() {
     let html = '';
 
     // 角色技能干扰概率
-    html += `<div style="background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#2ecc71; margin-bottom:10px; font-size:1.05em;">🎯 角色技能干扰概率（预设值）</h3>
-      <p style="color:#888; font-size:12px; margin-bottom:10px;">隐士/间谍的干扰登记概率使用标准50%随机。</p>
+    html += `<div style="background:rgba(7,193,96,0.08); border:1px solid rgba(7,193,96,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#07C160; margin-bottom:10px; font-size:1.05em;">🎯 角色技能干扰概率（预设值）</h3>
+      <p style="color:#8c8c8c; font-size:12px; margin-bottom:10px;">隐士/间谍的干扰登记概率使用标准50%随机。</p>
       <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
     meta.forEach(cat => {
       if (cat.category === '角色技能干扰概率') {
         cat.items.forEach(item => {
           const v = _getCfgVal(config, item.key);
-          html += `<div style="color:#bbb; font-size:12px; padding:5px 10px; background:rgba(255,255,255,0.03); border-radius:4px;">
-            <span style="color:#2ecc71;">●</span> ${item.label}：${_fmtProb(v)}
+          html += `<div style="color:#666666; font-size:12px; padding:5px 10px; background:rgba(0,0,0,0.02); border-radius:4px;">
+            <span style="color:#07C160;">●</span> ${item.label}：${_fmtProb(v)}
           </div>`;
         });
       }
@@ -3378,14 +4248,14 @@ function _renderProbSettingsUI() {
 
     // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
     if ((currentState && currentState.script === 'bmr')) {
-      html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-        <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
-        <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
-          <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#f9e79f;">由平衡系统自动决定</b></div>
-          <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 概率随平衡分数自动调整：</div>
-          <div style="padding-left:20px; color:#aaa; font-size:12px;">
-            · 好人弱势时 → 修补匠<b style="color:#2ecc71;">降低死亡</b>，和平主义者<b style="color:#2ecc71;">提高拯救</b>（帮好人保人）<br>
-            · 邪恶弱势时 → 修补匠<b style="color:#e74c3c;">提高死亡</b>，和平主义者<b style="color:#e74c3c;">降低拯救</b>（帮邪恶削减好人）<br>
+      html += `<div style="background:rgba(245,130,43,0.08); border:1px solid rgba(245,130,43,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+        <h3 style="color:#F5822B; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
+        <div style="color:#4f4f4f; font-size:13px; line-height:1.8; padding:8px 4px;">
+          <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#0FA958;">由平衡系统自动决定</b></div>
+          <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 概率随平衡分数自动调整：</div>
+          <div style="padding-left:20px; color:#7f7f7f; font-size:12px;">
+            · 好人弱势时 → 修补匠<b style="color:#07C160;">降低死亡</b>，和平主义者<b style="color:#07C160;">提高拯救</b>（帮好人保人）<br>
+            · 邪恶弱势时 → 修补匠<b style="color:#FA5151;">提高死亡</b>，和平主义者<b style="color:#FA5151;">降低拯救</b>（帮邪恶削减好人）<br>
             · 局势均衡时 → 使用基础概率
           </div>
         </div>
@@ -3393,29 +4263,29 @@ function _renderProbSettingsUI() {
     }
 
     // 酒鬼/中毒信息
-    html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
-      <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#f9e79f;">由平衡系统自动判断</b></div>
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 信息真伪与方向均由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
-        <div style="padding-left:20px; color:#aaa; font-size:12px;">
-          · 好人弱势时 → <b style="color:#2ecc71;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b><br>
-          · 邪恶弱势时 → <b style="color:#e74c3c;">保持假信息</b>（误导好人），假信息指向<b style="color:#2ecc71;">善良/无恶魔</b><br>
+    html += `<div style="background:rgba(245,130,43,0.08); border:1px solid rgba(245,130,43,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#F5822B; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
+      <div style="color:#4f4f4f; font-size:13px; line-height:1.8; padding:8px 4px;">
+        <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#0FA958;">由平衡系统自动判断</b></div>
+        <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 信息真伪与方向均由<b style="color:#0FA958;">平衡偏袒系统自动决定</b>：</div>
+        <div style="padding-left:20px; color:#7f7f7f; font-size:12px;">
+          · 好人弱势时 → <b style="color:#07C160;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#FA5151;">邪恶/恶魔</b><br>
+          · 邪恶弱势时 → <b style="color:#FA5151;">保持假信息</b>（误导好人），假信息指向<b style="color:#07C160;">善良/无恶魔</b><br>
           · 局势均衡时 → 假信息，方向随机
         </div>
       </div>
     </div>`;
 
     // Bot行为
-    html += `<div style="background:rgba(52,152,219,0.08); border:1px solid rgba(52,152,219,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#3498db; margin-bottom:10px; font-size:1.05em;">🤖 Bot 行为（预设值）</h3>
+    html += `<div style="background:rgba(16,174,255,0.08); border:1px solid rgba(16,174,255,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#10AEFF; margin-bottom:10px; font-size:1.05em;">🤖 Bot 行为（预设值）</h3>
       <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
     meta.forEach(cat => {
       if (cat.category === 'Bot 行为') {
         cat.items.forEach(item => {
           const v = _getCfgVal(config, item.key);
-          html += `<div style="color:#bbb; font-size:12px; padding:5px 10px; background:rgba(255,255,255,0.03); border-radius:4px;">
-            <span style="color:#3498db;">●</span> ${item.label}：${_fmtBotProb(v)}
+          html += `<div style="color:#666666; font-size:12px; padding:5px 10px; background:rgba(0,0,0,0.02); border-radius:4px;">
+            <span style="color:#10AEFF;">●</span> ${item.label}：${_fmtBotProb(v)}
           </div>`;
         });
       }
@@ -3423,11 +4293,11 @@ function _renderProbSettingsUI() {
     html += `</div></div>`;
 
     // 平衡偏袒系统（全部内置启用，仅展示说明）
-    html += `<div style="background:rgba(52,152,219,0.1); border:2px solid rgba(52,152,219,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
+    html += `<div style="background:rgba(16,174,255,0.1); border:2px solid rgba(16,174,255,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
 
-      <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
-        <div style="color:#2ecc71; font-size:12px; line-height:1.6;">
+      <div style="background:rgba(7,193,96,0.06); border:1px solid rgba(7,193,96,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
+        <div style="color:#07C160; font-size:12px; line-height:1.6;">
           <b>✓ 内置启用（不可调节）：</b><br>
           · 偏袒强度 = 100%（必帮弱方）<br>
           · 中毒/醉酒信息真伪由平衡系统自动判断<br>
@@ -3436,20 +4306,20 @@ function _renderProbSettingsUI() {
         </div>
       </div>
 
-      <div style="background:rgba(0,0,0,0.15); border-radius:6px; padding:12px; margin-top:12px;">
-        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
-        <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+      <div style="background:rgba(0,0,0,0.03); border-radius:6px; padding:12px; margin-top:12px;">
+        <div style="color:#0FA958; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
+        <div style="color:#7f7f7f; font-size:11px; line-height:1.7; font-family:monospace;">
           分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × 0.90<br>
           &emsp;+ 已死邪恶 × 0.20 − 已死好人 × 0.15<br>
           &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
-          <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
+          <span style="color:#8c8c8c;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
         </div>
-        <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
-        <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+        <div style="color:#0FA958; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
+        <div style="color:#7f7f7f; font-size:11px; line-height:1.7; font-family:monospace;">
           偏袒概率 = min(|分数| × 1.0 + 1.0, 1.0) = 100%<br>
-          <span style="color:#888;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
-          <span style="color:#888;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
-          <span style="color:#888;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
+          <span style="color:#8c8c8c;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
+          <span style="color:#8c8c8c;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
+          <span style="color:#8c8c8c;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
         </div>
       </div>
     </div>`;
@@ -3462,19 +4332,19 @@ function _renderProbSettingsUI() {
   let html = '';
 
   // 角色技能干扰概率
-  html += `<div style="background:rgba(255,255,255,0.05); border:1px solid rgba(52,152,219,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
-    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(52,152,219,0.2); padding-bottom:6px;">🎯 角色技能干扰概率</h3>`;
+  html += `<div style="background:rgba(0,0,0,0.03); border:1px solid rgba(16,174,255,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(16,174,255,0.2); padding-bottom:6px;">🎯 角色技能干扰概率</h3>`;
   meta.forEach(cat => {
     if (cat.category === '角色技能干扰概率') {
       cat.items.forEach(item => {
         const val = _getCfgVal(config, item.key);
         const v = (val !== undefined) ? val : item.default;
         html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
-          <label style="color:#ddd; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
+          <label style="color:#333333; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
           <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
             oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
-            style="flex:2; min-width:150px; accent-color:#3498db;" />
-          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#85c1e9; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
+            style="flex:2; min-width:150px; accent-color:#10AEFF;" />
+          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#7ECBF0; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
         </div>`;
       });
     }
@@ -3483,14 +4353,14 @@ function _renderProbSettingsUI() {
 
   // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
   if ((currentState && currentState.script === 'bmr')) {
-    html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
-      <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#f9e79f;">由平衡系统自动决定</b></div>
-        <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 概率随平衡分数自动调整：</div>
-        <div style="padding-left:20px; color:#aaa; font-size:12px;">
-          · 好人弱势时 → 修补匠<b style="color:#2ecc71;">降低死亡</b>，和平主义者<b style="color:#2ecc71;">提高拯救</b>（帮好人保人）<br>
-          · 邪恶弱势时 → 修补匠<b style="color:#e74c3c;">提高死亡</b>，和平主义者<b style="color:#e74c3c;">降低拯救</b>（帮邪恶削减好人）<br>
+    html += `<div style="background:rgba(245,130,43,0.08); border:1px solid rgba(245,130,43,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#F5822B; margin-bottom:10px; font-size:1.05em;">🔧 修补匠 / 和平主义者（平衡系统自动处理）</h3>
+      <div style="color:#4f4f4f; font-size:13px; line-height:1.8; padding:8px 4px;">
+        <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 修补匠夜晚死亡概率、和平主义者拯救善良被处决者概率<b style="color:#0FA958;">由平衡系统自动决定</b></div>
+        <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 概率随平衡分数自动调整：</div>
+        <div style="padding-left:20px; color:#7f7f7f; font-size:12px;">
+          · 好人弱势时 → 修补匠<b style="color:#07C160;">降低死亡</b>，和平主义者<b style="color:#07C160;">提高拯救</b>（帮好人保人）<br>
+          · 邪恶弱势时 → 修补匠<b style="color:#FA5151;">提高死亡</b>，和平主义者<b style="color:#FA5151;">降低拯救</b>（帮邪恶削减好人）<br>
           · 局势均衡时 → 使用基础概率
         </div>
       </div>
@@ -3498,33 +4368,33 @@ function _renderProbSettingsUI() {
   }
 
   // 酒鬼/中毒信息（说明，无滑块）
-  html += `<div style="background:rgba(230,126,34,0.08); border:1px solid rgba(230,126,34,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-    <h3 style="color:#e67e22; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
-    <div style="color:#ccc; font-size:13px; line-height:1.8; padding:8px 4px;">
-      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#f9e79f;">由平衡系统自动判断</b></div>
-      <div style="margin-bottom:4px;"><span style="color:#e67e22;">●</span> 信息真伪与方向均由<b style="color:#f9e79f;">平衡偏袒系统自动决定</b>：</div>
-      <div style="padding-left:20px; color:#aaa; font-size:12px;">
-        · 好人弱势时 → <b style="color:#2ecc71;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#e74c3c;">邪恶/恶魔</b><br>
-        · 邪恶弱势时 → <b style="color:#e74c3c;">保持假信息</b>（误导好人），假信息指向<b style="color:#2ecc71;">善良/无恶魔</b><br>
+  html += `<div style="background:rgba(245,130,43,0.08); border:1px solid rgba(245,130,43,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#F5822B; margin-bottom:10px; font-size:1.05em;">🍺 酒鬼 / 中毒信息（平衡系统自动处理）</h3>
+    <div style="color:#4f4f4f; font-size:13px; line-height:1.8; padding:8px 4px;">
+      <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 中毒、醉酒、酒鬼玩家获得的信息真伪<b style="color:#0FA958;">由平衡系统自动判断</b></div>
+      <div style="margin-bottom:4px;"><span style="color:#F5822B;">●</span> 信息真伪与方向均由<b style="color:#0FA958;">平衡偏袒系统自动决定</b>：</div>
+      <div style="padding-left:20px; color:#7f7f7f; font-size:12px;">
+        · 好人弱势时 → <b style="color:#07C160;">可能获得真信息</b>（帮好人调查），假信息指向<b style="color:#FA5151;">邪恶/恶魔</b><br>
+        · 邪恶弱势时 → <b style="color:#FA5151;">保持假信息</b>（误导好人），假信息指向<b style="color:#07C160;">善良/无恶魔</b><br>
         · 局势均衡时 → 假信息，方向随机
       </div>
     </div>
   </div>`;
 
   // Bot行为
-  html += `<div style="background:rgba(255,255,255,0.05); border:1px solid rgba(52,152,219,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
-    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(52,152,219,0.2); padding-bottom:6px;">🤖 Bot 行为</h3>`;
+  html += `<div style="background:rgba(0,0,0,0.03); border:1px solid rgba(16,174,255,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(16,174,255,0.2); padding-bottom:6px;">🤖 Bot 行为</h3>`;
   meta.forEach(cat => {
     if (cat.category === 'Bot 行为') {
       cat.items.forEach(item => {
         const val = _getCfgVal(config, item.key);
         const v = (val !== undefined) ? val : item.default;
         html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
-          <label style="color:#ddd; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
+          <label style="color:#333333; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
           <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
             oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
-            style="flex:2; min-width:150px; accent-color:#3498db;" />
-          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#85c1e9; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
+            style="flex:2; min-width:150px; accent-color:#10AEFF;" />
+          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#7ECBF0; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
         </div>`;
       });
     }
@@ -3532,11 +4402,11 @@ function _renderProbSettingsUI() {
   html += `</div>`;
 
   // 平衡偏袒系统（全部内置启用，仅展示说明）
-  html += `<div style="background:rgba(52,152,219,0.1); border:2px solid rgba(52,152,219,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
-    <h3 style="color:#5dade2; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
+  html += `<div style="background:rgba(16,174,255,0.1); border:2px solid rgba(16,174,255,0.4); border-radius:8px; padding:15px; margin-bottom:12px;">
+    <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.1em;">⚖️ 平衡偏袒系统</h3>
 
-    <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
-      <div style="color:#2ecc71; font-size:12px; line-height:1.6;">
+    <div style="background:rgba(7,193,96,0.06); border:1px solid rgba(7,193,96,0.2); border-radius:6px; padding:10px; margin-bottom:12px;">
+      <div style="color:#07C160; font-size:12px; line-height:1.6;">
         <b>✓ 内置启用（不可调节）：</b><br>
         · 偏袒强度 = 100%（必帮弱方）<br>
         · 中毒/醉酒信息真伪由平衡系统自动判断<br>
@@ -3545,20 +4415,20 @@ function _renderProbSettingsUI() {
       </div>
     </div>
 
-    <div style="background:rgba(0,0,0,0.15); border-radius:6px; padding:12px; margin-top:12px;">
-      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
-      <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+    <div style="background:rgba(0,0,0,0.03); border-radius:6px; padding:12px; margin-top:12px;">
+      <div style="color:#0FA958; font-size:12px; font-weight:bold; margin-bottom:6px;">📐 平衡分数计算公式</div>
+      <div style="color:#7f7f7f; font-size:11px; line-height:1.7; font-family:monospace;">
         分数 = (存活好人 − 存活恶魔×2 − 存活爪牙×1.5) / 存活人数 × 0.90<br>
         &emsp;+ 已死邪恶 × 0.20 − 已死好人 × 0.15<br>
         &emsp;+ 关键角色存活奖励（信息位+0.1,僧侣+0.1,杀手+0.05）<br>
-        <span style="color:#888;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
+        <span style="color:#8c8c8c;">→ 结果范围 [-1, 1]，负数=邪恶优势，正数=好人优势</span>
       </div>
-      <div style="color:#f9e79f; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
-      <div style="color:#aaa; font-size:11px; line-height:1.7; font-family:monospace;">
+      <div style="color:#0FA958; font-size:12px; font-weight:bold; margin:8px 0 6px;">📊 偏袒判定（偏袒强度=100%）</div>
+      <div style="color:#7f7f7f; font-size:11px; line-height:1.7; font-family:monospace;">
         偏袒概率 = min(|分数| × 1.0 + 1.0, 1.0) = 100%<br>
-        <span style="color:#888;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
-        <span style="color:#888;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
-        <span style="color:#888;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
+        <span style="color:#8c8c8c;">→ 好人弱势(分数&lt;-0.20)：必触发偏袒帮好人</span><br>
+        <span style="color:#8c8c8c;">→ 邪恶弱势(分数&gt;0.30)：必触发偏袒帮邪恶（误导好人）</span><br>
+        <span style="color:#8c8c8c;">→ 局势均衡(-0.20≤分数≤0.30)：50%概率偏向任一方向</span>
       </div>
     </div>
   </div>`;
@@ -3615,7 +4485,7 @@ async function resetProbConfig() {
 function openHistoryPanel() {
   const panel = $('historyPanel');
   if (!panel) return;
-  panel.style.display = 'block';
+  panel.style.display = 'flex';
   closeHistoryDetail();
   loadHistoryList();
 }
@@ -3641,24 +4511,24 @@ function formatHistoryTime(date) {
 async function loadHistoryList() {
   const container = $('historyListContent');
   if (!container) return;
-  container.innerHTML = '<div style="text-align:center; color:#aaa; padding:40px;">加载中...</div>';
+  container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:40px;">加载中...</div>';
   
   try {
     const res = await fetch('/api/history');
     const data = await res.json();
     if (!data.success) {
-      container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
       return;
     }
     const list = data.history || [];
     if (list.length === 0) {
-      container.innerHTML = '<div style="text-align:center; color:#aaa; padding:60px;">暂无历史记录，完成一局游戏后会显示在这里</div>';
+      container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:60px;">暂无历史记录，完成一局游戏后会显示在这里</div>';
       return;
     }
     
     let html = '';
     list.forEach(h => {
-      const winnerColor = h.winner === 'GOOD' ? '#2ecc71' : '#e74c3c';
+      const winnerColor = h.winner === 'GOOD' ? '#07C160' : '#FA5151';
       const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
       const endedTime = formatHistoryTime(h.endedAt);
       
@@ -3684,36 +4554,36 @@ async function loadHistoryList() {
 
       // 生成玩家标签
       function playerTag(p) {
-        const color = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
+        const color = p.team === 'GOOD' ? '#07C160' : '#FA5151';
         const aliveIcon = p.isAlive ? '' : ' <span style="opacity:0.5;">☠</span>';
-        const botIcon = p.isBot ? ' <span style="font-size:10px; color:#888;">🤖</span>' : '';
-        return `<span style="display:inline-block; background:rgba(0,0,0,0.25); border:1px solid ${color}55; border-radius:4px; padding:2px 6px; margin:2px; font-size:12px; color:${color};">${p.seat+1}号 ${escapeHtml(p.name)} <span style="opacity:0.7;">(${escapeHtml(p.roleName)})</span>${aliveIcon}${botIcon}</span>`;
+        const botIcon = p.isBot ? ' <span style="font-size:10px; color:#8c8c8c;">🤖</span>' : '';
+        return `<span style="display:inline-block; background:rgba(0,0,0,0.04); border:1px solid ${color}55; border-radius:4px; padding:2px 6px; margin:2px; font-size:12px; color:${color};">${p.seat+1}号 ${escapeHtml(p.name)} <span style="opacity:0.7;">(${escapeHtml(p.roleName)})</span>${aliveIcon}${botIcon}</span>`;
       }
       
-      html += `<div style="background:rgba(0,0,0,0.3); border:1px solid rgba(52,152,219,0.3); border-radius:8px; padding:15px; margin-bottom:12px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#3498db';this.style.background='rgba(52,152,219,0.1)'" onmouseout="this.style.borderColor='rgba(52,152,219,0.3)';this.style.background='rgba(0,0,0,0.3)'" onclick="viewHistoryDetail('${h.id}')">
+      html += `<div style="background:rgba(0,0,0,0.05); border:1px solid rgba(16,174,255,0.3); border-radius:8px; padding:15px; margin-bottom:12px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#10AEFF';this.style.background='rgba(16,174,255,0.1)'" onmouseout="this.style.borderColor='rgba(16,174,255,0.3)';this.style.background='rgba(0,0,0,0.05)'" onclick="viewHistoryDetail('${h.id}')">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <div style="font-size:1.2em; font-weight:bold;">
             <span style="color:${winnerColor};">${winnerText}</span>
           </div>
-          <div style="color:#888; font-size:13px;">${endedTime}</div>
+          <div style="color:#8c8c8c; font-size:13px;">${endedTime}</div>
         </div>
-        <div style="color:#aaa; font-size:13px; margin-bottom:8px;">${escapeHtml(h.winReason || '')}</div>
-        <div style="display:flex; gap:15px; flex-wrap:wrap; color:#aaa; font-size:12px; margin-bottom:10px;">
+        <div style="color:#7f7f7f; font-size:13px; margin-bottom:8px;">${escapeHtml(h.winReason || '')}</div>
+        <div style="display:flex; gap:15px; flex-wrap:wrap; color:#7f7f7f; font-size:12px; margin-bottom:10px;">
           <span>👥 ${h.playerCount}人${botCount > 0 ? `（${botCount}AI）` : ''}</span>
           ${durationText ? `<span>⏱ ${durationText}</span>` : ''}
           <span>💀 ${aliveCount}人存活</span>
         </div>
         <div style="margin-top:6px;">
           <div style="font-size:12px; margin-bottom:4px;">
-            <span style="color:#2ecc71;">善良阵营</span>
-            <span style="color:#666; margin-left:4px;">（${goodPlayers.length}人）</span>
+            <span style="color:#07C160;">善良阵营</span>
+            <span style="color:#999999; margin-left:4px;">（${goodPlayers.length}人）</span>
           </div>
           <div>${goodPlayers.map(playerTag).join('')}</div>
         </div>
         <div style="margin-top:8px;">
           <div style="font-size:12px; margin-bottom:4px;">
-            <span style="color:#e74c3c;">邪恶阵营</span>
-            <span style="color:#666; margin-left:4px;">（${evilPlayers.length}人）</span>
+            <span style="color:#FA5151;">邪恶阵营</span>
+            <span style="color:#999999; margin-left:4px;">（${evilPlayers.length}人）</span>
           </div>
           <div>${evilPlayers.map(playerTag).join('')}</div>
         </div>
@@ -3721,14 +4591,14 @@ async function loadHistoryList() {
     });
     container.innerHTML = html;
   } catch (e) {
-    container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
+    container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${e.message}</div>`;
   }
 }
 
 async function viewHistoryDetail(historyId) {
   const container = $('historyDetailContent');
   if (!container) return;
-  container.innerHTML = '<div style="text-align:center; color:#aaa; padding:40px;">加载中...</div>';
+  container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:40px;">加载中...</div>';
   $('historyList').style.display = 'none';
   $('historyDetail').style.display = 'block';
   $('historyBackBtn').style.display = 'inline-block';
@@ -3738,41 +4608,41 @@ async function viewHistoryDetail(historyId) {
     const res = await fetch(`/api/history/${historyId}`);
     const data = await res.json();
     if (!data.success) {
-      container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
       return;
     }
     const h = data.data;
     
-    const winnerColor = h.winner === 'GOOD' ? '#2ecc71' : '#e74c3c';
+    const winnerColor = h.winner === 'GOOD' ? '#07C160' : '#FA5151';
     const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
     
     let html = `
-      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:20px; margin-bottom:20px;">
+      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:20px; margin-bottom:20px;">
         <div style="font-size:1.5em; font-weight:bold; color:${winnerColor}; margin-bottom:10px;">${winnerText}</div>
-        <div style="color:#aaa; margin-bottom:10px;">${h.winReason}</div>
-        <div style="color:#888; font-size:13px;">开始时间：${formatHistoryTime(h.startedAt)} | 结束时间：${formatHistoryTime(h.endedAt)} | 玩家数：${h.playerCount}</div>
+        <div style="color:#7f7f7f; margin-bottom:10px;">${h.winReason}</div>
+        <div style="color:#8c8c8c; font-size:13px;">开始时间：${formatHistoryTime(h.startedAt)} | 结束时间：${formatHistoryTime(h.endedAt)} | 玩家数：${h.playerCount}</div>
       </div>
       
-      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px; margin-bottom:20px;">
-        <h3 style="color:#d4af37; margin-bottom:12px;">👥 玩家角色</h3>
+      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:15px; margin-bottom:20px;">
+        <h3 style="color:#07C160; margin-bottom:12px;">👥 玩家角色</h3>
         <table style="width:100%; border-collapse:collapse;">
           <thead>
-            <tr style="border-bottom:1px solid rgba(255,255,255,0.2);">
-              <th style="padding:8px; text-align:left; color:#aaa;">座位</th>
-              <th style="padding:8px; text-align:left; color:#aaa;">昵称</th>
-              <th style="padding:8px; text-align:left; color:#aaa;">角色</th>
-              <th style="padding:8px; text-align:left; color:#aaa;">阵营</th>
-              <th style="padding:8px; text-align:left; color:#aaa;">状态</th>
+            <tr style="border-bottom:1px solid rgba(0,0,0,0.12);">
+              <th style="padding:8px; text-align:left; color:#7f7f7f;">座位</th>
+              <th style="padding:8px; text-align:left; color:#7f7f7f;">昵称</th>
+              <th style="padding:8px; text-align:left; color:#7f7f7f;">角色</th>
+              <th style="padding:8px; text-align:left; color:#7f7f7f;">阵营</th>
+              <th style="padding:8px; text-align:left; color:#7f7f7f;">状态</th>
             </tr>
           </thead>
           <tbody>
             ${h.players.sort((a,b) => a.seat - b.seat).map(p => {
-              const teamColor = p.team === 'GOOD' ? '#2ecc71' : '#e74c3c';
+              const teamColor = p.team === 'GOOD' ? '#07C160' : '#FA5151';
               const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
               const statusText = p.isAlive ? '存活' : '死亡';
-              const statusColor = p.isAlive ? '#2ecc71' : '#888';
+              const statusColor = p.isAlive ? '#07C160' : '#888';
               const botMark = p.isBot ? ' 🤖' : '';
-              return `<tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+              return `<tr style="border-bottom:1px solid rgba(0,0,0,0.05);">
                 <td style="padding:8px;">${p.seat+1}号</td>
                 <td style="padding:8px;">${p.name}${botMark}</td>
                 <td style="padding:8px; font-weight:bold;">${p.roleName}</td>
@@ -3784,29 +4654,29 @@ async function viewHistoryDetail(historyId) {
         </table>
       </div>
       
-      <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px;">
-        <h3 style="color:#d4af37; margin-bottom:12px;">📋 行动日志</h3>
-        <div id="historyActionLog" style="max-height:600px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.8; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:15px;">
+        <h3 style="color:#07C160; margin-bottom:12px;">📋 行动日志</h3>
+        <div id="historyActionLog" style="max-height:600px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.8; background:rgba(0,0,0,0.05); padding:10px; border-radius:4px;">
           ${(h.actionLog || []).map(entry => {
             const typeColors = {
-              'ROLE_ASSIGN': '#d4af37',
-              'GAME_START': '#fff',
+              'ROLE_ASSIGN': '#07C160',
+              'GAME_START': '#191919',
               'NIGHT_WAKE': '#9b59b6',
               'NIGHT_ACTION': '#9b59b6',
-              'NIGHT_END': '#3498db',
-              'DEATH': '#e74c3c',
-              'NOMINATION': '#f39c12',
-              'VOTE_RESULT': '#f39c12',
-              'EXECUTION': '#e74c3c',
-              'GAME_OVER': '#fff',
-              'PRIVATE_INFO': '#1abc9c',
-              'ABILITY': '#e67e22',
-              'CUSTOM_ASSIGN': '#d4af37'
+              'NIGHT_END': '#10AEFF',
+              'DEATH': '#FA5151',
+              'NOMINATION': '#FF9500',
+              'VOTE_RESULT': '#FF9500',
+              'EXECUTION': '#FA5151',
+              'GAME_OVER': '#191919',
+              'PRIVATE_INFO': '#00B578',
+              'ABILITY': '#F5822B',
+              'CUSTOM_ASSIGN': '#07C160'
             };
             const color = typeColors[entry.type] || '#aaa';
             let msg = entry.message;
             if (entry.type === 'PRIVATE_INFO' && entry.data && entry.data.isFalse) {
-              msg = `<span style="color:#e74c3c;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
+              msg = `<span style="color:#FA5151;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
             } else {
               msg = escapeHtml(msg);
             }
@@ -3820,7 +4690,7 @@ async function viewHistoryDetail(historyId) {
             }
             
             return `<div style="color:${color}; padding:2px 0;">
-              <span style="color:#666;">[${entry.time}]</span> ${msg}${probHtml}
+              <span style="color:#999999;">[${entry.time}]</span> ${msg}${probHtml}
             </div>`;
           }).join('')}
         </div>
@@ -3828,7 +4698,7 @@ async function viewHistoryDetail(historyId) {
     `;
     container.innerHTML = html;
   } catch (e) {
-    container.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:40px;">加载失败：${e.message}</div>`;
+    container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${e.message}</div>`;
   }
 }
 

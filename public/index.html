@@ -4,65 +4,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>血染钟楼 - 灾祸之酿</title>
+  <title>血染钟楼</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/game.css">
 </head>
 <body>
-  <!-- 首页/大厅 -->
-  <div id="homeView" class="home-container">
-    <div style="display:flex; justify-content:center; align-items:center; gap:8px; margin-bottom:10px;">
-      <span id="connStatusDot" class="conn-dot conn-connecting"></span>
-      <span id="connStatusText" style="font-size:14px; color:#888;">连接中...</span>
-    </div>
-    <h1 class="home-title">血染钟楼</h1>
-    <p class="home-subtitle">灾祸之酿 · 系统说书人 · 多人联机</p>
-    
-    <div class="home-rooms">
-      <div class="card">
-        <h2>创建房间</h2>
-        <div class="form-group">
-          <label>你的昵称</label>
-          <input type="text" id="createName" placeholder="输入昵称" maxlength="20">
-        </div>
-        <button class="btn btn-primary" onclick="createRoom()">创建房间</button>
-        <div style="margin-top:15px;">
-          <button class="btn btn-secondary" onclick="openHistoryPanel()" style="width:100%; background:linear-gradient(135deg,#3498db,#2980b9); border:none;">📜 历史记录</button>
-        </div>
-        <div class="error-msg" id="createError"></div>
-      </div>
-      
-      <div class="card">
-        <h2>加入房间</h2>
-        <div class="form-group">
-          <label>房间码</label>
-          <input type="text" id="joinRoomId" placeholder="4位房间码" maxlength="4" style="text-transform: uppercase;">
-        </div>
-        <div class="form-group">
-          <label>你的昵称</label>
-          <input type="text" id="joinName" placeholder="输入昵称" maxlength="20">
-        </div>
-        <button class="btn btn-primary" onclick="joinRoom()">加入房间</button>
-        <div class="error-msg" id="joinError"></div>
-      </div>
-
-      <!-- 重新连接区域（游戏中离开后显示） -->
-      <div class="card" id="reconnectCard" style="display:none; border-color:#f39c12; background:rgba(243,156,18,0.05);">
-        <h2 style="color:#f39c12;">🔄 重新连接</h2>
-        <p style="color:#aaa; font-size:13px; margin-bottom:12px;">你之前从正在进行的游戏中离开，可重新连接回去</p>
-        <div id="reconnectInfo" style="font-size:13px; color:#ccc; margin-bottom:12px;"></div>
-        <button class="btn" onclick="reconnectRoom()" style="width:100%; background:linear-gradient(135deg,#f39c12,#e67e22); border:none; color:#fff;">🔗 重新连接到房间</button>
-      </div>
+  <!-- 游戏主界面（三栏布局，始终显示） -->
+  <div id="gameView" class="game-container">
+    <!-- 微信式左侧图标导航栏 -->
+    <div class="wx-rail">
+      <div class="wx-rail-avatar" id="railAvatar"></div>
+      <button class="wx-rail-btn active" title="聊天" onclick="closeMobileChat()">
+        <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+      </button>
+      <button class="wx-rail-btn" title="角色总览" onclick="openRoleOverview()">
+        <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+      </button>
+      <button class="wx-rail-btn" title="历史记录" onclick="openHistoryPanel()">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+      </button>
+      <div class="wx-rail-spacer"></div>
+      <button class="wx-rail-btn" id="settingsBtn" title="概率设置" onclick="openProbSettings()">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      </button>
     </div>
 
-    <div style="margin-top: 40px; color: #666; font-size: 14px; text-align: center; max-width: 600px; line-height: 1.8;">
-      <p>游戏说明：5-15人游玩，系统担任说书人控制流程。全员确认进入下一阶段，无倒计时。</p>
-      <p>善良阵营：处决恶魔即可获胜；邪恶阵营：仅剩2人且恶魔存活则获胜。</p>
-    </div>
-  </div>
-
-  <!-- 游戏界面 -->
-  <div id="gameView" class="game-container" style="display:none;">
     <!-- 夜晚遮罩 -->
     <div class="night-overlay" id="nightOverlay">
       <div class="night-text" id="nightText">夜幕降临...</div>
@@ -76,94 +42,145 @@
 
     <!-- 头部信息 -->
     <div class="game-header">
+      <!-- 未加入房间时的连接状态：页面顶部居中 -->
+      <div class="top-conn" id="topConn">
+        <span class="conn-dot conn-connecting" id="connStatusDotTop"></span>
+        <span class="top-conn-text" id="connStatusTextTop">连接中...</span>
+      </div>
       <div class="room-info">
-        <span class="room-code" id="headerRoomId"></span>
         <span class="room-comp" id="headerRoomComp"></span>
       </div>
       <div class="header-center">
+        <span class="chat-target" id="headerChatTarget"></span>
         <span class="day-count" id="headerDayCount"></span>
         <span class="phase-badge" id="headerPhase"></span>
       </div>
-      <div class="header-right">
-        <button class="btn btn-sm btn-secondary" id="settingsBtn" onclick="openProbSettings()" style="display:none; background: rgba(241,196,15,0.3); border: 1px solid #f1c40f; color: #f9e79f;">⚙️ 概率设置</button>
-        <button class="btn btn-sm btn-secondary" id="godBtn" onclick="toggleGodView()" style="background: rgba(155,89,182,0.3); border: 1px solid #9b59b6; color: #d4a5e8;">👁 上帝视角</button>
-        <button class="btn btn-sm btn-secondary" onclick="openRoleOverview()" style="background: rgba(52,152,219,0.3); border: 1px solid #3498db; color: #85c1e9;">📖 角色总览</button>
-        <button class="btn btn-secondary btn-sm" onclick="leaveRoom()">离开房间</button>
+      <div class="header-right" id="headerActions" style="display:none;">
+        <button class="btn btn-sm btn-secondary" id="godBtn" onclick="toggleGodView()" style="background: rgba(155,89,182,0.1); border: 1px solid rgba(155,89,182,0.4); color: #8E44AD;">👁 上帝视角</button>
+        <button class="btn btn-secondary btn-sm" onclick="leaveRoom()">退出群聊</button>
       </div>
     </div>
 
-    <!-- 左侧座位列表 -->
-    <div class="seats-area" id="seatsArea"></div>
+    <!-- 左侧：游戏大厅 / 房间信息 -->
+    <div class="wx-session">
+      <!-- 游戏大厅：创建 / 加入房间 -->
+      <div id="homeView" class="wx-lobby">
+        <div class="wx-lobby-cards">
+          <div class="card">
+            <h2>创建房间</h2>
+            <button class="btn btn-primary" onclick="createRoom()">创建房间</button>
+            <div class="error-msg" id="createError"></div>
+          </div>
+
+          <div class="card">
+            <h2>加入房间</h2>
+            <div class="form-group">
+              <label>房间码</label>
+              <input type="text" id="joinRoomId" placeholder="4位房间码" maxlength="4" style="text-transform: uppercase;">
+            </div>
+            <button class="btn btn-primary" onclick="joinRoom()">加入房间</button>
+            <div class="error-msg" id="joinError"></div>
+          </div>
+
+          <!-- 重新连接区域（游戏中离开后显示） -->
+          <div class="card" id="reconnectCard" style="display:none; border-color:#FF9500; background:rgba(243,156,18,0.05);">
+            <h2 style="color:#FF9500;">🔄 重新连接</h2>
+            <p style="color:#7f7f7f; font-size:12px; margin-bottom:10px;">你之前从正在进行的游戏中离开，可重新连接回去</p>
+            <div id="reconnectInfo" style="font-size:12px; color:#4f4f4f; margin-bottom:10px;"></div>
+            <button class="btn" onclick="reconnectRoom()" style="width:100%; background:linear-gradient(135deg,#FF9500,#F5822B); border:none; color:#fff;">🔗 重新连接到房间</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 房间信息 + 会话列表（加入房间后显示） -->
+      <div class="wx-room-panel" id="roomPanel" style="display:none;">
+        <div class="wx-search"><input type="text" placeholder="搜索" readonly onfocus="this.blur()"></div>
+        <div class="wx-session-list" id="sessionList"></div>
+      </div>
+    </div>
 
     <!-- 左侧拖拽分隔条 -->
     <div class="resizer resizer-left" id="resizerLeft" title="拖拽调整宽度"></div>
 
-    <!-- 中央信息区 -->
-    <div class="center-area" id="centerArea">
-      <div class="center-scroll" id="centerScroll">
-        <div class="center-message" id="centerMessage">等待游戏开始...</div>
+    <!-- 中间：聊天框（顶部系统状态 + 聊天消息） -->
+    <div class="chat-area" id="centerChat">
+      <!-- 移动端聊天页导航栏（仅移动端显示） -->
+      <div class="mobile-chat-nav">
+        <button class="mobile-chat-back" onclick="closeMobileChat()" title="返回">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+        </button>
+        <div class="mobile-chat-title" id="mobileChatTitle">聊天</div>
+        <div class="mobile-chat-nav-right"></div>
       </div>
-      
-      <div class="center-bottom">
-        <div id="actionPanel" class="action-panel" style="display:none;">
-          <div class="action-title" id="actionTitle"></div>
-          <div class="selected-targets" id="selectedTargets"></div>
-          <div class="action-buttons" id="actionButtons"></div>
-        </div>
-
-        <div class="confirm-bar" id="confirmBar" style="display:none;">
-          <div id="confirmText">等待全员确认...</div>
-          <div class="confirm-progress">
-            <div class="confirm-progress-fill" id="confirmProgressFill" style="width: 0%"></div>
-          </div>
-          <div class="confirm-players" id="confirmPlayers"></div>
-          <button class="btn btn-success btn-sm" id="confirmBtn" style="margin-top: 10px;" onclick="confirmPhase()">我已准备好，进入下一阶段</button>
-        </div>
+      <!-- 系统信息区收起 / 展开 -->
+      <button class="cm-toggle" id="cmToggle" style="display:none;" onclick="toggleCenterMessage()" title="收起信息区">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+      </button>
+      <!-- 系统状态 / 我的身份（固定高度，内部滚动；未加入房间时不显示） -->
+      <div class="center-message" id="centerMessage" style="display:none;"></div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <!-- 待发送图片预览（粘贴后先预览，点击发送才发出） -->
+      <div class="chat-image-preview" id="chatImagePreview" style="display:none;">
+        <img id="chatImagePreviewImg" alt="待发送图片">
+        <button class="chat-image-remove" onclick="clearPendingChatImage()" title="移除图片">✕</button>
+      </div>
+      <div class="chat-input-area" id="chatInputArea">
+        <button class="btn btn-sm ai-trigger-btn" onclick="insertAiTrigger()" title="@小染 AI助手">🤖</button>
+        <button class="btn btn-sm ai-trigger-btn announce-trigger-btn" style="display:none;" onclick="openAnnouncePanel()" title="公开公告（可用于伪装身份）">📢</button>
+        <input type="text" id="chatInput" placeholder="输入消息…可粘贴图片发送" maxlength="500" onkeydown="if(event.key==='Enter')sendChat()" onpaste="handleChatPaste(event)">
+        <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
       </div>
     </div>
 
     <!-- 右侧拖拽分隔条 -->
     <div class="resizer resizer-right" id="resizerRight" title="拖拽调整宽度"></div>
 
-    <!-- 右侧聊天区 -->
-    <div class="chat-area">
-      <div class="chat-tabs">
-        <div class="chat-tab active" data-channel="public" onclick="switchChatChannel('public')">公聊</div>
-        <div class="chat-tab" data-channel="dead" id="deadChatTab" onclick="switchChatChannel('dead')" style="display:none;">死者</div>
-        <div class="chat-tab" data-channel="whisper" onclick="switchChatChannel('whisper')">私聊</div>
-        <div class="chat-tab" data-channel="voice" onclick="switchChatChannel('voice')">语音</div>
-      </div>
-      <div class="chat-messages" id="chatMessages"></div>
-      <!-- 私聊对象选择面板 -->
-      <div class="whisper-panel" id="whisperPanel" style="display:none;">
-        <div class="whisper-panel-title">选择私聊对象</div>
-        <div class="whisper-player-list" id="whisperPlayerList"></div>
-      </div>
-      <div class="whisper-current" id="whisperCurrent" style="display:none;">
-        <span class="whisper-current-label">正在私聊：</span>
-        <span class="whisper-current-name" id="whisperCurrentName"></span>
-        <span class="whisper-change" onclick="showWhisperPanel()">切换</span>
-      </div>
-      <!-- 语音频道面板 -->
-      <div id="voicePanel" class="voice-panel" style="display:none;">
-        <div class="voice-panel-header" id="voicePanelHeader">
-          <span class="voice-panel-title" id="voicePanelTitle">🔊 语音频道</span>
-          <div class="voice-panel-controls">
-            <button class="voice-control-btn" id="voiceMuteBtn" style="display:none;" onclick="VoiceManager.toggleMute()" title="静音麦克风">🎤</button>
-            <button class="voice-control-btn" id="voiceSpeakerBtn" style="display:none;" onclick="VoiceManager.toggleSpeaker()" title="扬声器">🔊</button>
-            <button class="voice-control-btn" id="voiceTestBtn" style="display:none;" onclick="VoiceManager.testMic()" title="测试麦克风">🧪</button>
-            <button class="voice-leave-btn" id="voiceLeaveBtn" style="display:none;" onclick="VoiceManager.leave()">退出</button>
-            <button class="voice-join-btn" id="voiceJoinBtn" onclick="VoiceManager.join()">🎙 加入</button>
+    <!-- 右侧：游戏操作 + 剧本选择 + 群成员 + 语音 -->
+    <div class="wx-member" id="memberPanel" style="display:none;">
+      <div class="wx-member-scroll">
+        <div class="seats-area" id="seatsArea"></div>
+        <!-- 语音频道面板 -->
+        <div id="voicePanel" class="voice-panel">
+          <div class="voice-panel-header" id="voicePanelHeader">
+            <span class="voice-panel-title" id="voicePanelTitle">🔊 语音频道</span>
+            <div class="voice-panel-controls">
+              <button class="voice-control-btn" id="voiceMuteBtn" style="display:none;" onclick="VoiceManager.toggleMute()" title="静音麦克风">🎤</button>
+              <button class="voice-control-btn" id="voiceSpeakerBtn" style="display:none;" onclick="VoiceManager.toggleSpeaker()" title="扬声器">🔊</button>
+              <button class="voice-control-btn" id="voiceTestBtn" style="display:none;" onclick="VoiceManager.testMic()" title="测试麦克风">🧪</button>
+              <button class="voice-leave-btn" id="voiceLeaveBtn" style="display:none;" onclick="VoiceManager.leave()">退出</button>
+              <button class="voice-join-btn" id="voiceJoinBtn" onclick="VoiceManager.join()">🎙 加入</button>
+            </div>
+          </div>
+          <div class="voice-panel-body" id="voicePanelBody">
+            <div class="voice-user-list" id="voiceUserList"></div>
           </div>
         </div>
-        <div class="voice-panel-body" id="voicePanelBody">
-          <div class="voice-user-list" id="voiceUserList"></div>
-        </div>
       </div>
-      <div class="chat-input-area" id="chatInputArea">
-        <button class="btn btn-sm ai-trigger-btn" onclick="insertAiTrigger()" title="@小染 AI助手">🤖</button>
-        <input type="text" id="chatInput" placeholder="输入消息... @小染 可问AI" maxlength="500" onkeydown="if(event.key==='Enter')sendChat()">
-        <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
+
+      <!-- 剧本选择（大厅阶段） -->
+      <div class="wx-script" id="scriptPanel" style="display:none;"></div>
+
+      <!-- 游戏操作区（原中央区操作按钮） -->
+      <div id="actionPanel" class="action-panel" style="display:none;">
+        <div class="action-title" id="actionTitle"></div>
+        <div class="selected-targets" id="selectedTargets"></div>
+        <div class="action-buttons" id="actionButtons"></div>
+      </div>
+
+      <div class="confirm-bar" id="confirmBar" style="display:none;">
+        <div id="confirmText">等待全员确认...</div>
+        <div class="confirm-progress">
+          <div class="confirm-progress-fill" id="confirmProgressFill" style="width: 0%"></div>
+        </div>
+        <div class="confirm-players" id="confirmPlayers"></div>
+        <button class="btn btn-success btn-sm" id="confirmBtn" style="margin-top: 10px;" onclick="confirmPhase()">我已准备好，进入下一阶段</button>
+      </div>
+
+      <!-- 身份技能（杀手 / 造谣者 / 月之子） -->
+      <div class="wx-role-abilities" id="roleAbilityBar" style="display:none;">
+        <button class="btn btn-sm btn-danger" id="slayerBtn" style="display:none;" onclick="useSlayerAbility()">杀手：击杀恶魔</button>
+        <button class="btn btn-sm btn-warning" id="gossipBtn" style="display:none;" onclick="useGossipAbility()">造谣者：发表声明</button>
+        <button class="btn btn-sm btn-info" id="moonchildBtn" style="display:none;" onclick="useMoonchildAbility()">月之子：选择目标</button>
       </div>
     </div>
 
@@ -181,185 +198,255 @@
         <div class="role-desc" id="roleDesc"></div>
         <div class="evil-teammates" id="evilTeammates" style="display:none;"></div>
       </div>
-      <div style="margin-left: auto; display: flex; gap: 8px;">
-        <button class="btn btn-sm btn-danger" id="slayerBtn" style="display:none;" onclick="useSlayerAbility()">杀手：击杀恶魔</button>
-        <button class="btn btn-sm btn-warning" id="gossipBtn" style="display:none;" onclick="useGossipAbility()">造谣者：发表声明</button>
-        <button class="btn btn-sm btn-info" id="moonchildBtn" style="display:none;" onclick="useMoonchildAbility()">月之子：选择目标</button>
-      </div>
     </div>
 
-  <!-- 上帝视角面板 -->
-  <div id="godPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
-    <div style="max-width:1200px; margin:0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h1 style="color:#9b59b6; font-size:1.8em;">👁 上帝视角</h1>
-        <button class="btn btn-sm btn-secondary" onclick="closeGodView()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+  <!-- 进入系统：昵称登录 -->
+  <div id="loginModal" class="wx-modal" style="z-index:400;">
+    <div class="wx-modal-dialog" style="max-width:360px;">
+      <div class="wx-modal-body" style="padding:28px 24px 24px;">
+        <div class="form-group">
+          <label>你的昵称</label>
+          <input type="text" id="loginName" placeholder="输入昵称后进入系统" maxlength="20" onkeydown="if(event.key==='Enter')confirmLogin()">
+        </div>
+        <button class="btn btn-primary" onclick="confirmLogin()" style="margin-top:8px;">进入系统</button>
+        <div class="error-msg" id="loginError" style="margin-top:10px;">请输入昵称</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 上帝视角（弹窗） -->
+  <div id="godPanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:1000px; height:min(820px, 88vh);">
+      <div class="wx-modal-header">
+        <h1 class="wx-modal-title">👁 上帝视角</h1>
+        <button class="btn btn-sm btn-secondary" onclick="closeGodView()">关闭</button>
       </div>
 
       <!-- 密码输入 -->
-      <div id="godLoginForm" style="text-align:center; padding:60px 20px;">
-        <div style="font-size:1.2em; color:#ccc; margin-bottom:20px;">请输入上帝视角密码</div>
-        <input type="password" id="godPassword" placeholder="输入密码" style="padding:12px 20px; width:260px; font-size:16px; background:rgba(0,0,0,0.4); border:1px solid #9b59b6; border-radius:6px; color:#fff; text-align:center;" onkeydown="if(event.key==='Enter')godLogin()">
-        <button class="btn btn-primary btn-sm" onclick="godLogin()" style="margin-left:10px; padding:12px 30px; background:linear-gradient(135deg,#9b59b6,#8e44ad);">登录</button>
-        <div id="godLoginError" style="color:#e74c3c; margin-top:15px; display:none;"></div>
+      <div id="godLoginForm" class="wx-god-login">
+        <div class="wx-god-login-tip">请输入上帝视角密码</div>
+        <div class="wx-god-login-row">
+          <input type="password" id="godPassword" placeholder="输入密码" onkeydown="if(event.key==='Enter')godLogin()">
+          <button class="btn btn-primary btn-sm" onclick="godLogin()" style="padding:9px 24px;">登录</button>
+        </div>
+        <div id="godLoginError" class="wx-god-login-error" style="display:none;"></div>
       </div>
 
       <!-- 上帝视角内容 -->
-      <div id="godContent" style="display:none;">
+      <div id="godContent" class="wx-modal-body" style="display:none;">
         <!-- 阵营统计 -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
-          <div style="background:rgba(39,174,96,0.15); border:1px solid #27ae60; border-radius:8px; padding:15px;">
-            <h3 style="color:#2ecc71; margin-bottom:10px;">善良阵营</h3>
+        <div class="wx-god-teams">
+          <div class="wx-god-team good">
+            <h3>善良阵营</h3>
             <div id="godGoodPlayers"></div>
           </div>
-          <div style="background:rgba(231,76,60,0.15); border:1px solid #e74c3c; border-radius:8px; padding:15px;">
-            <h3 style="color:#e74c3c; margin-bottom:10px;">邪恶阵营</h3>
+          <div class="wx-god-team evil">
+            <h3>邪恶阵营</h3>
             <div id="godEvilPlayers"></div>
           </div>
         </div>
 
         <!-- 状态信息 -->
-        <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px; margin-bottom:20px;">
-          <h3 style="color:#d4af37; margin-bottom:10px;">游戏状态</h3>
-          <div id="godStatus" style="color:#ccc; line-height:1.8;"></div>
+        <div class="wx-god-card">
+          <h3>游戏状态</h3>
+          <div id="godStatus" class="wx-god-status"></div>
         </div>
 
         <!-- 完整玩家列表 -->
-        <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px; margin-bottom:20px;">
-          <h3 style="color:#d4af37; margin-bottom:10px;">所有玩家</h3>
-          <table style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="border-bottom:1px solid rgba(255,255,255,0.2);">
-                <th style="padding:8px; text-align:left; color:#aaa;">座位</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">昵称</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">角色</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">阵营</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">状态</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">标记</th>
-                <th style="padding:8px; text-align:left; color:#aaa;">收到的信息</th>
-              </tr>
-            </thead>
-            <tbody id="godPlayersTable"></tbody>
-          </table>
+        <div class="wx-god-card">
+          <h3>所有玩家</h3>
+          <div class="wx-god-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>座位</th>
+                  <th>昵称</th>
+                  <th>角色</th>
+                  <th>阵营</th>
+                  <th>状态</th>
+                  <th>标记</th>
+                  <th>收到的信息</th>
+                </tr>
+              </thead>
+              <tbody id="godPlayersTable"></tbody>
+            </table>
+          </div>
         </div>
 
         <!-- 行动日志 -->
-        <div style="background:rgba(0,0,0,0.3); border-radius:8px; padding:15px;">
-          <div style="margin-bottom:10px;">
-            <h3 style="color:#d4af37;">行动日志</h3>
-          </div>
-          <div id="godActionLog" style="max-height:400px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.8; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;"></div>
+        <div class="wx-god-card">
+          <h3>行动日志</h3>
+          <div id="godActionLog" class="wx-god-log"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- 角色总览面板 -->
-  <div id="roleOverviewPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:12px 16px; overflow:hidden;">
-    <div style="max-width:1200px; margin:0 auto; height:100%; display:flex; flex-direction:column;">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
-        <h1 id="roleOverviewTitle" style="color:#3498db; font-size:1.4em; margin:0;">📖 角色总览</h1>
-        <button class="btn btn-sm btn-secondary" onclick="closeRoleOverview()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+  <!-- 角色总览（弹窗） -->
+  <div id="roleOverviewPanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:960px; height:min(760px, 88vh);">
+      <div class="wx-modal-header">
+        <h1 id="roleOverviewTitle" class="wx-modal-title">📖 角色总览</h1>
+        <button class="btn btn-sm btn-secondary" onclick="closeRoleOverview()">关闭</button>
       </div>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; flex:1; min-height:0; margin-top:10px;">
+      <!-- 剧本切换 -->
+      <div class="wx-ro-scripts" id="roScriptTabs"></div>
+
+      <div class="wx-ro-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; flex:1; min-height:0; padding:0 20px 20px;">
         <div style="display:flex; flex-direction:column; min-height:0;">
-          <h2 style="color:#2ecc71; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(46,204,113,0.3); padding-bottom:4px; flex-shrink:0;">村民</h2>
+          <h2 style="color:#07C160; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(7,193,96,0.3); padding-bottom:4px; flex-shrink:0;">村民</h2>
           <div id="roTownsfolk" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
         <div style="display:flex; flex-direction:column; min-height:0;">
-          <h2 style="color:#f39c12; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(243,156,18,0.3); padding-bottom:4px; flex-shrink:0;">外来者</h2>
+          <h2 style="color:#FF9500; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(243,156,18,0.3); padding-bottom:4px; flex-shrink:0;">外来者</h2>
           <div id="roOutsider" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
         <div style="display:flex; flex-direction:column; min-height:0;">
-          <h2 style="color:#e74c3c; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:4px; flex-shrink:0;">爪牙</h2>
+          <h2 style="color:#FA5151; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(250,81,81,0.3); padding-bottom:4px; flex-shrink:0;">爪牙</h2>
           <div id="roMinion" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
         <div style="display:flex; flex-direction:column; min-height:0;">
-          <h2 style="color:#e74c3c; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(231,76,60,0.3); padding-bottom:4px; flex-shrink:0;">恶魔</h2>
+          <h2 style="color:#FA5151; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(250,81,81,0.3); padding-bottom:4px; flex-shrink:0;">恶魔</h2>
           <div id="roDemon" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- 自定义角色分配面板（测试用） -->
-  <div id="customRolePanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
-    <div style="max-width:700px; margin:0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h1 style="color:#9b59b6; font-size:1.6em;">🎭 自定义角色分配（测试用）</h1>
-        <button class="btn btn-sm btn-secondary" onclick="closeCustomRolePanel()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+  <!-- 自定义角色分配（测试用，弹窗） -->
+  <div id="customRolePanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:760px; height:min(780px, 88vh);">
+      <div class="wx-modal-header">
+        <h1 class="wx-modal-title">🎭 自定义角色分配（测试用）</h1>
+        <button class="btn btn-sm btn-secondary" onclick="closeCustomRolePanel()">关闭</button>
       </div>
-      <p style="color:#aaa; margin-bottom:15px; font-size:13px;">为每位已入座玩家指定角色。配置合规时剩余角色将按当前人数配置自动补全，配置有误时会提示。酒鬼会自动获得假村民身份。</p>
-      <div id="customRoleList" style="margin-bottom:20px;"></div>
-      <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <div class="wx-modal-body">
+        <p class="crp-tip">为每位已入座玩家指定角色。配置合规时剩余角色将按当前人数配置自动补全，配置有误时会提示。酒鬼会自动获得假村民身份。</p>
+        <div id="customRoleList"></div>
+      </div>
+      <div class="wx-modal-footer">
         <button class="btn btn-sm btn-secondary" onclick="clearCustomRoles()">清空所有选择</button>
         <button id="customRoleConfirmBtn" class="btn btn-sm btn-primary" onclick="applyCustomRoles()">确认并关闭</button>
       </div>
     </div>
   </div>
 
-  <!-- 概率设置面板 -->
-  <div id="probSettingsPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:200; padding:20px; overflow-y:auto;">
-    <div style="max-width:900px; margin:0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-        <h1 style="color:#f1c40f; font-size:1.8em; margin:0;">⚙️ 概率设置</h1>
-        <div style="display:flex; gap:10px; align-items:center;">
-          <button class="btn btn-sm btn-warning" onclick="resetProbConfig()" id="probResetBtn">恢复默认</button>
-          <button class="btn btn-sm btn-secondary" onclick="closeProbSettings()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
-        </div>
+  <!-- 通用确认弹窗 -->
+  <div id="wxConfirm" class="wx-modal" style="display:none; z-index:450;">
+    <div class="wx-modal-dialog" style="max-width:340px;">
+      <div class="wx-modal-body" style="padding:24px 22px 6px;">
+        <div class="wx-confirm-text" id="wxConfirmText"></div>
       </div>
-
-      <!-- 模式切换 -->
-      <div style="background:rgba(241,196,15,0.08); border:1px solid rgba(241,196,15,0.3); border-radius:8px; padding:12px 15px; margin-bottom:15px;">
-        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
-          <span style="color:#f9e79f; font-weight:bold; font-size:14px;">概率模式：</span>
-          <div style="display:flex; border:1px solid rgba(241,196,15,0.4); border-radius:6px; overflow:hidden;">
-            <button id="probModeStandard" onclick="setProbMode('standard')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:linear-gradient(135deg,#f39c12,#e67e22); color:#fff; font-weight:bold;">📊 标准模式</button>
-            <button id="probModeAdvanced" onclick="setProbMode('advanced')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:rgba(255,255,255,0.08); color:#ccc;">🔧 高级模式</button>
-          </div>
-        </div>
-        <div id="probModeDesc" style="color:#bbb; font-size:12px; line-height:1.6;">
-          <b style="color:#f9e79f;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统必帮弱方，中毒/醉酒/酒鬼必出假信息，适合快速开始游戏。
-        </div>
-      </div>
-
-      <p style="color:#aaa; margin-bottom:15px; font-size:13px;">仅房主可修改。设置仅在本局游戏生效，游戏开始后无法修改。</p>
-      <div id="probSettingsContent"></div>
-      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
-        <button class="btn btn-primary btn-sm" onclick="saveProbConfig()" id="probSaveBtn">💾 保存设置</button>
+      <div class="wx-modal-footer" style="padding:12px 18px 18px;">
+        <button class="btn btn-sm btn-secondary" id="wxConfirmCancel" onclick="closeWxConfirm()">取消</button>
+        <button class="btn btn-sm btn-primary" id="wxConfirmOk">确定</button>
       </div>
     </div>
   </div>
 
-  <!-- 历史记录面板 -->
-  <div id="historyPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:300; padding:20px; overflow-y:auto;">
-    <div style="max-width:1100px; margin:0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h1 id="historyTitle" style="color:#3498db; font-size:1.8em;">📜 历史记录</h1>
-        <div>
-          <button class="btn btn-sm btn-secondary" id="historyBackBtn" onclick="closeHistoryDetail()" style="display:none; background:rgba(52,152,219,0.3); border:1px solid #3498db; color:#85c1e9; margin-right:10px;">← 返回列表</button>
-          <button class="btn btn-sm btn-secondary" onclick="closeHistoryPanel()" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.3); color:#fff;">关闭</button>
+  <!-- 公开公告（伪装用，弹窗） -->
+  <div id="announcePanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:520px;">
+      <div class="wx-modal-header">
+        <h1 class="wx-modal-title">📢 公开公告</h1>
+        <button class="btn btn-sm btn-secondary" onclick="closeAnnouncePanel()">关闭</button>
+      </div>
+      <div class="wx-modal-body">
+        <p class="ann-tip">公告将以广播形式发给房间内所有人。<strong>仅用于伪装身份、迷惑对手</strong>，不会触发任何角色能力，也不影响真实信息公开。</p>
+
+        <div class="ann-field">
+          <label>以哪个角色的名义公告</label>
+          <select id="announceRole" onchange="updateAnnouncePreview()"></select>
+        </div>
+
+        <div class="ann-field" id="annTextField">
+          <label>公告内容</label>
+          <textarea id="announceText" maxlength="120" placeholder="例如：3号 和 5号 之中有恶魔" oninput="updateAnnouncePreview()"></textarea>
+          <div class="ann-counter"><span id="announceCount">0/120</span></div>
+        </div>
+
+        <div class="ann-field" id="annPlayerField" style="display:none;">
+          <label>选择一名存活玩家</label>
+          <select id="announcePlayer" onchange="updateAnnouncePreview()"></select>
+        </div>
+
+        <div class="ann-preview">
+          <span class="ann-preview-label">发送效果预览</span>
+          <div class="ann-preview-text" id="announcePreview">【角色声明】……</div>
+        </div>
+      </div>
+      <div class="wx-modal-footer">
+        <button class="btn btn-sm btn-secondary" onclick="closeAnnouncePanel()">取消</button>
+        <button class="btn btn-sm btn-primary" onclick="sendAnnouncement()">发送公告</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 概率设置（弹窗） -->
+  <div id="probSettingsPanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:820px;">
+      <div class="wx-modal-header">
+        <h1 class="wx-modal-title">⚙️ 概率设置</h1>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-sm btn-warning" onclick="resetProbConfig()" id="probResetBtn">恢复默认</button>
+          <button class="btn btn-sm btn-secondary" onclick="closeProbSettings()">关闭</button>
+        </div>
+      </div>
+      <div class="wx-modal-body">
+
+      <!-- 模式切换 -->
+      <div style="background:rgba(255,184,0,0.08); border:1px solid rgba(255,184,0,0.3); border-radius:8px; padding:12px 15px; margin-bottom:15px;">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
+          <span style="color:#0FA958; font-weight:bold; font-size:14px;">概率模式：</span>
+          <div style="display:flex; border:1px solid rgba(255,184,0,0.4); border-radius:6px; overflow:hidden;">
+            <button id="probModeStandard" onclick="setProbMode('standard')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:linear-gradient(135deg,#FF9500,#F5822B); color:#fff; font-weight:bold;">📊 标准模式</button>
+            <button id="probModeAdvanced" onclick="setProbMode('advanced')" style="padding:6px 16px; border:none; cursor:pointer; font-size:13px; background:rgba(0,0,0,0.05); color:#4f4f4f;">🔧 高级模式</button>
+          </div>
+        </div>
+        <div id="probModeDesc" style="color:#666666; font-size:12px; line-height:1.6;">
+          <b style="color:#0FA958;">📊 标准模式（默认）：</b>角色技能干扰概率使用平衡预设值（部分为100%），偏袒系统必帮弱方，中毒/醉酒/酒鬼必出假信息，适合快速开始游戏。
         </div>
       </div>
 
-      <!-- 历史记录列表 -->
-      <div id="historyList" style="display:block;">
-        <div id="historyListContent"></div>
+      <p style="color:#7f7f7f; margin-bottom:15px; font-size:13px;">仅房主可修改。设置仅在本局游戏生效，游戏开始后无法修改。</p>
+        <div id="probSettingsContent"></div>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+          <button class="btn btn-primary btn-sm" onclick="saveProbConfig()" id="probSaveBtn">💾 保存设置</button>
+        </div>
       </div>
+    </div>
+  </div>
 
-      <!-- 历史记录详情 -->
-      <div id="historyDetail" style="display:none;">
-        <div id="historyDetailContent"></div>
+  <!-- 历史记录（弹窗） -->
+  <div id="historyPanel" class="wx-modal" style="display:none;">
+    <div class="wx-modal-dialog" style="max-width:1000px; height:min(720px, 86vh);">
+      <div class="wx-modal-header">
+        <h1 id="historyTitle" class="wx-modal-title">📜 历史记录</h1>
+        <div>
+          <button class="btn btn-sm btn-secondary" id="historyBackBtn" onclick="closeHistoryDetail()" style="display:none; background:rgba(16,174,255,0.1); border:1px solid rgba(16,174,255,0.4); color:#0E93D6; margin-right:10px;">← 返回列表</button>
+          <button class="btn btn-sm btn-secondary" onclick="closeHistoryPanel()">关闭</button>
+        </div>
+      </div>
+      <div class="wx-modal-body">
+        <!-- 历史记录列表 -->
+        <div id="historyList" style="display:block;">
+          <div id="historyListContent"></div>
+        </div>
+
+        <!-- 历史记录详情 -->
+        <div id="historyDetail" style="display:none;">
+          <div id="historyDetailContent"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- 游戏结束身份展示 -->
-  <div id="gameOverPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.95); z-index:150; padding:40px; overflow-y:auto;">
+  <div id="gameOverPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:#EDEDED; z-index:150; padding:40px; overflow-y:auto;">
     <div style="max-width:800px; margin:0 auto; text-align:center;">
       <h1 id="gameOverTitle" style="font-size:2.5em; margin-bottom:20px;"></h1>
-      <p id="gameOverReason" style="font-size:1.2em; color:#aaa; margin-bottom:30px;"></p>
+      <p id="gameOverReason" style="font-size:1.2em; color:#7f7f7f; margin-bottom:30px;"></p>
       <div class="roles-reveal">
         <table>
           <thead>

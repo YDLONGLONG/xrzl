@@ -168,13 +168,13 @@ function showTextInput(title, options = {}) {
     overlay.innerHTML = `
       <div class="confirm-dialog confirm-type-${type}" style="min-width:340px;max-width:500px;">
         <div class="confirm-title">${title}</div>
-        ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#aaa;">${options.description}</div>` : ''}
+        ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#7f7f7f;">${options.description}</div>` : ''}
         <div class="confirm-input-area">
           ${multiline
             ? `<textarea class="confirm-textarea" placeholder="${placeholder}" maxlength="${maxLength}" rows="3">${defaultValue}</textarea>`
             : `<input type="text" class="confirm-input" placeholder="${placeholder}" maxlength="${maxLength}" value="${defaultValue}">`
           }
-          <div class="confirm-input-counter" style="text-align:right;font-size:11px;color:#666;margin-top:4px;">
+          <div class="confirm-input-counter" style="text-align:right;font-size:11px;color:#999999;margin-top:4px;">
             <span class="confirm-counter-num">0</span>/${maxLength}
           </div>
         </div>
@@ -211,7 +211,7 @@ function showTextInput(title, options = {}) {
     okBtn.addEventListener('click', () => {
       const val = inputEl.value.trim();
       if (options.minLength && val.length < options.minLength) {
-        inputEl.style.borderColor = '#e74c3c';
+        inputEl.style.borderColor = '#FA5151';
         return;
       }
       close(val || null);

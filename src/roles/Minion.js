@@ -58,18 +58,11 @@ class Poisoner extends Role {
     target.isPoisoned = true;
     gameState.nightActions.poisoner = { targetId };
     
-    // 保留恶魔/队友信息，追加下毒结果
-    const players = Array.from(engine.room.players.values()).filter(p => p.seat !== -1);
-    const demon = players.find(p => p.role && p.role.category === 'DEMON');
-    const otherMinions = players.filter(p => p.role && p.role.category === 'MINION' && p.id !== player.id);
-    let teamInfo = '';
-    if (demon) teamInfo += `恶魔是${demon.seat+1}号 ${demon.name}【${demon.role.name}】`;
-    if (otherMinions.length > 0) teamInfo += (teamInfo ? '。' : '') + `队友：${otherMinions.map(m => `${m.seat+1}号 ${m.name}【${m.role.name}】`).join('、')}`;
-    
+    // 恶魔/队友信息已在首夜的「爪牙信息」中给出，此处只回报本夜下毒结果，避免每晚重复
     engine.setPlayerPrivateInfo(player, {
       type: 'poisoner',
       targetId: targetId,
-      message: (teamInfo ? teamInfo + '\n' : '') + `你对 ${target.seat+1}号 ${target.name} 下了毒`
+      message: `你对 ${target.seat+1}号 ${target.name} 下了毒`
     });
     
     return { success: true };
