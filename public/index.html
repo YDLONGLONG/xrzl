@@ -137,6 +137,11 @@
 
     <!-- 右侧：游戏操作 + 剧本选择 + 群成员 + 语音 -->
     <div class="wx-member" id="memberPanel" style="display:none;">
+      <!-- 移动端：成员 / 操作区收起 - 展开（桌面端不显示） -->
+      <div class="member-collapse-bar" id="memberCollapseBar" onclick="toggleMemberPanel()">
+        <span class="member-collapse-label">成员与操作</span>
+        <svg class="member-collapse-arrow" viewBox="0 0 24 24" width="16" height="16"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+      </div>
       <div class="wx-member-scroll">
         <div class="seats-area" id="seatsArea"></div>
         <!-- 语音频道面板 -->
@@ -293,20 +298,23 @@
       <!-- 剧本切换 -->
       <div class="wx-ro-scripts" id="roScriptTabs"></div>
 
+      <!-- 移动端：阵营切换（桌面端隐藏，四个阵营同时展示） -->
+      <div class="wx-ro-cats" id="roCatTabs"></div>
+
       <div class="wx-ro-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; flex:1; min-height:0; padding:0 20px 20px;">
-        <div style="display:flex; flex-direction:column; min-height:0;">
+        <div class="wx-ro-cat-block" data-cat="村民" style="display:flex; flex-direction:column; min-height:0;">
           <h2 style="color:#07C160; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(7,193,96,0.3); padding-bottom:4px; flex-shrink:0;">村民</h2>
           <div id="roTownsfolk" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
-        <div style="display:flex; flex-direction:column; min-height:0;">
+        <div class="wx-ro-cat-block" data-cat="外来者" style="display:flex; flex-direction:column; min-height:0;">
           <h2 style="color:#FF9500; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(243,156,18,0.3); padding-bottom:4px; flex-shrink:0;">外来者</h2>
           <div id="roOutsider" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
-        <div style="display:flex; flex-direction:column; min-height:0;">
+        <div class="wx-ro-cat-block" data-cat="爪牙" style="display:flex; flex-direction:column; min-height:0;">
           <h2 style="color:#FA5151; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(250,81,81,0.3); padding-bottom:4px; flex-shrink:0;">爪牙</h2>
           <div id="roMinion" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>
-        <div style="display:flex; flex-direction:column; min-height:0;">
+        <div class="wx-ro-cat-block" data-cat="恶魔" style="display:flex; flex-direction:column; min-height:0;">
           <h2 style="color:#FA5151; font-size:1.1em; margin:0 0 6px 0; border-bottom:1px solid rgba(250,81,81,0.3); padding-bottom:4px; flex-shrink:0;">恶魔</h2>
           <div id="roDemon" class="role-grid role-grid-compact" style="flex:1; min-height:0; overflow-y:auto;"></div>
         </div>

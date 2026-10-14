@@ -33,6 +33,8 @@ window.addEventListener('DOMContentLoaded', () => {
   renderChatMessages();
   renderSessionList();
   updateChatInputVisibility();
+  // 应用移动端成员/操作区收起状态
+  applyMemberPanelCollapsed();
   
   // 回车提交
   $('joinRoomId').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
@@ -3513,6 +3515,8 @@ function sendAnnouncement() {
 
 // 角色总览当前查看的剧本（可在弹窗内手动切换）
 let _roScriptId = null;
+// 移动端角色总览当前查看的阵营（桌面端四个阵营同时展示，不使用该状态）
+let _roActiveCategory = '村民';
 
 function openRoleOverview() {
   const panel = document.getElementById('roleOverviewPanel');
@@ -3528,6 +3532,21 @@ function switchRoleOverviewScript(scriptId) {
   if (!SCRIPT_INFO[scriptId]) return;
   _roScriptId = scriptId;
   renderRoleOverview();
+}
+
+// 移动端：切换查看的阵营（桌面端无此交互，四个阵营同时展示）
+function switchRoleOverviewCategory(cat) {
+  _roActiveCategory = cat;
+  document.querySelectorAll('#roCatTabs .wx-ro-cat').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.cat === cat);
+  });
+  applyRoleOverviewCategory();
+}
+
+function applyRoleOverviewCategory() {
+  document.querySelectorAll('.wx-ro-cat-block').forEach(block => {
+    block.classList.toggle('active', block.dataset.cat === _roActiveCategory);
+  });
 }
 
 function renderRoleOverview() {
@@ -3577,6 +3596,17 @@ function renderRoleOverview() {
       </div>`;
     }).join('');
   }
+
+  // 移动端：阵营切换按钮（含角色数量），并只显示当前选中的阵营
+  const catTabsEl = document.getElementById('roCatTabs');
+  if (catTabsEl) {
+    catTabsEl.innerHTML = Object.entries(categories).map(([cat]) => {
+      const count = rolesForScript.filter(r => r.category === cat).length;
+      const active = cat === _roActiveCategory ? ' active' : '';
+      return `<button class="wx-ro-cat${active}" data-cat="${cat}" onclick="switchRoleOverviewCategory('${cat}')">${cat} ${count}</button>`;
+    }).join('');
+  }
+  applyRoleOverviewCategory();
 }
 
 function closeRoleOverview() {
@@ -3965,6 +3995,25 @@ function moveMobilePanelsIntoChat(open) {
   }
 }
 
+// ========== 移动端：成员 / 操作区收起 - 展开 ==========
+let memberPanelCollapsed = (() => {
+  try { return localStorage.getItem('xrzl_member_collapsed') === '1'; } catch (e) { return false; }
+})();
+
+function applyMemberPanelCollapsed() {
+  const member = $('memberPanel');
+  if (!member) return;
+  member.classList.toggle('collapsed', memberPanelCollapsed);
+  const bar = $('memberCollapseBar');
+  if (bar) bar.title = memberPanelCollapsed ? '展开成员与操作区' : '收起成员与操作区';
+}
+
+function toggleMemberPanel() {
+  memberPanelCollapsed = !memberPanelCollapsed;
+  try { localStorage.setItem('xrzl_member_collapsed', memberPanelCollapsed ? '1' : '0'); } catch (e) {}
+  applyMemberPanelCollapsed();
+}
+
 // 信息区收起按钮：移动端定位到聊天页导航栏之下
 function positionCmToggle() {
   const btn = $('cmToggle');
@@ -3986,6 +4035,7 @@ function openMobileChat() {
   moveMobilePanelsIntoChat(currentChatChannel === 'public');
   updateMobileChatTitle();
   positionCmToggle();
+  applyMemberPanelCollapsed();
 }
 
 // 返回会话列表
