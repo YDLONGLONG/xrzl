@@ -52,21 +52,38 @@ function createToast(msg, type = 'info') {
 
   const icon = document.createElement('span');
   icon.className = 'app-toast-icon';
-  icon.textContent = type === 'success' ? '✓' : type === 'error' ? '!' : 'i';
+  icon.textContent = type === 'success' ? '✓'
+    : (type === 'error' || type === 'warning') ? '!'
+    : 'i';
 
   const text = document.createElement('span');
   text.className = 'app-toast-text';
   text.textContent = msg;
 
+  // 关闭按钮：支持手动关闭提示
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'app-toast-close';
+  close.title = '关闭';
+  close.setAttribute('aria-label', '关闭');
+  close.textContent = '✕';
+
   toast.appendChild(icon);
   toast.appendChild(text);
+  toast.appendChild(close);
   container.appendChild(toast);
 
-  // 淡出后移除（flex容器自动重排）
-  setTimeout(() => {
+  // 淡出后移除（flex容器自动重排）；手动关闭与自动关闭共用同一流程
+  let removeTimer = null;
+  let autoTimer = null;
+  const dismiss = () => {
+    if (removeTimer) return;
+    clearTimeout(autoTimer);
     toast.classList.add('app-toast-out');
-    setTimeout(() => toast.remove(), 250);
-  }, 2600);
+    removeTimer = setTimeout(() => toast.remove(), 250);
+  };
+  close.addEventListener('click', dismiss);
+  autoTimer = setTimeout(dismiss, 2600);
 }
 
 function getToastContainer() {

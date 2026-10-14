@@ -2288,38 +2288,50 @@ body.resizing-active * {
   }
 
   /* ---------- 成员 / 操作区：收起 - 展开 ---------- */
+  /* 收起条改为与信息区收起按钮（.cm-toggle）同款的圆形按钮，右对齐在面板右上角 */
   .chat-area .member-collapse-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     flex: 0 0 auto;
-    height: 32px;
-    /* 负外边距抵掉 .wx-member 的内边距做成通栏，底部留出与座位区的间隔 */
-    margin: -8px -10px 10px;
-    padding: 0 12px;
-    font-size: 12px;
+    align-self: flex-end;
+    width: 22px;
+    height: 22px;
+    margin: 0 2px 8px 0;
+    padding: 0;
+    border: 1px solid #E0E0E0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
     color: #7F7F7F;
-    border-bottom: 1px solid #E7E7E7;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
   }
+  .chat-area .member-collapse-bar:active {
+    color: #07C160;
+    border-color: rgba(7, 193, 96, 0.45);
+    background: #FFFFFF;
+  }
+  /* 圆形按钮只保留箭头，文字隐藏（提示文案由 title 承担） */
+  .chat-area .member-collapse-bar .member-collapse-label { display: none; }
   .chat-area .member-collapse-bar .member-collapse-arrow {
+    width: 14px;
+    height: 14px;
     fill: currentColor;
     transition: transform 0.2s;
     flex-shrink: 0;
   }
-  /* 收起：只留折叠条，其余内容整体隐藏 */
+  /* 收起：只留圆形按钮，其余内容整体隐藏 */
   .chat-area .wx-member.collapsed {
-    max-height: 32px;
-    padding: 0;
+    max-height: 30px;
+    padding: 4px 10px;
     overflow: hidden;
   }
   .chat-area .wx-member.collapsed > *:not(.member-collapse-bar) {
     display: none;
   }
   .chat-area .wx-member.collapsed .member-collapse-bar {
-    margin: 0;
-    border-bottom: none;
+    margin: 0 2px 0 0;
   }
   .chat-area .wx-member.collapsed .member-collapse-arrow {
     transform: rotate(180deg);
