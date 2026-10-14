@@ -1187,12 +1187,17 @@ ${playerInfo}
     gossip: { prefix: '【造谣者声明】', maxLen: 120, script: 'bmr' },
     moonchild: { prefix: '【月之子选择】我选择 ', maxLen: 60, script: 'bmr' }
   };
-  socket.on('chat:announce', ({ roleId, text }) => {
+  socket.on('chat:announce', ({ roleId, text, channel }) => {
     const preset = ANNOUNCE_ROLE_PRESETS[roleId];
     if (!preset) return;
     const result = getPlayerRoom(socket.id);
     if (!result) return;
     const { roomId, room } = result;
+    // 仅主房间（公聊）可发起公开公告：私聊 / 死者频道拒绝
+    if (channel !== 'public') {
+      socket.emit('room:error', { message: '只有主房间内才能发起公开公告' });
+      return;
+    }
     // 剧本校验：该角色必须存在于当前房间所用剧本中
     if (preset.script !== (room.script || 'tb')) return;
     const player = room.players.get(socket.id);

@@ -607,9 +607,11 @@ function showGameView() {
   const roomPanel = $('roomPanel');
   if (lobby) lobby.style.display = 'none';
   if (roomPanel) roomPanel.style.display = 'flex';
-  // 右侧区域：仅加入房间后显示
+  // 右侧区域：仅加入房间后显示；成员与操作区默认展开（不沿用上次的收起状态）
   const memberPanel = $('memberPanel');
   if (memberPanel) memberPanel.style.display = 'flex';
+  memberPanelCollapsed = false;
+  applyMemberPanelCollapsed();
   // 已加入房间：隐藏顶部连接状态
   const topConn = $('topConn');
   if (topConn) topConn.style.display = 'none';
@@ -1091,6 +1093,8 @@ function updateChatInputVisibility() {
   // 🤖 小染按钮：仅主房间（公聊）可用
   const aiBtn = area.querySelector('.ai-trigger-btn:not(.announce-trigger-btn)');
   if (aiBtn) aiBtn.style.display = currentChatChannel === 'public' ? '' : 'none';
+  // 📢 公开公告按钮：同样仅主房间（公聊）可用，并受当前剧本限制
+  updateAnnounceButtonVisibility();
 }
 
 function renderSeats(state) {
@@ -3419,16 +3423,22 @@ function getAvailableAnnouncePresets() {
   return ANNOUNCE_ROLE_PRESETS.filter(p => p.script === scriptId);
 }
 
-// 根据当前剧本动态显示 / 隐藏「公开公告」按钮
+// 根据当前剧本与所在频道动态显示 / 隐藏「公开公告」按钮
+// 条件：当前剧本含公告角色（如黯月初升的造谣者 / 月之子）且处于主房间（公聊）
 function updateAnnounceButtonVisibility() {
   const btn = document.querySelector('.announce-trigger-btn');
   if (!btn) return;
-  btn.style.display = getAvailableAnnouncePresets().length > 0 ? '' : 'none';
+  const available = getAvailableAnnouncePresets().length > 0 && currentChatChannel === 'public';
+  btn.style.display = available ? '' : 'none';
 }
 
 function openAnnouncePanel() {
   const panel = $('announcePanel');
   if (!panel) return;
+  if (currentChatChannel !== 'public') {
+    showToast('只有主房间内才能发起公开公告');
+    return;
+  }
   if (getAvailableAnnouncePresets().length === 0) {
     showToast('当前剧本没有可发起公告的角色');
     return;
@@ -3513,11 +3523,17 @@ function updateAnnouncePreview() {
 function sendAnnouncement() {
   const preset = getAnnouncePreset();
   const text = getAnnounceTargetText();
+  // 公开公告仅能在主房间（公聊）发起（服务端同样校验）
+  if (currentChatChannel !== 'public') {
+    showToast('只有主房间内才能发起公开公告');
+    closeAnnouncePanel();
+    return;
+  }
   if (!text) {
     showToast(preset.inputType === 'player' ? '请选择一名存活玩家' : '请输入公告内容');
     return;
   }
-  socket.emit('chat:announce', { roleId: preset.id, text });
+  socket.emit('chat:announce', { roleId: preset.id, text, channel: currentChatChannel });
   closeAnnouncePanel();
 }
 
@@ -4004,21 +4020,30 @@ function moveMobilePanelsIntoChat(open) {
 }
 
 // ========== 移动端：成员 / 操作区收起 - 展开 ==========
-let memberPanelCollapsed = (() => {
-  try { return localStorage.getItem('xrzl_member_collapsed') === '1'; } catch (e) { return false; }
-})();
+// 默认展开：不再记忆上次的收起状态，进入房间时始终显示成员与操作区
+let memberPanelCollapsed = false;
 
 function applyMemberPanelCollapsed() {
   const member = $('memberPanel');
   if (!member) return;
+  const wasCollapsed = member.classList.contains('collapsed');
+  // 收起瞬间记录滚动位置（收起后内容隐藏，浏览器会把滚动位置钳制为 0）
+  if (memberPanelCollapsed && !wasCollapsed) member._scrollTop = member.scrollTop;
   member.classList.toggle('collapsed', memberPanelCollapsed);
+  if (memberPanelCollapsed) {
+    member.scrollTop = 0;
+  } else if (!wasCollapsed && member._scrollTop) {
+    // 展开时还原收起前的滚动位置
+    const top = member._scrollTop;
+    member.scrollTop = top;
+    requestAnimationFrame(() => { member.scrollTop = top; });
+  }
   const bar = $('memberCollapseBar');
   if (bar) bar.title = memberPanelCollapsed ? '展开成员与操作区' : '收起成员与操作区';
 }
 
 function toggleMemberPanel() {
   memberPanelCollapsed = !memberPanelCollapsed;
-  try { localStorage.setItem('xrzl_member_collapsed', memberPanelCollapsed ? '1' : '0'); } catch (e) {}
   applyMemberPanelCollapsed();
 }
 

@@ -2290,6 +2290,10 @@ body.resizing-active * {
   /* ---------- 成员 / 操作区：收起 - 展开 ---------- */
   /* 收起条改为与信息区收起按钮（.cm-toggle）同款的圆形按钮，右对齐在面板右上角 */
   .chat-area .member-collapse-bar {
+    /* 面板可滚动（max-height + overflow-y），按钮用 sticky 固定，不随内容滚走 */
+    position: sticky;
+    top: 4px;
+    z-index: 3;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2301,8 +2305,10 @@ body.resizing-active * {
     padding: 0;
     border: 1px solid #E0E0E0;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.92);
+    /* 不透明底色 + 阴影：内容从下方滚过时按钮仍清晰可点 */
+    background: #FFFFFF;
     color: #7F7F7F;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: color 0.15s, border-color 0.15s, background 0.15s;
@@ -2321,16 +2327,24 @@ body.resizing-active * {
     transition: transform 0.2s;
     flex-shrink: 0;
   }
-  /* 收起：只留圆形按钮，其余内容整体隐藏 */
+  /* 收起：只留圆形按钮（隐藏其余内容，同时去掉面板背景/边框/内边距，
+     避免收起后露出一条面板底色） */
   .chat-area .wx-member.collapsed {
-    max-height: 30px;
-    padding: 4px 10px;
+    max-height: 22px;
+    padding: 0;
+    background: transparent;
+    border-top: none;
     overflow: hidden;
   }
+  /* !important：面板内多个区块（#actionPanel/#scriptPanel/#confirmBar 等）
+     由 JS 写入内联 display，内联样式优先级高于此规则，不加 !important
+     收起后仍会露出一条被裁切的内容（滚动后尤其明显） */
   .chat-area .wx-member.collapsed > *:not(.member-collapse-bar) {
-    display: none;
+    display: none !important;
   }
   .chat-area .wx-member.collapsed .member-collapse-bar {
+    /* 收起后不滚动，取消 sticky 以免 top 偏移把按钮挤出可视区 */
+    position: static;
     margin: 0 2px 0 0;
   }
   .chat-area .wx-member.collapsed .member-collapse-arrow {
