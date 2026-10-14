@@ -2585,12 +2585,15 @@ function recallLocalMessagePair(msg) {
   msg.recalled = true;
   msg.content = '';
   delete msg.image;
-  // 连带撤回该消息触发的 AI 回复
+  // 连带撤回该消息触发的 AI 回复，并把两条撤回提示合并为一条
   const reply = chatMessages.find(m => String(m.id) === String(msg.aiReplyId));
   if (reply) {
     reply.recalled = true;
     reply.content = '';
     delete reply.image;
+    // 标记为已合并，不再单独渲染撤回通知
+    reply.mergedRecalled = true;
+    msg.recalledExtra = ['小染'];
   }
   renderChatMessages();
 }
@@ -2744,11 +2747,16 @@ function renderChatMessages() {
     if (msg.isSystem) {
       return `<div class="chat-msg system"><span>${escapeHtml(msg.content)}</span></div>`;
     }
+    // 已合并到配对消息的撤回提示中，不再单独渲染
+    if (msg.mergedRecalled) return '';
     // 已撤回的消息 → 居中灰色提示（微信风格，不保留头像与气泡）
     if (msg.recalled) {
       const seatText = msg.fromSeat >= 0 ? `${msg.fromSeat + 1}号 ` : '';
       const who = msg.fromId === myId ? '你' : `${seatText}${msg.fromName || '对方'}`;
-      return `<div class="chat-msg recalled-system"><span>${escapeHtml(who)} 撤回了一条消息</span></div>`;
+      // 合并撤回时附带的其他发送者（如：你 和 小染 撤回了一条消息）
+      const extra = Array.isArray(msg.recalledExtra) ? msg.recalledExtra : [];
+      const whoText = [who, ...extra].join(' 和 ');
+      return `<div class="chat-msg recalled-system"><span>${escapeHtml(whoText)} 撤回了一条消息</span></div>`;
     }
     // AI 小助手消息：与普通聊天气泡同构，仅头像与气泡配色不同
     if (msg.isAi) {
