@@ -7,6 +7,12 @@ const GameEngine = require('./src/game/GameEngine');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
 const { SCRIPTS } = require('./src/config/game-config');
 
+// 智谱 GLM API Key：从环境变量读取，切勿硬编码提交到仓库
+const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || '';
+if (!ZHIPU_API_KEY) {
+  console.warn('[警告] 未配置 ZHIPU_API_KEY 环境变量，AI 相关功能（Bot发言/造谣者判定）将不可用');
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -1070,7 +1076,7 @@ ${playerInfo}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer 8e7f57d3813947d9a96fa4e08804769a.xZAqoIHV2cev1hTw'
+          'Authorization': `Bearer ${ZHIPU_API_KEY}`
         },
         body: JSON.stringify({
           model: 'glm-4.7-flash',
@@ -1289,7 +1295,7 @@ ${playerInfo}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer 8e7f57d3813947d9a96fa4e08804769a.xZAqoIHV2cev1hTw'
+          'Authorization': `Bearer ${ZHIPU_API_KEY}`
         },
         body: JSON.stringify({
           model: 'glm-4.7-flash',
