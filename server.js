@@ -1305,7 +1305,29 @@ ${playerInfo}
       });
 
       if (!response.ok) {
-        socket.emit('ai:error', { message: `AI请求失败: ${response.status}` });
+        // 解析服务端返回的具体失败原因
+        let reason = '';
+        try {
+          const errText = await response.text();
+          try {
+            const errJson = JSON.parse(errText);
+            reason = errJson?.error?.message || errJson?.error?.code || errJson?.message || errText;
+          } catch (e) {
+            reason = errText;
+          }
+        } catch (e) {
+          reason = '';
+        }
+        const statusHint = {
+          401: 'API Key 无效或未授权',
+          403: '无访问权限',
+          429: '请求过于频繁或并发超限，请稍后重试',
+          500: '服务端内部错误',
+          503: '服务暂不可用'
+        }[response.status] || '';
+        const detail = [statusHint, reason].filter(Boolean).join('；');
+        console.error(`AI请求失败: ${response.status}`, detail);
+        socket.emit('ai:error', { message: `AI请求失败: ${response.status}${detail ? ' - ' + detail : ''}` });
         return;
       }
 
@@ -1346,7 +1368,7 @@ ${playerInfo}
       socket.emit('ai:done', { id: msgId });
     } catch(err) {
       console.error('AI对话错误:', err.message);
-      socket.emit('ai:error', { message: 'AI服务暂时不可用' });
+      socket.emit('ai:error', { message: `AI服务暂时不可用: ${err.message || '未知错误'}` });
     }
   });
 
