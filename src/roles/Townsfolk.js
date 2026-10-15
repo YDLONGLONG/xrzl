@@ -366,6 +366,7 @@ class Fortuneteller extends Role {
     }
     
     const realData = isFalse ? { realResult, redHerringId: redHerring, probInfo } : (probInfo ? { probInfo } : null);
+    const targetText = `${p1.seat + 1}号(${p1.name})和${p2.seat + 1}号(${p2.name})`;
     engine.setPlayerPrivateInfo(player, {
       type: 'fortuneteller',
       targets: targets.map(id => {
@@ -373,7 +374,8 @@ class Fortuneteller extends Role {
         return { id, name: p.name, seat: p.seat };
       }),
       result: result,
-      message: result ? '你选择的玩家中有恶魔' : '你选择的玩家中没有恶魔'
+      // 信息栏中要能看出这次占卜的是哪两名玩家
+      message: `${targetText}中，${result ? '有恶魔' : '没有恶魔'}`
     }, isFalse, realData);
     
     return { success: true };

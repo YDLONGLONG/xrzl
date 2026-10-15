@@ -344,6 +344,7 @@ function initSocketEvents() {
     target.content = '';
     delete target.image;
     renderChatMessages();
+    renderSessionList();
   });
 
   // AI 小助手事件
@@ -2462,6 +2463,8 @@ function renderSessionList() {
   const lastOf = (ch) => {
     for (let i = chatMessages.length - 1; i >= 0; i--) {
       const m = chatMessages[i];
+      // 已并入配对撤回提示的消息不作为预览来源
+      if (m.mergedRecalled) continue;
       if (ch === 'public' && m.channel === 'public') return m;
       if (ch === 'dead' && m.channel === 'dead') return m;
     }
@@ -2470,6 +2473,12 @@ function renderSessionList() {
   const previewText = (m, fallback) => {
     if (!m) return fallback;
     const who = m.fromId === myId ? '我' : (m.fromName || '');
+    // 已撤回的消息正文被清空，预览显示撤回提示而不是“xx：”
+    if (m.recalled) {
+      const extras = Array.isArray(m.recalledExtra) ? m.recalledExtra : [];
+      const whoText = [who || '对方', ...extras].join(' 和 ');
+      return `${whoText} 撤回了一条消息`;
+    }
     const text = String(m.content || '').replace(/\s+/g, ' ').slice(0, 40);
     return who ? `${who}：${text}` : text;
   };
@@ -2762,6 +2771,7 @@ function recallLocalMessagePair(msg) {
     msg.recalledExtra = ['小染'];
   }
   renderChatMessages();
+  renderSessionList();
 }
 
 // 点击图片放大预览
@@ -4318,9 +4328,9 @@ function getStandardConfig(scriptId) {
   const BMR_FIXED = {
     // 修补匠夜晚死亡概率、和平主义者拯救概率已由平衡系统自动控制，不再在此配置
     // 疯子/莽夫获得假恶魔身份为角色固有机制，已移除
-    gossip_true_statement: 0.4
+    // 造谣者声明真伪由 AI 裁判判定，Bot 不会主动发表声明，原 gossip_true_statement 已移除
   };
-  const BOT = { bot_nominate: 0.30, bot_evil_vote_yes: 0.7, bot_good_vote_yes: 0.5 };
+  const BOT = { bot_nominate: 0, bot_evil_vote_yes: 0.5, bot_good_vote_yes: 0.5 };
   const scriptFixed = (script === 'bmr') ? BMR_FIXED : TB_FIXED;
   const cfg = {
     ...BOT,
@@ -4474,22 +4484,24 @@ function _renderProbSettingsUI() {
     // ===== 标准模式UI：只读展示，显示实际概率值 =====
     let html = '';
 
-    // 角色技能干扰概率
-    html += `<div style="background:rgba(7,193,96,0.08); border:1px solid rgba(7,193,96,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
-      <h3 style="color:#07C160; margin-bottom:10px; font-size:1.05em;">🎯 角色技能干扰概率（预设值）</h3>
-      <p style="color:#8c8c8c; font-size:12px; margin-bottom:10px;">隐士/间谍的干扰登记概率使用标准50%随机。</p>
-      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
+    // 角色技能干扰概率（当前剧本无此类干扰项时整块不显示）
+    const interfereItems = [];
     meta.forEach(cat => {
-      if (cat.category === '角色技能干扰概率') {
-        cat.items.forEach(item => {
-          const v = _getCfgVal(config, item.key);
-          html += `<div style="color:#666666; font-size:12px; padding:5px 10px; background:rgba(0,0,0,0.02); border-radius:4px;">
-            <span style="color:#07C160;">●</span> ${item.label}：${_fmtProb(v)}
-          </div>`;
-        });
-      }
+      if (cat.category === '角色技能干扰概率') interfereItems.push(...cat.items);
     });
-    html += `</div></div>`;
+    if (interfereItems.length > 0) {
+      html += `<div style="background:rgba(7,193,96,0.08); border:1px solid rgba(7,193,96,0.3); border-radius:8px; padding:15px; margin-bottom:12px;">
+        <h3 style="color:#07C160; margin-bottom:10px; font-size:1.05em;">🎯 角色技能干扰概率（预设值）</h3>
+        <p style="color:#8c8c8c; font-size:12px; margin-bottom:10px;">隐士/间谍的干扰登记概率使用标准50%随机。</p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">`;
+      interfereItems.forEach(item => {
+        const v = _getCfgVal(config, item.key);
+        html += `<div style="color:#666666; font-size:12px; padding:5px 10px; background:rgba(0,0,0,0.02); border-radius:4px;">
+          <span style="color:#07C160;">●</span> ${item.label}：${_fmtProb(v)}
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
 
     // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
     if ((currentState && currentState.script === 'bmr')) {
@@ -4576,25 +4588,27 @@ function _renderProbSettingsUI() {
   // ===== 高级模式UI =====
   let html = '';
 
-  // 角色技能干扰概率
-  html += `<div style="background:rgba(0,0,0,0.03); border:1px solid rgba(16,174,255,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
-    <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(16,174,255,0.2); padding-bottom:6px;">🎯 角色技能干扰概率</h3>`;
+  // 角色技能干扰概率（当前剧本无此类干扰项时整块不显示）
+  const interfereItemsAdv = [];
   meta.forEach(cat => {
-    if (cat.category === '角色技能干扰概率') {
-      cat.items.forEach(item => {
-        const val = _getCfgVal(config, item.key);
-        const v = (val !== undefined) ? val : item.default;
-        html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
-          <label style="color:#333333; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
-          <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
-            oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
-            style="flex:2; min-width:150px; accent-color:#10AEFF;" />
-          <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#7ECBF0; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
-        </div>`;
-      });
-    }
+    if (cat.category === '角色技能干扰概率') interfereItemsAdv.push(...cat.items);
   });
-  html += `</div>`;
+  if (interfereItemsAdv.length > 0) {
+    html += `<div style="background:rgba(0,0,0,0.03); border:1px solid rgba(16,174,255,0.2); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <h3 style="color:#4FC3F7; margin-bottom:12px; font-size:1.05em; border-bottom:1px solid rgba(16,174,255,0.2); padding-bottom:6px;">🎯 角色技能干扰概率</h3>`;
+    interfereItemsAdv.forEach(item => {
+      const val = _getCfgVal(config, item.key);
+      const v = (val !== undefined) ? val : item.default;
+      html += `<div style="display:flex; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
+        <label style="color:#333333; min-width:200px; flex:1; font-size:12px;">${item.label}</label>
+        <input type="range" data-pkey="${item.key}" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+          oninput="onProbSliderInput(this)" onchange="onProbChanged(this)"
+          style="flex:2; min-width:150px; accent-color:#10AEFF;" />
+        <span class="prob-val-label" data-pkey-label="${item.key}" style="color:#7ECBF0; font-weight:bold; min-width:50px; text-align:right; font-size:12px;">${Math.round(v * 100)}%</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
 
   // BMR 专属：修补匠/和平主义者概率（平衡系统自动处理）
   if ((currentState && currentState.script === 'bmr')) {

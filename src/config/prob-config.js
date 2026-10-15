@@ -15,17 +15,16 @@ const TB_FIXED_PROB = {
 };
 
 // ==================== BMR（黯月初升）专属固定概率 ====================
-const BMR_FIXED_PROB = {
-  // 注：修补匠夜晚死亡概率、和平主义者拯救概率已改由平衡系统自动控制，不再在此配置
-  // 注：疯子/莽夫获得假恶魔身份为角色固有机制，不应作为可调概率，已移除
-  // 造谣者：bot发表声明时，声明为真（导致死亡）的概率
-  gossip_true_statement: 0.4,
-};
+// 注：修补匠夜晚死亡概率、和平主义者拯救概率已改由平衡系统自动控制，不再在此配置
+// 注：疯子/莽夫获得假恶魔身份为角色固有机制，不应作为可调概率，已移除
+// 注：造谣者声明真伪由 AI 裁判判定（server.js judgeGossipByAI），且 Bot 不会主动发表声明，
+//     原 gossip_true_statement 配置无任何读取点，已移除
+const BMR_FIXED_PROB = {};
 
 // ==================== Bot 行为（通用） ====================
 const BOT_PROB = {
-  bot_nominate: 0.30,
-  bot_evil_vote_yes: 0.7,
+  bot_nominate: 0,
+  bot_evil_vote_yes: 0.5,
   bot_good_vote_yes: 0.5,
 };
 
@@ -85,13 +84,6 @@ const PROB_CONFIG_META = [
     ]
   },
   {
-    category: '角色技能干扰概率',
-    script: 'bmr',
-    items: [
-      { key: 'gossip_true_statement', label: '造谣者Bot声明为真（导致死亡）', min: 0, max: 1, step: 0.05, default: 0.4 },
-    ]
-  },
-  {
     category: '酒鬼 / 中毒信息',
     note: '假信息的内容方向由平衡系统自动决定：好人弱势时假信息指向邪恶/恶魔（帮好人调查），邪恶弱势时假信息指向善良/无恶魔（误导好人），无需单独配置概率。',
     items: []
@@ -99,8 +91,8 @@ const PROB_CONFIG_META = [
   {
     category: 'Bot 行为',
     items: [
-      { key: 'bot_nominate', label: 'Bot发起提名概率', min: 0, max: 1, step: 0.05, default: 0.30 },
-      { key: 'bot_evil_vote_yes', label: '邪恶Bot投赞成票概率', min: 0, max: 1, step: 0.05, default: 0.7 },
+      { key: 'bot_nominate', label: 'Bot发起提名概率', min: 0, max: 1, step: 0.05, default: 0 },
+      { key: 'bot_evil_vote_yes', label: '邪恶Bot投赞成票概率', min: 0, max: 1, step: 0.05, default: 0.5 },
       { key: 'bot_good_vote_yes', label: '善良Bot投赞成票概率', min: 0, max: 1, step: 0.05, default: 0.5 },
     ]
   },

@@ -130,7 +130,8 @@ class Drunk extends Role {
         result: helpGood,
         description: '酒鬼占卜师假信息方向'
       };
-      fakeMsg = helpGood ? '你选择的玩家中有恶魔' : '你选择的玩家中没有恶魔';
+      // 信息栏中要能看出这次占卜的是哪两名玩家
+      fakeMsg = `${targetNames}中，${helpGood ? '有恶魔' : '没有恶魔'}`;
     } else if (fake.id === 'monk' && targets.length === 1) {
       fakeMsg = `你守护了 ${targetNames || '某玩家'}`;
     } else {
