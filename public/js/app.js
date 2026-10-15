@@ -16,6 +16,7 @@ let isGodView = false;
 let godState = null;
 let isReconnecting = false;
 let reconnectAttempts = 0;
+let pendingManualJoin = false; // 是否由用户手动点击“加入房间”触发
 let hasLeftRoom = false;
 let _nightDebugClicks = 0;
 let _nightDebugTimer = null;
@@ -108,7 +109,6 @@ function tryAutoReconnect() {
           doReconnect();
         } else {
           isReconnecting = true;
-          showToast('正在尝试重新连接...');
         }
       }
     }
@@ -149,7 +149,7 @@ function initSocketEvents() {
     console.log('与服务器断开连接');
     updateConnStatus('disconnected');
     if (myRoomId && myName) {
-      showToast('与服务器断开，正在尝试重新连接...');
+      // 断线状态已在顶部胶囊上体现，不再弹提示
       isReconnecting = true;
     }
   });
@@ -181,6 +181,7 @@ function initSocketEvents() {
     hasLeftRoom = false;
     myId = playerId;
     myRoomId = roomId;
+    pendingManualJoin = false;
     clearReconnectInfo();
     saveSession();
     showGameView();
@@ -192,10 +193,11 @@ function initSocketEvents() {
     myId = playerId;
     myRoomId = roomId;
     isReconnecting = false;
+    pendingManualJoin = false;
     clearReconnectInfo();
     saveSession();
     showGameView();
-    showToast('重新连接成功！', 'success');
+    // 重连成功只写入会话记录，不再弹提示
     addSystemChatMessage(`已重新连接到房间 ${roomId}`);
     // 关闭可能打开的断线遮罩
     const overlay = $('disconnectOverlay');
@@ -247,9 +249,16 @@ function initSocketEvents() {
 
   socket.on('room:error', ({ message }) => {
     if (hasLeftRoom) return;
-    showToast(message);
+    const roomMissing = message.includes('房间不存在');
+    if (roomMissing) {
+      // 「房间不存在」不再弹提示：仅手动加入时写进表单错误位，重连失败时静默
+      if (pendingManualJoin) showError(message, 'joinError');
+      pendingManualJoin = false;
+    } else {
+      showToast(message);
+    }
     // 重连失败时清除失效的重连信息
-    if (message.includes('房间不存在') || message.includes('游戏已开始')) {
+    if (roomMissing || message.includes('游戏已开始')) {
       const card = $('reconnectCard');
       if (card && card.style.display !== 'none') {
         clearReconnectInfo();
@@ -569,29 +578,35 @@ function onResizeEnd() {
   _resizerState.active = null;
 }
 
-// ========== 连接状态（未加入房间时显示在页面顶部居中） ==========
+// ========== 连接状态（显示在房间号左侧） ==========
 function updateConnStatus(status) {
+  const wrap = $('topConn');
   const dot = $('connStatusDotTop');
   const text = $('connStatusTextTop');
   if (!dot || !text) return;
 
+  if (wrap) {
+    wrap.classList.remove('is-connected', 'is-disconnected', 'is-connecting');
+    wrap.classList.add(
+      status === 'connected' ? 'is-connected'
+        : status === 'disconnected' ? 'is-disconnected'
+        : 'is-connecting'
+    );
+  }
   dot.className = 'conn-dot';
   switch (status) {
     case 'connected':
       dot.classList.add('conn-connected');
       text.textContent = '已连接';
-      text.style.color = '#07C160';
       break;
     case 'disconnected':
       dot.classList.add('conn-disconnected');
       text.textContent = '已断开';
-      text.style.color = '#FA5151';
       break;
     case 'connecting':
     default:
       dot.classList.add('conn-connecting');
       text.textContent = '连接中...';
-      text.style.color = '#FF9500';
       break;
   }
 }
@@ -612,9 +627,6 @@ function showGameView() {
   if (memberPanel) memberPanel.style.display = 'flex';
   memberPanelCollapsed = false;
   applyMemberPanelCollapsed();
-  // 已加入房间：隐藏顶部连接状态
-  const topConn = $('topConn');
-  if (topConn) topConn.style.display = 'none';
   const gameView = $('gameView');
   if (gameView) {
     gameView.classList.add('with-member');
@@ -724,9 +736,9 @@ function backToHome() {
   const headerActionsEl = $('headerActions');
   if (headerActionsEl) headerActionsEl.style.display = 'none';
 
-  // 回到首页：重新显示顶部连接状态
+  // 回到首页：连接状态恢复为默认展示
   const topConnEl = $('topConn');
-  if (topConnEl) topConnEl.style.display = 'flex';
+  if (topConnEl) topConnEl.style.display = '';
 
   checkReconnectInfo();
 
@@ -922,6 +934,7 @@ function joinRoom() {
 function doJoinRoom(roomId, name) {
   abandonReconnect();
   hasLeftRoom = false;
+  pendingManualJoin = true;
   myName = name;
   socket.emit('room:join', { roomId, playerName: name });
 }
@@ -1033,12 +1046,15 @@ function updateHeader(state) {
   const compPlayers = state.players ? state.players.length : 0;
   compEl.innerHTML = compHTML ? `<span class="comp-players">${compPlayers}人</span>${compHTML}` : '';
   
-  let dayText = '';
+  let dayTextHTML = '';
   let phaseText = '';
   let phaseClass = 'phase-lobby';
 
   if (state.dayCount > 0 || state.nightCount > 0) {
-    dayText = `第${state.dayCount}天 / 第${state.nightCount}夜`;
+    dayTextHTML =
+      `<span class="dc-day">第${state.dayCount}天</span>` +
+      `<span class="dc-sep">/</span>` +
+      `<span class="dc-night">第${state.nightCount}夜</span>`;
   }
 
   switch(state.phase) {
@@ -1054,12 +1070,13 @@ function updateHeader(state) {
     case 'GAME_OVER': phaseText = '游戏结束'; phaseClass = 'phase-over'; break;
   }
 
-  $('headerDayCount').textContent = dayText;
+  $('headerDayCount').innerHTML = dayTextHTML;
   const phaseBadge = $('headerPhase');
   phaseBadge.textContent = phaseText;
   phaseBadge.className = 'phase-badge ' + phaseClass;
   // 大厅阶段不显示阶段徽章；顶部中间改为展示当前会话对象
-  phaseBadge.style.display = (!state.gameStarted || state.phase === 'LOBBY') ? 'none' : 'inline-block';
+  // 用 inline-flex 与头部胶囊样式一致，保证文字水平+垂直居中
+  phaseBadge.style.display = (!state.gameStarted || state.phase === 'LOBBY' || !phaseText) ? 'none' : 'inline-flex';
   updateHeaderChatTarget();
 }
 
@@ -1067,20 +1084,29 @@ function updateHeader(state) {
 function updateHeaderChatTarget() {
   const el = $('headerChatTarget');
   if (!el) return;
-  let text = '';
+  let label = '';
+  let value = '';
   if (currentChatChannel === 'whisper') {
     const target = (currentState && currentState.players)
       ? currentState.players.find(p => p.id === whisperTargetId) : null;
-    text = target
+    label = '私聊';
+    value = target
       ? `${target.seat >= 0 ? (target.seat + 1) + '号 ' : ''}${target.name}`
-      : '私聊';
+      : '未选择';
   } else if (currentChatChannel === 'dead') {
-    text = '死者频道';
+    value = '死者频道';
   } else {
     const roomId = (currentState && currentState.roomId) || myRoomId || '';
-    text = roomId ? `房间 ${roomId}` : '游戏房间';
+    if (roomId) {
+      label = '房间';
+      value = roomId;
+    } else {
+      value = '游戏房间';
+    }
   }
-  el.textContent = text;
+  el.innerHTML = label
+    ? `<span class="ct-label">${escapeHtml(label)}</span><span class="ct-value">${escapeHtml(value)}</span>`
+    : `<span class="ct-value">${escapeHtml(value)}</span>`;
 }
 
 // 有聊天对象（已进入房间 / 已选择私聊对象）时才显示底部输入框
@@ -1265,23 +1291,48 @@ function renderCenter(state) {
     showAction = true;
     $('actionTitle').textContent = '操作';
 
-    let buttons = '';
+    // 大厅操作按钮：两个一行
+    // 第一行 添加机器人 / 准备，第二行 自定义角色 / 开始游戏
+    const lobbyButtons = [];
+    if (isHost) {
+      lobbyButtons.push({ cls: 'btn-warning', label: '+ 添加机器人', action: 'addBot()' });
+    }
     if (me && me.seat !== -1) {
-      buttons += `<button class="btn btn-sm ${me.isReady ? 'btn-secondary' : 'btn-success'}" onclick="toggleReady()">${me.isReady ? '取消准备' : '准备'}</button>`;
+      lobbyButtons.push({
+        cls: me.isReady ? 'btn-secondary' : 'btn-success',
+        label: me.isReady ? '取消准备' : '准备',
+        action: 'toggleReady()',
+      });
     }
     if (isHost) {
-      buttons += `<button class="btn btn-sm btn-warning" onclick="addBot()">+ 添加机器人</button>`;
       const customCount = Object.values(customRoleMap).filter(r => r).length;
-      const customLabel = customRoleMode ? `🎭 自定义角色(${customCount})` : '🎭 自定义角色';
-      const customClass = customRoleMode ? 'btn-info' : 'btn-secondary';
-      buttons += `<button class="btn btn-sm ${customClass}" onclick="openCustomRolePanel()">${customLabel}</button>`;
+      lobbyButtons.push({
+        cls: customRoleMode ? 'btn-info' : 'btn-secondary',
+        label: customRoleMode ? `🎭 自定义角色(${customCount})` : '🎭 自定义角色',
+        action: 'openCustomRolePanel()',
+      });
       const allReady = (state.players || []).filter(p => p.seat !== -1).every(p => p.isReady);
-      const canStart = seatedCount >= 5 && allReady;
-      buttons += `<button class="btn btn-sm btn-primary" ${canStart ? '' : 'disabled'} onclick="startGame()">开始游戏</button>`;
+      lobbyButtons.push({
+        cls: 'btn-primary',
+        label: '开始游戏',
+        action: 'startGame()',
+        disabled: seatedCount < 5 || !allReady,
+      });
     }
 
     $('selectedTargets').innerHTML = '';
-    $('actionButtons').innerHTML = buttons;
+    if (!lobbyButtons.length) {
+      $('actionButtons').innerHTML = '';
+    } else {
+      // 数量为单数时，最后一个按钮占满整行，避免右侧留空
+      const lastIdx = lobbyButtons.length - 1;
+      const buttonsHtml = lobbyButtons.map((b, i) => {
+        const span = (lobbyButtons.length % 2 === 1 && i === lastIdx) ? ' span-2' : '';
+        const dis = b.disabled ? ' disabled' : '';
+        return `<button class="btn btn-sm ${b.cls}${span}" onclick="${b.action}"${dis}>${b.label}</button>`;
+      }).join('');
+      $('actionButtons').innerHTML = `<div class="lobby-action-grid">${buttonsHtml}</div>`;
+    }
   } else {
     switch(state.phase) {
       case 'FIRST_NIGHT': case 'NIGHT':

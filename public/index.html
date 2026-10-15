@@ -42,18 +42,20 @@
 
     <!-- 头部信息 -->
     <div class="game-header">
-      <!-- 未加入房间时的连接状态：页面顶部居中 -->
-      <div class="top-conn" id="topConn">
-        <span class="conn-dot conn-connecting" id="connStatusDotTop"></span>
-        <span class="top-conn-text" id="connStatusTextTop">连接中...</span>
-      </div>
       <div class="room-info">
         <span class="room-comp" id="headerRoomComp"></span>
       </div>
+      <!-- 连接状态：紧邻房间号左侧 -->
+      <span class="top-conn" id="topConn">
+        <span class="conn-dot conn-connecting" id="connStatusDotTop"></span>
+        <span class="top-conn-text" id="connStatusTextTop">连接中...</span>
+      </span>
       <div class="header-center">
         <span class="chat-target" id="headerChatTarget"></span>
-        <span class="day-count" id="headerDayCount"></span>
-        <span class="phase-badge" id="headerPhase"></span>
+        <span class="header-status">
+          <span class="day-count" id="headerDayCount"></span>
+          <span class="phase-badge" id="headerPhase"></span>
+        </span>
       </div>
       <div class="header-right" id="headerActions" style="display:none;">
         <button class="btn btn-sm btn-secondary" id="godBtn" onclick="toggleGodView()" style="background: rgba(155,89,182,0.1); border: 1px solid rgba(155,89,182,0.4); color: #8E44AD;">👁 上帝视角</button>
