@@ -121,15 +121,18 @@
       <!-- 系统状态 / 我的身份（固定高度，内部滚动；未加入房间时不显示） -->
       <div class="center-message" id="centerMessage" style="display:none;"></div>
       <div class="chat-messages" id="chatMessages"></div>
+      <!-- 弹幕层（输入框 @弹幕 触发，覆盖在聊天消息之上滚动） -->
+      <div class="danmaku-layer" id="danmakuLayer"></div>
       <!-- 待发送图片预览（粘贴后先预览，点击发送才发出） -->
       <div class="chat-image-preview" id="chatImagePreview" style="display:none;">
         <img id="chatImagePreviewImg" alt="待发送图片">
         <button class="chat-image-remove" onclick="clearPendingChatImage()" title="移除图片">✕</button>
       </div>
       <div class="chat-input-area" id="chatInputArea">
-        <button class="btn btn-sm ai-trigger-btn" onclick="insertAiTrigger()" title="@小染 AI助手">🤖</button>
+        <!-- @ 功能选择面板：输入框中打出 @ 时弹出，供选择可用功能 -->
+        <div class="at-suggest" id="atSuggest" style="display:none;"></div>
         <button class="btn btn-sm ai-trigger-btn announce-trigger-btn" style="display:none;" onclick="openAnnouncePanel()" title="公开公告（可用于伪装身份）">📢</button>
-        <input type="text" id="chatInput" placeholder="输入消息…可粘贴图片发送" maxlength="500" onkeydown="if(event.key==='Enter')sendChat()" onpaste="handleChatPaste(event)">
+        <input type="text" id="chatInput" placeholder="输入消息…输入 @ 查看可用功能" maxlength="500" onkeydown="handleChatInputKeydown(event)" oninput="updateAtSuggest()" onblur="scheduleCloseAtSuggest()" onpaste="handleChatPaste(event)">
         <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
       </div>
     </div>

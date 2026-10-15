@@ -5,7 +5,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
-const { SCRIPTS } = require('./src/config/game-config');
+const { SCRIPTS, PHASES } = require('./src/config/game-config');
 
 // 智谱 GLM API Key：从环境变量读取，切勿硬编码提交到仓库
 const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || '';
@@ -1259,6 +1259,34 @@ ${playerInfo}
     delete target.image;
 
     io.to(roomId).emit('chat:recall', { id: target.id });
+  });
+
+  // 弹幕：输入框「@弹幕 内容」触发，匿名广播给房间内所有玩家
+  // 仅作即时视觉提示，不写入 chatLog，因此不影响聊天记录、会话列表预览与未读数
+  socket.on('chat:danmaku', ({ text } = {}) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) return;
+    const { roomId, room } = result;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    const content = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!content) return;
+
+    // 夜晚禁言：与公聊规则一致（死者不受限制）
+    const gs = room.gameState;
+    if (gs && !player.isDead &&
+        (gs.phase === PHASES.FIRST_NIGHT || gs.phase === PHASES.NIGHT || gs.phase === PHASES.NIGHT_WAKE)) {
+      socket.emit('room:error', { message: '夜晚期间禁止发送弹幕' });
+      return;
+    }
+
+    // 匿名弹幕：不下发发送者身份，客户端无法还原是谁发的
+    io.to(roomId).emit('chat:danmaku', {
+      id: Date.now() + Math.random(),
+      text: content,
+      timestamp: Date.now()
+    });
   });
 
   // ========== AI 小助手 ==========

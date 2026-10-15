@@ -347,6 +347,12 @@ function initSocketEvents() {
     renderSessionList();
   });
 
+  // 弹幕（输入框 @弹幕 触发，广播给房间内所有玩家，不写入聊天记录）
+  socket.on('chat:danmaku', (data) => {
+    if (hasLeftRoom) return;
+    showDanmaku(data);
+  });
+
   // AI 小助手事件
   socket.on('ai:start', ({ id, playerName }) => {
     isAiThinking = true;
@@ -1116,12 +1122,12 @@ function updateChatInputVisibility() {
   if (!area) return;
   const inRoom = !!myRoomId;
   const hasTarget = currentChatChannel === 'whisper' ? !!whisperTargetId : true;
-  area.style.display = (inRoom && hasTarget) ? 'flex' : 'none';
-  // 🤖 小染按钮：仅主房间（公聊）可用
-  const aiBtn = area.querySelector('.ai-trigger-btn:not(.announce-trigger-btn)');
-  if (aiBtn) aiBtn.style.display = currentChatChannel === 'public' ? '' : 'none';
-  // 📢 公开公告按钮：同样仅主房间（公聊）可用，并受当前剧本限制
+  const visible = inRoom && hasTarget;
+  area.style.display = visible ? 'flex' : 'none';
+  // 📢 公开公告按钮：仅主房间（公聊）可用，并受当前剧本限制
   updateAnnounceButtonVisibility();
+  // 输入区不可用、或切到非公聊会话时收起 @ 功能面板
+  if (!visible || currentChatChannel !== 'public') closeAtSuggest();
 }
 
 function renderSeats(state) {
@@ -2548,7 +2554,7 @@ function selectSession(channel, pid) {
     currentChatChannel = channel;
     whisperTargetId = null;
     clearUnreadForChannel(channel);
-    if (input) input.placeholder = channel === 'dead' ? '死者频道（仅死者可见）...' : '输入消息... @小染 可问AI';
+    if (input) input.placeholder = channel === 'dead' ? '死者频道（仅死者可见）...' : '输入消息... @小染 问AI、@弹幕 发弹幕';
   } else {
     currentChatChannel = 'public';
     whisperTargetId = null;
@@ -2631,6 +2637,24 @@ function sendChat() {
       channel: 'public'
     });
 
+    input.value = '';
+    return;
+  }
+
+  // 检测弹幕触发：@弹幕 <内容>（仅主房间公聊可用，弹幕不写入聊天记录）
+  const danmakuMatch = content.match(/^@弹幕[\s\u3000]+(.+)/);
+  if (danmakuMatch && !pendingChatImage) {
+    if (currentChatChannel !== 'public') {
+      showToast('只有主房间内才能发送弹幕');
+      return;
+    }
+    const danmakuText = danmakuMatch[1].trim();
+    if (!danmakuText) return;
+    if (danmakuText.length > 60) {
+      showToast('弹幕最多 60 个字');
+      return;
+    }
+    socket.emit('chat:danmaku', { text: danmakuText });
     input.value = '';
     return;
   }
@@ -2792,22 +2816,100 @@ function openChatImage(el) {
   mask.style.display = 'flex';
 }
 
-// 插入 @小染 触发前缀（仅主房间可用）
-function insertAiTrigger() {
-  if (currentChatChannel !== 'public') {
-    showToast('只有主房间内才能呼叫小染 AI');
-    return;
-  }
+// ========== 输入框 @ 功能选择 ==========
+// 在输入框中打出 @ 时弹出面板列出可用功能，支持点击选择与 ↑↓ + 回车选择
+const AT_SUGGEST_ITEMS = [
+  { key: '@小染', icon: '🤖', desc: '向小染 AI 提问' },
+  { key: '@弹幕', icon: '💬', desc: '发送匿名弹幕' }
+];
+let _atSuggestItems = [];   // 当前展示的候选项
+let _atSuggestIndex = 0;    // 高亮项下标
+
+function updateAtSuggest() {
   const input = $('chatInput');
-  const current = input.value.trim();
-  if (current.startsWith('@小染') || current.startsWith('@AI') || current.startsWith('@ai')) {
-    input.focus();
-    return;
-  }
-  input.value = '@小染 ' + current;
+  const panel = $('atSuggest');
+  if (!input || !panel) return;
+
+  // 仅主房间（公聊）提供 @ 功能
+  if (currentChatChannel !== 'public') { closeAtSuggest(); return; }
+
+  const pos = input.selectionStart;
+  if (pos === null || pos === undefined) { closeAtSuggest(); return; }
+
+  // 匹配光标前最后一个「@片段」：@ 后不含空格，否则视为已开始输入正文，不再提示
+  const before = input.value.slice(0, pos);
+  const m = before.match(/@([^\s@]*)$/);
+  if (!m) { closeAtSuggest(); return; }
+
+  const query = m[1];
+  const items = AT_SUGGEST_ITEMS.filter(it => it.key.slice(1).startsWith(query));
+  if (items.length === 0) { closeAtSuggest(); return; }
+
+  _atSuggestItems = items;
+  _atSuggestIndex = 0;
+
+  panel.innerHTML = items.map((it, i) => `
+    <div class="at-suggest-item${i === 0 ? ' active' : ''}" data-at-index="${i}"
+      onmousedown="event.preventDefault()" onclick="applyAtSuggest(${i})">
+      <span class="at-suggest-icon">${it.icon}</span>
+      <span class="at-suggest-label">${escapeHtml(it.key)}</span>
+      <span class="at-suggest-desc">${escapeHtml(it.desc)}</span>
+    </div>`).join('');
+  panel.style.display = 'block';
+}
+
+function closeAtSuggest() {
+  const panel = $('atSuggest');
+  if (panel) panel.style.display = 'none';
+  _atSuggestItems = [];
+  _atSuggestIndex = 0;
+}
+
+// 失焦后延迟收起，保证面板项的点击先被处理
+function scheduleCloseAtSuggest() {
+  setTimeout(closeAtSuggest, 150);
+}
+
+function moveAtSuggest(step) {
+  if (_atSuggestItems.length === 0) return;
+  _atSuggestIndex = (_atSuggestIndex + step + _atSuggestItems.length) % _atSuggestItems.length;
+  const panel = $('atSuggest');
+  if (!panel) return;
+  panel.querySelectorAll('.at-suggest-item').forEach((el, i) => {
+    el.classList.toggle('active', i === _atSuggestIndex);
+  });
+}
+
+function applyAtSuggest(index) {
+  const input = $('chatInput');
+  const item = _atSuggestItems[index === undefined ? _atSuggestIndex : index];
+  if (!input || !item) return;
+
+  const pos = input.selectionStart;
+  const before = input.value.slice(0, pos);
+  const m = before.match(/@([^\s@]*)$/);
+  if (!m) { closeAtSuggest(); return; }
+
+  // 用完整功能名替换已输入的 @片段，并补一个空格便于继续输入内容
+  const head = before.slice(0, before.length - m[0].length);
+  input.value = head + item.key + ' ' + input.value.slice(pos);
+  const caret = head.length + item.key.length + 1;
   input.focus();
-  // 光标移到末尾
-  input.setSelectionRange(input.value.length, input.value.length);
+  input.setSelectionRange(caret, caret);
+  closeAtSuggest();
+}
+
+// 输入框键盘事件：@ 面板打开时接管方向键 / 回车 / Esc，否则回车发送
+function handleChatInputKeydown(e) {
+  const panel = $('atSuggest');
+  const open = panel && panel.style.display !== 'none' && _atSuggestItems.length > 0;
+  if (open) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveAtSuggest(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); moveAtSuggest(-1); return; }
+    if (e.key === 'Enter') { e.preventDefault(); applyAtSuggest(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); closeAtSuggest(); return; }
+  }
+  if (e.key === 'Enter') sendChat();
 }
 
 // 系统消息 / 房间动态（统一显示在中央聊天框）
@@ -2877,6 +2979,53 @@ function addChatMessage(msg) {
   if (msg.channel === 'whisper') {
     renderWhisperPlayerList();
   }
+}
+
+// ========== 弹幕 ==========
+// 输入框以「@弹幕 内容」发送，匿名广播给房间内所有玩家，在聊天区从右向左滚动。
+// 弹幕只是即时视觉提示：不进入 chatMessages，因此不影响会话列表预览与未读计数。
+const DANMAKU_TRACK_COUNT = 7;   // 轨道数（纵向均分，避免弹幕相互重叠）
+const DANMAKU_SPEED = 110;       // 滚动速度（px/秒）
+let _danmakuTrackAt = [];        // 各轨道最近使用时间，用于挑选空闲轨道
+
+function showDanmaku(d) {
+  if (!d || !d.text) return;
+  // 仅主房间（公聊）会话展示弹幕
+  if (currentChatChannel !== 'public') return;
+  const layer = $('danmakuLayer');
+  if (!layer) return;
+
+  const el = document.createElement('div');
+  el.className = 'danmaku-item';
+  // 匿名弹幕：只展示内容本身，不暴露发送者；textContent 天然防注入
+  el.textContent = d.text;
+
+  // 挑选最久未使用的轨道，尽量错开同屏弹幕
+  const layerH = layer.clientHeight || 0;
+  const trackH = Math.max(26, Math.round((layerH * 0.75) / DANMAKU_TRACK_COUNT));
+  let track = 0;
+  let oldest = Infinity;
+  for (let i = 0; i < DANMAKU_TRACK_COUNT; i++) {
+    const at = _danmakuTrackAt[i] || 0;
+    if (at < oldest) { oldest = at; track = i; }
+  }
+  _danmakuTrackAt[track] = Date.now();
+  el.style.top = `${6 + track * trackH}px`;
+
+  layer.appendChild(el);
+
+  // 滚动距离 = 容器宽度 + 自身宽度；速度恒定，长弹幕自动延长滚动时间
+  const layerW = layer.clientWidth || 0;
+  const elW = el.offsetWidth || 0;
+  const distance = layerW + elW + 24;
+  const duration = Math.max(5, Math.min(16, distance / DANMAKU_SPEED));
+  el.style.setProperty('--danmaku-distance', `${distance}px`);
+  el.style.animationDuration = `${duration}s`;
+
+  const remove = () => el.remove();
+  el.addEventListener('animationend', remove);
+  // 兜底清理：动画被中断时也不会残留节点
+  setTimeout(remove, Math.round((duration + 1) * 1000));
 }
 
 // 格式化聊天时间（HH:MM）
