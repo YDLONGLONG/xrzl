@@ -501,10 +501,25 @@ class Slayer extends Role {
     player.hasUsedDayAbility = true;
     
     if (!player.isPoisoned && target.role.category === 'DEMON') {
-      engine.deathManager.killPlayer(targetId, 'SLAYER', gameState.nightCount, gameState.dayCount);
+      const killResult = engine.deathManager.killPlayer(targetId, 'SLAYER', gameState.nightCount, gameState.dayCount);
       engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（杀手）击杀了 ${target.seat+1}号 ${target.name}，对方是恶魔！`, {
         playerId: player.id, targetId, killed: true
       });
+      // 恶魔确实被公开击杀（未被免死效果阻止），且击杀后场上不再有存活恶魔
+      // （未被红唇女郎等立即顶替）时，记录击杀上下文，
+      // 供 VictoryChecker 在游戏结束且善良获胜时标记专属胜利动画。
+      // 该上下文仅当日内有效（入夜时清除）。
+      const demonStillAlive = Array.from(engine.room.players.values()).some(p =>
+        p.seat !== -1 && p.isAlive && p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon
+      );
+      if (killResult && !killResult.prevented && !demonStillAlive) {
+        gameState.slayerDemonKill = {
+          slayerId: player.id,
+          demonId: targetId,
+          night: gameState.nightCount,
+          day: gameState.dayCount
+        };
+      }
       return { success: true, message: `你击杀了恶魔！`, killed: true };
     }
     

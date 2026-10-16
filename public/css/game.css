@@ -2177,6 +2177,120 @@ body.resizing-active * {
   opacity: 0.9;
 }
 
+/* ---------- 专属胜利特效（如恶魔被杀手公开击杀） ---------- */
+.victory-effect {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 200; /* 需高于 gameOverPanel(150)，胜利动画覆盖在结算界面之上 */
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  overflow: hidden;
+  cursor: pointer;
+  background: radial-gradient(ellipse at center, rgba(66, 10, 14, 0.93) 0%, rgba(9, 6, 8, 0.97) 100%);
+}
+.victory-effect.active {
+  display: flex;
+  animation: victoryEffectFadeIn 0.35s ease-out;
+}
+.victory-effect.hiding {
+  animation: victoryEffectFadeOut 0.45s ease-in forwards;
+}
+.victory-effect-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, rgba(255, 236, 236, 0.85) 0%, rgba(255, 236, 236, 0) 62%);
+  animation: victoryEffectFlash 0.65s ease-out both;
+}
+.victory-effect-text {
+  position: relative;
+  z-index: 2;
+  padding: 0 24px;
+  text-align: center;
+  font-size: clamp(1.6em, 5.2vw, 3em);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #FFF4F4;
+  text-shadow: 0 0 12px rgba(250, 81, 81, 0.9), 0 0 34px rgba(250, 81, 81, 0.55);
+  animation: victoryEffectTextIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* 文字下方一道「刀光」强调线 */
+.victory-effect-text::after {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: -0.4em;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(250, 81, 81, 0) 0%, #FA5151 50%, rgba(250, 81, 81, 0) 100%);
+  transform-origin: center;
+  animation: victoryEffectSlash 0.7s ease-out 0.28s both;
+}
+.victory-effect-hint {
+  position: absolute;
+  bottom: 8vh;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+/* 阵营配色：EVIL 红（默认）/ GOOD 绿，由 playVictoryEffect 按胜方切换 class */
+.victory-effect.evil {
+  background: radial-gradient(ellipse at center, rgba(66, 10, 14, 0.93) 0%, rgba(9, 6, 8, 0.97) 100%);
+}
+.victory-effect.evil .victory-effect-text {
+  text-shadow: 0 0 12px rgba(250, 81, 81, 0.9), 0 0 34px rgba(250, 81, 81, 0.55);
+}
+.victory-effect.evil .victory-effect-text::after {
+  background: linear-gradient(90deg, rgba(250, 81, 81, 0) 0%, #FA5151 50%, rgba(250, 81, 81, 0) 100%);
+}
+.victory-effect.evil .victory-effect-flash {
+  background: radial-gradient(circle at center, rgba(255, 236, 236, 0.85) 0%, rgba(255, 236, 236, 0) 62%);
+}
+
+.victory-effect.good {
+  background: radial-gradient(ellipse at center, rgba(8, 52, 32, 0.93) 0%, rgba(5, 13, 9, 0.97) 100%);
+}
+.victory-effect.good .victory-effect-text {
+  text-shadow: 0 0 12px rgba(7, 193, 96, 0.9), 0 0 34px rgba(7, 193, 96, 0.55);
+}
+.victory-effect.good .victory-effect-text::after {
+  background: linear-gradient(90deg, rgba(7, 193, 96, 0) 0%, #07C160 50%, rgba(7, 193, 96, 0) 100%);
+}
+.victory-effect.good .victory-effect-flash {
+  background: radial-gradient(circle at center, rgba(238, 255, 245, 0.85) 0%, rgba(238, 255, 245, 0) 62%);
+}
+@keyframes victoryEffectFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes victoryEffectFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes victoryEffectFlash {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes victoryEffectTextIn {
+  0% { opacity: 0; transform: scale(1.65) translateY(12px); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes victoryEffectSlash {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .victory-effect.active,
+  .victory-effect-text,
+  .victory-effect-text::after,
+  .victory-effect-flash {
+    animation: none;
+  }
+}
+
 /* 投票界面 */
 .vote-panel {
   text-align: center;

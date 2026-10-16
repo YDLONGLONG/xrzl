@@ -218,6 +218,8 @@ class DeathManager {
       const allocator = new RoleAllocator(this.engine);
       const newDemonId = shuffle(sc.demonRoles)[0];
       sw.role = allocator.createRoleInstance(newDemonId);
+      // 恶魔位置已由新恶魔顶替（游戏继续）：清除「杀手公开击杀恶魔」的胜利特效上下文
+      gs.slayerDemonKill = null;
       this.engine.setPlayerPrivateInfo(sw, {
         type: 'scarletwoman',
         message: `恶魔已死，你成为了新的${sw.role.name}！`

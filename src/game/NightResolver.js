@@ -24,6 +24,7 @@ class NightResolver {
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
     gs.goonTriggeredThisNight = false;
+    gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);
@@ -49,6 +50,7 @@ class NightResolver {
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
     gs.goonTriggeredThisNight = false;
+    gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);

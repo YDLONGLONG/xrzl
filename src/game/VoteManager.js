@@ -355,7 +355,13 @@ class VoteManager {
           return;
         }
 
-        gs.todaysDeaths.push({ playerId: toExecute.id, cause: 'EXECUTION' });
+        // 记录提名者的角色名：圣徒被处决的结束动画需要用到（「我名xx，请求你的原谅」）
+        const executorNominator = this.engine.room.players.get(tied[0].nominatorId);
+        gs.todaysDeaths.push({
+          playerId: toExecute.id,
+          cause: 'EXECUTION',
+          nominatorRoleName: (executorNominator && executorNominator.role) ? executorNominator.role.name : null
+        });
 
         // 吟游诗人：爪牙被处决则除自己外的所有玩家醉酒
         if (toExecute.role && toExecute.role.category === 'MINION') {

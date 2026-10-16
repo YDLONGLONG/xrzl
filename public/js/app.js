@@ -278,6 +278,7 @@ function initSocketEvents() {
   socket.on('game:over', (data) => {
     if (hasLeftRoom) return;
     showGameOver(data);
+    playVictoryEffect(data.winEffect);
   });
 
   socket.on('night:wake', (data) => {
@@ -1262,6 +1263,8 @@ function toggleCenterMessage() {
 function renderCenter(state) {
   const actionPanel = $('actionPanel');
   const confirmBar = $('confirmBar');
+  // 非结束阶段：重置胜利特效去重标记，便于下一局重新播放
+  if (state.phase !== 'GAME_OVER') shownVictoryEffect = null;
   // 公开公告按钮随当前剧本动态显隐
   updateAnnounceButtonVisibility();
   
@@ -1520,6 +1523,7 @@ function renderCenter(state) {
         $('selectedTargets').innerHTML = '';
         $('actionButtons').innerHTML = `<button class="btn btn-primary btn-sm" onclick="backToHome()">返回大厅</button>`;
         if (state.allRoles) showGameOverRoles(state.allRoles);
+        playVictoryEffect(state.winEffect);
         break;
     }
 
@@ -3176,6 +3180,71 @@ function updateWhisperTargets(players) {
 // ========== 游戏结束 ==========
 function showGameOver(data) {
   // 由renderCenter处理
+}
+
+// ========== 专属胜利特效 ==========
+// 配色随胜方（后端 winEffect.winner）：GOOD 绿色，EVIL 红色。
+// 文案注册表：type → { message }，文案可用 {占位符}，由后端 winEffect.params 填充。
+// 新增一种结束动画的步骤：
+//   1) 后端在对应结局的 endGame(winner, reason, effectType, effectParams) 处传入新的 type；
+//   2) 在此登记该 type 的文案（不登记则回退到本局 winReason）。
+// 已登记：
+//   slayer_demon_kill  恶魔被杀手公开击杀（后端自动推导，见 VictoryChecker.resolveWinEffect）
+//   mayor_three_alive  市长三人局（仅剩三人且市长存活）
+//   saint_executed     圣徒被处决（{roleName} = 提名圣徒者的角色名）
+//   mastermind_good    主谋额外白天·善良胜
+//   mastermind_evil    主谋额外白天·邪恶胜
+const VICTORY_EFFECTS = {
+  slayer_demon_kill: { message: '恶魔，你逃不掉的！' },
+  mayor_three_alive: { message: '山穷水复临崖近，三人成虎破终局' },
+  saint_executed: { message: '我名{roleName}，请求你的原谅' },
+  mastermind_good: { message: '你选择了正义' },
+  mastermind_evil: { message: '你又下了一层地狱' }
+};
+
+// 用 winEffect.params 填充文案里的 {占位符}；缺少对应值时保留占位符原样
+function renderVictoryText(template, params) {
+  if (!template || !params) return template || '';
+  return template.replace(/\{(\w+)\}/g, (match, key) =>
+    (params[key] !== undefined && params[key] !== null) ? String(params[key]) : match
+  );
+}
+
+// 后端在 endGame 时下发 winEffect；
+// 同一次结算（同一特效 + 同一目标）只播放一次，避免状态广播时反复重播。
+// 不设置自动关闭：动画一直停留，需玩家点击任意处手动关闭。
+let shownVictoryEffect = null;
+
+function playVictoryEffect(effect) {
+  if (!effect || !effect.type) return;
+  const key = effect.type + ':' + (effect.demonId || '');
+  if (shownVictoryEffect === key) return;
+  shownVictoryEffect = key;
+
+  const overlay = $('victoryEffect');
+  const text = $('victoryEffectText');
+  if (!overlay || !text) return;
+
+  const preset = VICTORY_EFFECTS[effect.type] || {};
+  text.textContent = renderVictoryText(
+    effect.message || preset.message || (currentState && currentState.winReason) || '游戏结束',
+    effect.params
+  );
+
+  // 配色随胜方：GOOD 绿色，EVIL 红色（无胜方信息时按红色处理）
+  const winner = effect.winner || (currentState && currentState.winner) || null;
+  overlay.classList.remove('good', 'evil');
+  overlay.classList.add(winner === 'GOOD' ? 'good' : 'evil');
+
+  overlay.classList.remove('hiding');
+  overlay.classList.add('active');
+}
+
+function hideVictoryEffect() {
+  const overlay = $('victoryEffect');
+  if (!overlay || !overlay.classList.contains('active')) return;
+  overlay.classList.add('hiding');
+  setTimeout(() => overlay.classList.remove('active', 'hiding'), 450);
 }
 
 function showGameOverRoles(allRoles) {

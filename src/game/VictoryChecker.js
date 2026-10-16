@@ -2,6 +2,14 @@
 const { getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { PHASES } = require('../config/game-config');
 
+// 圣徒能力是否生效：中毒或醉酒时技能失效，被处决不判邪恶获胜。
+// 处决时的即时判定（checkSaintExecution）与 checkVictory 的备份判定共用此口径，
+// 避免两处规则漂移（历史上备份分支漏了中毒/醉酒判定）。
+function isSaintAbilityActive(player) {
+  return !!(player && player.role && player.role.id === 'saint'
+    && !player.isPoisoned && !player.isDrunk);
+}
+
 class VictoryChecker {
   constructor(engine) {
     this.engine = engine;
@@ -19,7 +27,7 @@ class VictoryChecker {
     const mayor = alive.find(p => p.role.id === 'mayor');
     if (alive.length === 3 && mayor) {
       // 如果刚处决完，需要看市长是否存活
-      return this.endGame('GOOD', '仅剩三人，市长存活，善良阵营获胜！');
+      return this.endGame('GOOD', '仅剩三人，市长存活，善良阵营获胜！', 'mayor_three_alive');
     }
 
     // 检查恶魔存活情况
@@ -60,12 +68,15 @@ class VictoryChecker {
     }
 
     // 检查圣徒被处决（在处决时触发，这里作为备份）
+    // 中毒/醉酒的圣徒技能失效，被处决不判邪恶胜
     const executedSaint = gs.todaysDeaths.find(d => {
       const p = room.players.get(d.playerId);
-      return p && p.role.id === 'saint' && d.cause === 'EXECUTION';
+      return isSaintAbilityActive(p) && d.cause === 'EXECUTION';
     });
     if (executedSaint) {
-      return this.endGame('EVIL', '圣徒被处决，邪恶阵营获胜！');
+      return this.endGame('EVIL', '圣徒被处决，邪恶阵营获胜！', 'saint_executed', {
+        roleName: executedSaint.nominatorRoleName || '无名者'
+      });
     }
 
     return null;
@@ -82,19 +93,28 @@ class VictoryChecker {
     const winningTeam = losingTeam === 'GOOD' ? 'EVIL' : 'GOOD';
     return this.endGame(
       winningTeam,
-      `主谋额外白天：${executedPlayer.seat+1}号${executedPlayer.name}（${losingTeam === 'GOOD' ? '善良' : '邪恶'}阵营）被处决，其阵营落败！`
+      `主谋额外白天：${executedPlayer.seat+1}号${executedPlayer.name}（${losingTeam === 'GOOD' ? '善良' : '邪恶'}阵营）被处决，其阵营落败！`,
+      winningTeam === 'GOOD' ? 'mastermind_good' : 'mastermind_evil'
     );
   }
 
   checkSaintExecution(playerId) {
-    const player = this.engine.room.players.get(playerId);
-    if (player && player.role.id === 'saint' && !player.isPoisoned) {
-      return this.endGame('EVIL', '圣徒被处决，邪恶阵营获胜！');
+    const room = this.engine.room;
+    const player = room.players.get(playerId);
+    // 中毒/醉酒时圣徒能力失效：被处决不判邪恶获胜
+    if (!isSaintAbilityActive(player)) {
+      return null;
     }
-    return null;
+    // 提名者的角色名：来自 VoteManager 写入的处决记录（结束动画「我名xx，请求你的原谅」）
+    const entry = (room.gameState.todaysDeaths || []).find(
+      d => d.playerId === playerId && d.cause === 'EXECUTION'
+    );
+    return this.endGame('EVIL', '圣徒被处决，邪恶阵营获胜！', 'saint_executed', {
+      roleName: (entry && entry.nominatorRoleName) || '无名者'
+    });
   }
 
-  endGame(winner, reason) {
+  endGame(winner, reason, effectType = null, effectParams = null) {
     const room = this.engine.room;
     const gs = room.gameState;
     
@@ -102,6 +122,8 @@ class VictoryChecker {
     gs.winner = winner;
     gs.winReason = reason;
     gs.endedAt = new Date();
+    // 专属胜利特效：显式指定 effectType，或按局势推导（如恶魔被杀手公开击杀）
+    gs.winEffect = this.resolveWinEffect(winner, effectType, effectParams);
 
     this.engine.logAction('GAME_OVER', `游戏结束！${winner === 'GOOD' ? '善良阵营' : '邪恶阵营'}获胜！原因：${reason}`, {
       winner, reason
@@ -129,6 +151,7 @@ class VictoryChecker {
     this.engine.io.to(room.id).emit('game:over', {
       winner,
       winReason: reason,
+      winEffect: gs.winEffect || null,
       allRoles
     });
 
@@ -136,6 +159,30 @@ class VictoryChecker {
     this.engine.broadcastState();
 
     return { winner, reason };
+  }
+
+  // 专属胜利特效（前端据此播放胜利动画）：
+  //  - 传入 effectType：按该类型直接下发，文案由前端 VICTORY_EFFECTS 注册表决定
+  //    （message 留 null，前端取不到注册文案时回退到本局 winReason）；
+  //    effectParams 供文案里的 {占位符} 使用（如圣徒动画的 {roleName}）
+  //  - 未传入：按局势自动推导，当前只覆盖「恶魔被杀手公开击杀导致的善良胜利」
+  resolveWinEffect(winner, effectType = null, effectParams = null) {
+    if (effectType) {
+      // winner 一并下发：前端据此决定动画配色（GOOD 绿色 / EVIL 红色）
+      return { type: effectType, message: null, params: effectParams || null, winner };
+    }
+    const gs = this.engine.room.gameState;
+    if (winner !== 'GOOD' || !gs.slayerDemonKill) return null;
+    const demon = this.engine.room.players.get(gs.slayerDemonKill.demonId);
+    // 恶魔必须确实死亡（未被免死效果阻止、也没有被新恶魔顶替）
+    if (!demon || !demon.isDead) return null;
+    return {
+      type: 'slayer_demon_kill',
+      message: '恶魔，你逃不掉的！',
+      winner,
+      slayerId: gs.slayerDemonKill.slayerId,
+      demonId: gs.slayerDemonKill.demonId
+    };
   }
 }
 

@@ -35,6 +35,7 @@ class GameEngine {
       rolesNotInPlay: [],
       winner: null,
       winReason: '',
+      winEffect: null, // 专属胜利特效（如杀手公开击杀恶魔），游戏结束时由 VictoryChecker 写入
       chatLog: [],
       confirmedPlayers: [],
       currentVotes: {},
@@ -626,6 +627,7 @@ class GameEngine {
       todaysDeaths: gs.todaysDeaths,
       winner: gs.winner,
       winReason: gs.winReason,
+      winEffect: gs.winEffect || null,
       mastermindExtraRound: !!gs.mastermindExtraRound,
       confirmedCount: room.confirmations.size,
       confirmedIds: Array.from(room.confirmations),
