@@ -1,7 +1,7 @@
 // BMR镇民角色集合（黯月初升）
 const Role = require('./Role');
 const { BMR_ROLE_IDS } = require('../config/game-config');
-const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, clearDrunkSource } = require('../utils/helpers');
+const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, revivePlayer } = require('../utils/helpers');
 
 // 辅助：获取当晚因自身能力被唤醒的玩家ID集合
 // 判定必须与 NightResolver.wakeNext 的 shouldWake 逻辑保持一致，
@@ -151,11 +151,25 @@ class Sailor extends Role {
       return { success: false, message: '选择的玩家无效' };
     }
 
-    // 随机决定水手或目标醉酒（持续到明天黄昏：本夜+次日白天）
+    player.abilityState.lastTargetId = targetId;
+
+    // 水手自己醉酒/中毒时技能整体失效：免死与「令他人醉酒」一并失效。
+    // 为不让他察觉，仍按正常口径给出一条（假的）结果，但不实际施加醉酒。
+    if (player.isPoisoned || player.isDrunk) {
+      const fakeDrunk = Math.random() < 0.5;
+      engine.setPlayerPrivateInfo(player, {
+        type: 'sailor',
+        targetId: targetId,
+        message: `你选择了 ${target.seat + 1}号 ${target.name}，${fakeDrunk ? '你' : 'TA'}醉酒了`
+      }, true, { realInfo: '水手中毒/醉酒，技能失效' });
+      return { success: true };
+    }
+
+    // 随机决定水手或目标醉酒
+    // 持续「当晚 + 接下来的整个白天」，到下个黄昏（下个夜晚开始）解除
     const sailorDrunk = Math.random() < 0.5;
     const drunked = sailorDrunk ? player : target;
-    applyDrunk(drunked, 'sailor', 2);
-    player.abilityState.lastTargetId = targetId;
+    applyDrunk(drunked, 'sailor', 1);
 
     engine.setPlayerPrivateInfo(player, {
       type: 'sailor',
@@ -385,11 +399,11 @@ class Innkeeper extends Role {
       if (t) t.isProtected = true;
     }
 
-    // 随机一人醉酒（持续到明天黄昏：本夜+次日白天）
+    // 随机一人醉酒：持续「当晚 + 接下来的整个白天」，到下个黄昏解除
     const drunkTarget = Math.random() < 0.5 ? targets[0] : targets[1];
     const drunkPlayer = engine.room.players.get(drunkTarget);
     if (drunkPlayer) {
-      applyDrunk(drunkPlayer, 'innkeeper', 2);
+      applyDrunk(drunkPlayer, 'innkeeper', 1);
     }
 
     gameState.nightActions.innkeeper = { targetIds: targets };
@@ -785,14 +799,8 @@ class Professor extends Role {
     player.abilityState.used = true;
 
     if (!player.isPoisoned && !player.isDrunk && target.role && target.role.category === 'TOWNSFOLK') {
-      target.isAlive = true;
-      target.isDead = false;
-      target.deathNight = -1;
-      target.deathDay = -1;
-      target.voteToken = 0;
-      clearDrunkSource(target, 'courtier'); // 复活解除侍臣的醉酒
-      target.isDrunk = false;
-      target.isPoisoned = false;
+      // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
+      revivePlayer(target);
 
       engine.setPlayerPrivateInfo(player, {
         type: 'professor',
@@ -840,7 +848,8 @@ class Bard extends Role {
     if (bardPlayer.isPoisoned) return false;
     for (const [, p] of engine.room.players) {
       if (p.id !== bardPlayer.id && p.isAlive) {
-        applyDrunk(p, 'bard', 2); // 每个来源独立计时，不覆盖其它醉酒
+        // 每个来源独立计时，不覆盖其它醉酒；持续「当晚 + 接下来的整个白天」
+        applyDrunk(p, 'bard', 1);
       }
     }
     engine.logAction('ABILITY', `${bardPlayer.seat + 1}号 ${bardPlayer.name}（吟游诗人）触发：爪牙被处决，其他所有玩家醉酒`, {

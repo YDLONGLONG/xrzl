@@ -1,6 +1,7 @@
 // 外来者角色 - 黯月初升 (BMR)
 const Role = require('./Role');
 const { BMR_ROLE_IDS } = require('../config/game-config');
+const { applyDrunk } = require('../utils/helpers');
 
 // 查找真正的恶魔（排除伪装成恶魔的莽夫/疯子）
 function findRealDemon(engine, excludePlayer) {
@@ -157,7 +158,7 @@ class Lunatic extends Role {
     this.abilityDesc = '每个夜晚，第一个将能力选择指向你的玩家会醉酒直到明天黄昏，而你会转而属于该玩家的阵营。此后你被视作该阵营（除非被再次转化）。';
     this.selectCount = 0; // 被动角色，无夜晚行动
     this.isFakeDemon = false; // 不是假恶魔，不在夜晚被唤醒
-    this.drunkDuration = 2; // 直到明天黄昏（覆盖本夜 + 次日白天，于下次黄昏清除）
+    this.drunkDuration = 1; // 直到明天黄昏：本夜 + 次日白天，于下次黄昏（下个夜晚开始）解除
   }
 
   // 首夜初始化转化状态
@@ -204,11 +205,9 @@ class Lunatic extends Role {
     // 占用本夜的转化机会
     gameState.goonTriggeredThisNight = true;
 
-    // 该玩家醉酒至明天黄昏
-    if (!acterPlayer.abilityState) acterPlayer.abilityState = {};
-    acterPlayer.isDrunk = true;
-    acterPlayer.drunkDuration = lunaticPlayer.role.drunkDuration || 2;
-    acterPlayer.drunkTurns = 0;
+    // 该玩家醉酒至明天黄昏：交由 helpers 的按来源计时统一管理，
+    // 由 NightResolver 在每个夜晚开始时调用 decrementDrunkPlayers 解除
+    applyDrunk(acterPlayer, 'goon', lunaticPlayer.role.drunkDuration || 1);
 
     // 莽夫转而属于该玩家的阵营；若指向者是恶魔则不转化（莽夫仍属善良）
     const isDemon = acterPlayer.role && acterPlayer.role.category === 'DEMON';

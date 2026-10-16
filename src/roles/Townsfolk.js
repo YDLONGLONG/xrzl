@@ -1,7 +1,7 @@
 // 村民角色集合
 const Role = require('./Role');
 const { ROLE_IDS } = require('../config/game-config');
-const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors } = require('../utils/helpers');
+const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors, revivePlayer } = require('../utils/helpers');
 
 // 洗衣妇
 class Washerwoman extends Role {
@@ -572,11 +572,8 @@ class Mayor extends Role {
           // 先让替死者尝试死亡；只有他确实死亡，市长才得以存活
           const result = engine.deathManager.killPlayer(sacrifice.id, 'MAYOR_SAVE', gameState.nightCount, gameState.dayCount);
           if (result && !result.prevented) {
-            player.isAlive = true;
-            player.isDead = false;
-            player.deathNight = -1;
-            player.deathDay = -1;
-            player.voteToken = 0;
+            // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
+            revivePlayer(player);
             engine.logAction('ABILITY', `${player.seat+1}号 ${player.name}（市长）的死亡被 ${sacrifice.seat+1}号 ${sacrifice.name} 代替`, {
               playerId: player.id, sacrificeId: sacrifice.id, probInfo
             });

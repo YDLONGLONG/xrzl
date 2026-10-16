@@ -1,6 +1,6 @@
 // 夜晚结算器 - 支持多剧本
 const { getScriptConfig, PHASES, ROLE_IDS } = require('../config/game-config');
-const { getAlivePlayers, decrementDrunkPlayers } = require('../utils/helpers');
+const { getAlivePlayers, decrementDrunkPlayers, randomChoice, revivePlayer } = require('../utils/helpers');
 const { Lunatic } = require('../roles/Outsider2');
 
 class NightResolver {
@@ -495,11 +495,10 @@ class NightResolver {
           .map(id => this.engine.room.players.get(id))
           .filter(p => p && p.isDead && p.deathNight === gs.nightCount - 1);
         if (deadLastTargets.length > 0 && Math.random() < 0.5) {
-          const revived = deadLastTargets[0];
-          revived.isAlive = true;
-          revived.isDead = false;
-          revived.deathNight = -1;
-          revived.deathDay = -1;
+          // 在上一夜的已死亡目标中随机反刍一名（技能描述为「之一」）
+          const revived = randomChoice(deadLastTargets);
+          // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
+          revivePlayer(revived);
           this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活`, {
             playerId: revived.id
           });

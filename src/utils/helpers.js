@@ -66,8 +66,11 @@ function ensureDrunkEffects(p) {
   return p.drunkEffects;
 }
 
-// 施加/续期某个来源的醉酒。duration=2 表示「当前夜晚 + 次日白天」直到下次黄昏。
-function applyDrunk(p, source, duration = 2) {
+// 施加/续期某个来源的醉酒。
+// duration = 覆盖的昼夜数：
+//   1 → 当前夜晚 + 接下来的整个白天，到下个黄昏（下个夜晚开始）解除（默认）
+//   3 → 在此基础上再多覆盖 2 个完整昼夜（宫廷侍从「三天三夜」）
+function applyDrunk(p, source, duration = 1) {
   const effects = ensureDrunkEffects(p);
   const existing = effects[source];
   if (existing) {
@@ -78,7 +81,7 @@ function applyDrunk(p, source, duration = 2) {
   p.isDrunk = true;
 }
 
-// 清除某个来源的醉酒（如教授复活、宫廷侍从解除）。
+// 清除某个来源的醉酒（如宫廷侍从解除）。
 function clearDrunkSource(p, source) {
   if (!p.drunkEffects) return;
   delete p.drunkEffects[source];
@@ -87,9 +90,29 @@ function clearDrunkSource(p, source) {
   }
 }
 
+// 清除玩家身上的全部醉酒来源（复活等场景使用）。
+function clearAllDrunk(p) {
+  if (!p) return;
+  delete p.drunkEffects;
+  p.isDrunk = false;
+}
+
+// 统一的复活口径（教授复活 / 市长替死 / 沙巴洛斯反刍等共用）：
+// 只恢复存活状态并清除醉酒、中毒，不修改 voteToken
+// —— 投票标记仅由死亡获得、由投票行为消耗，复活不参与。
+function revivePlayer(p) {
+  if (!p) return;
+  p.isAlive = true;
+  p.isDead = false;
+  p.deathNight = -1;
+  p.deathDay = -1;
+  clearAllDrunk(p);
+  p.isPoisoned = false;
+}
+
 // 醉酒持续时长递减：每个夜晚开始时调用一次。
-// 醉酒在「当前夜晚 + 次日白天」之后（即再下一次夜晚开始时）解除，
-// 对应技能表「直到明天黄昏」的语义。duration 为 0 时立即解除。
+// duration=1 的效果在本夜结算后，于下个黄昏（下个夜晚开始）解除，
+// 即覆盖「当前夜晚 + 接下来的整个白天」。duration 每多 1 就多覆盖一个完整昼夜。
 function decrementDrunkPlayers(room) {
   for (const [, p] of room.players) {
     if (!p.drunkEffects || Object.keys(p.drunkEffects).length === 0) {
@@ -137,6 +160,7 @@ module.exports = {
   decrementDrunkPlayers,
   applyDrunk,
   clearDrunkSource,
+  revivePlayer,
   getPlayerEffectiveTeam,
   isEffectivelyDead
 };
