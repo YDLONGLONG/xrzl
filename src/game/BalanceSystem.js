@@ -400,6 +400,60 @@ class BalanceSystem {
     };
   }
 
+  // 水手「自身醉酒」概率（由平衡系统控制）
+  //  - 目标不是恶魔：固定 50/50，不按局势调整
+  //  - 目标是恶魔：默认大概率水手自己醉酒（base）；
+  //    好人赢面非常小（好人弱势）时，按失衡程度线性降低自身醉酒概率，
+  //    改为大概率让恶魔醉酒（变相帮好人）
+  static getSailorSelfDrunkProbability(engine, targetIsDemon = false) {
+    const cfg = this.getConfig(engine);
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+    const score = this.calculateBalanceScore(engine.room, engine);
+
+    if (!targetIsDemon) {
+      return {
+        probability: 0.5,
+        balanceScore: score,
+        threshold: 0.5,
+        scenario: 'not_demon',
+        favorExcess: 0,
+        goodWeakThreshold: goodWeakTh,
+        evilWeakThreshold: evilWeakTh,
+        baseProbability: 0.5,
+        targetIsDemon: false,
+        description: '水手醉酒归属概率（目标非恶魔，固定 50/50）'
+      };
+    }
+
+    const base = cfg && cfg.balance.sailorSelfDrunkBase !== undefined ? cfg.balance.sailorSelfDrunkBase : 0.8;
+    const penalty = cfg && cfg.balance.sailorSelfDrunkPenalty !== undefined ? cfg.balance.sailorSelfDrunkPenalty : 0.6;
+
+    let scenario = 'balanced';
+    let probability = base;
+    let favorExcess = 0;
+
+    if (score < goodWeakTh) {
+      // 好人赢面非常小：降低水手自身醉酒概率（最多 -penalty），使恶魔更可能醉酒
+      scenario = 'good_weak';
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = Math.max(base - favorExcess * penalty, 0);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      favorExcess,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      targetIsDemon: true,
+      description: '水手醉酒归属概率（目标为恶魔）'
+    };
+  }
+
   // 造谣者声明为真时选择死亡玩家（平衡系统决定好人/坏人）
   static selectGossipVictim(engine) {
     const room = engine.room;

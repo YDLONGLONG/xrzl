@@ -165,11 +165,19 @@ class Sailor extends Role {
       return { success: true };
     }
 
-    // 随机决定水手或目标醉酒
-    // 持续「当晚 + 接下来的整个白天」，到下个黄昏（下个夜晚开始）解除
-    const sailorDrunk = Math.random() < 0.5;
+    // 醉酒归属由平衡系统决定：
+    //  - 目标是恶魔：默认大概率水手自己醉酒；好人赢面非常小时改为大概率让恶魔醉酒
+    //  - 目标不是恶魔：固定 50/50
+    // 醉酒持续「当晚 + 接下来的整个白天」，到下个黄昏（下个夜晚开始）解除
+    const targetIsDemon = !!(target.role && target.role.category === 'DEMON' && target.role.team === 'EVIL');
+    const probInfo = engine.balanceSystem.getSailorSelfDrunkProbability(engine, targetIsDemon);
+    const sailorDrunk = Math.random() < probInfo.probability;
     const drunked = sailorDrunk ? player : target;
     applyDrunk(drunked, 'sailor', 1);
+
+    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（水手）选择了 ${target.seat + 1}号 ${target.name}，${sailorDrunk ? '水手自己' : '对方'}醉酒`, {
+      playerId: player.id, targetId: target.id, targetIsDemon, sailorDrunk, probInfo
+    });
 
     engine.setPlayerPrivateInfo(player, {
       type: 'sailor',
