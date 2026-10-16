@@ -204,17 +204,8 @@ function initSocketEvents() {
     if (overlay) overlay.style.display = 'none';
   });
 
-  socket.on('room:playerDisconnected', ({ name }) => {
-    if (hasLeftRoom) return;
-    showToast(`玩家 ${name} 已断线，AI将托管其行动`);
-    addSystemChatMessage(`${name} 已断线，暂由 AI 托管`);
-  });
-
-  socket.on('room:playerReconnected', ({ name }) => {
-    if (hasLeftRoom) return;
-    showToast(`玩家 ${name} 已重新连接`, 'success');
-    addSystemChatMessage(`${name} 已重新连接`);
-  });
+  // 断线 / 重连：结果由服务端广播系统聊天消息展示
+  // （见 server.js 的 handleDisconnect / room:leave / room:join）
 
   socket.on('room:stateUpdate', (state) => {
     if (hasLeftRoom) return;
@@ -324,10 +315,7 @@ function initSocketEvents() {
     showExecutionResult(data);
   });
 
-  socket.on('game:abilityUsed', (data) => {
-    if (hasLeftRoom) return;
-    showAbilityUsed(data);
-  });
+  // 技能使用结果：已由服务端以聊天区消息展示（公聊气泡 / 系统消息），不再弹提示框
 
   socket.on('chat:message', (msg) => {
     if (hasLeftRoom) return;
@@ -420,10 +408,7 @@ function initSocketEvents() {
     renderChatMessages();
   });
 
-  socket.on('player:died', (data) => {
-    if (hasLeftRoom) return;
-    showPlayerDied(data);
-  });
+  // 玩家死亡：已由服务端广播系统聊天消息（见 src/game/DeathManager.js）
 
   // 上帝视角事件
   socket.on('god:loginResult', (data) => {
@@ -630,15 +615,12 @@ function showGameView() {
   if (lobby) lobby.style.display = 'none';
   if (roomPanel) roomPanel.style.display = 'flex';
   // 右侧区域：仅加入房间后显示；成员与操作区默认展开（不沿用上次的收起状态）
-  const memberPanel = $('memberPanel');
-  if (memberPanel) memberPanel.style.display = 'flex';
   memberPanelCollapsed = false;
   applyMemberPanelCollapsed();
   const gameView = $('gameView');
-  if (gameView) {
-    gameView.classList.add('with-member');
-    gameView.style.display = 'grid';
-  }
+  if (gameView) gameView.style.display = 'grid';
+  // 右侧成员与操作区：PC 端仅在主房间（公聊）会话显示
+  updateMemberPanelVisibility();
   // 顶部右侧操作（上帝视角 / 退出群聊）：仅房间内显示
   const headerActions = $('headerActions');
   if (headerActions) headerActions.style.display = 'flex';
@@ -1509,9 +1491,12 @@ function renderCenter(state) {
           }
         } else {
           // 未投票：显示投票按钮
+          // 管家：主人尚未投赞成时禁用「赞成」（判定由服务端下发，含中毒豁免）
+          const butlerBlocked = !!(state.myAbilityState && state.myAbilityState.butlerYesBlocked);
           $('actionButtons').innerHTML = `
-            <button class="btn btn-success vote-btn yes" onclick="castVote(true)">赞成处决</button>
+            <button class="btn btn-success vote-btn yes" onclick="castVote(true)" ${butlerBlocked ? 'disabled' : ''}>赞成处决</button>
             <button class="btn btn-danger vote-btn no" onclick="castVote(false)">反对</button>
+            ${butlerBlocked ? '<div style="text-align:center; margin-top:8px; color:#FF9500; font-size:0.85em;">你是管家，需主人先投赞成后才能赞成</div>' : ''}
           `;
         }
         break;
@@ -2118,6 +2103,11 @@ function castVote(vote) {
     showToast('你已使用死后投票标记');
     return;
   }
+  // 管家：主人未投赞成时不能投赞成（服务端同样会拦截）
+  if (vote && currentState.myAbilityState && currentState.myAbilityState.butlerYesBlocked) {
+    showToast('你是管家，需主人先投赞成后才能赞成');
+    return;
+  }
   socket.emit('day:vote', { vote });
 }
 
@@ -2239,25 +2229,8 @@ function showPlayerSelect(title, players, options = {}) {
   });
 }
 
-function showAbilityUsed(data) {
-  // 杀手技能结果改由公聊消息气泡公布（见 server.js 的 day:useAbility 处理器）
-  if (data.abilityName === 'gossip') {
-    showToast(`${data.fromName} 发表了公开声明`);
-  }
-}
-
-function showPlayerDied(data) {
-  const p = currentState.players.find(x => x.id === data.playerId);
-  if (p) {
-    let causeText = '';
-    if (data.cause === 'EXECUTION') {
-      causeText = '被处决';
-    } else {
-      causeText = '死亡';
-    }
-    showToast(`${p.seat+1}号 ${p.name} ${causeText}`);
-  }
-}
+// 说明：技能使用与玩家死亡的结果不再由客户端弹提示框，
+// 统一由服务端广播为聊天区消息（公聊气泡 / 系统消息），便于回看。
 
 // ========== 聊天 ==========
 let aiChatHistory = [];      // AI 对话历史（用于上下文）
@@ -2534,6 +2507,28 @@ function renderSessionList() {
   container.innerHTML = html;
 }
 
+// PC 端：右侧「座位列表 + 操作面板」只在主房间（公聊）会话中显示
+// 移动端由 moveMobilePanelsIntoChat 搬移/还原，这里不干预
+function updateMemberPanelVisibility() {
+  const member = $('memberPanel');
+  const gameView = $('gameView');
+  if (!member) return;
+  // 未加入房间：整体不显示，聊天区独占宽度
+  if (!myRoomId) {
+    member.style.display = 'none';
+    if (gameView) gameView.classList.remove('with-member');
+    return;
+  }
+  if (isMobileView()) {
+    member.style.display = 'flex';
+    return;
+  }
+  const show = currentChatChannel === 'public';
+  member.style.display = show ? 'flex' : 'none';
+  // with-member 决定 grid 是否保留右侧那一列
+  if (gameView) gameView.classList.toggle('with-member', show);
+}
+
 // 切换会话（左栏点击）
 function selectSession(channel, pid) {
   const input = $('chatInput');
@@ -2562,6 +2557,8 @@ function selectSession(channel, pid) {
   updateChatTabBadges();
   updateHeaderChatTarget();
   updateChatInputVisibility();
+  // PC 端：右侧成员与操作区仅在主房间（公聊）显示
+  updateMemberPanelVisibility();
   // 移动端：选中会话后进入聊天页
   if (isMobileView()) openMobileChat();
 }
@@ -4414,12 +4411,18 @@ function toggleMobileChat() {
 
 // 回到桌面尺寸时退出聊天页状态并还原面板位置
 window.addEventListener('resize', () => {
-  if (isMobileView()) return;
+  if (isMobileView()) {
+    // 切到移动端：恢复右栏供移动布局搬移使用
+    updateMemberPanelVisibility();
+    return;
+  }
   const container = $('gameView');
   if (container && container.classList.contains('mobile-chat-open')) {
     container.classList.remove('mobile-chat-open');
     moveMobilePanelsIntoChat(false);
   }
+  // 切到桌面端：按当前会话重新决定右栏显隐
+  updateMemberPanelVisibility();
 });
 
 // 点击遮罩关闭移动端聊天

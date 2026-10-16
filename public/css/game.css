@@ -2204,6 +2204,12 @@ body.resizing-active * {
   background: #FA5151;
   color: #fff;
 }
+/* 管家等受限情形：禁用按钮置灰 */
+.vote-btn:disabled {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+  cursor: not-allowed;
+}
 .vote-count-display {
   margin-top: 20px;
   font-size: 1.8em;

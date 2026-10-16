@@ -586,6 +586,19 @@ class GameEngine {
     const neededConfirm = Array.from(room.players.values())
       .filter(p => p.seat !== -1 && (p.isBot || p.isConnected)).length;
 
+    // 管家限制：主人存活且尚未投赞成时，本人不能投赞成（中毒者不受限）
+    // 判定口径与 VoteManager.castVote 保持一致，供前端禁用「赞成」按钮
+    let butlerYesBlocked = false;
+    if (viewer.role && viewer.role.id === 'butler' && !viewer.isPoisoned) {
+      const masterId = viewer.abilityState && viewer.abilityState.masterId;
+      const master = masterId ? room.players.get(masterId) : null;
+      if (master && master.isAlive) {
+        const nom = gs.nominations && gs.nominations[gs.currentNominationIndex];
+        const masterVotedYes = !!(nom && nom.currentVotes && nom.currentVotes[master.id] === true);
+        butlerYesBlocked = !masterVotedYes;
+      }
+    }
+
     const state = {
       roomId: room.id,
       hostId: room.hostId,
@@ -682,11 +695,32 @@ class GameEngine {
       myAbilityState: {
         pendingMoonchildSelect: !!(viewer.abilityState && viewer.abilityState.pendingSelect),
         // 白天技能是否已使用（杀手按钮据此显示「已使用」并禁用）
-        usedDayAbility: !!viewer.hasUsedDayAbility
+        usedDayAbility: !!viewer.hasUsedDayAbility,
+        // 管家：主人未投赞成时为 true，前端据此禁用「赞成」按钮
+        butlerYesBlocked
       }
     };
 
     return state;
+  }
+
+  // 广播系统聊天消息（游戏中流程结果统一走这里，在聊天区显示为居中提示且有记录）
+  sendSystemChat(content) {
+    const gs = this.room.gameState;
+    if (!gs || !content) return;
+    const msg = {
+      id: Date.now() + Math.random(),
+      fromId: 'system',
+      fromName: '系统',
+      fromSeat: -1,
+      isDead: false,
+      isSystem: true,
+      content: String(content).substring(0, 200),
+      channel: 'public',
+      timestamp: Date.now()
+    };
+    if (gs.chatLog) gs.chatLog.push(msg);
+    this.io.to(this.room.id).emit('chat:message', msg);
   }
 
   // 发送聊天消息

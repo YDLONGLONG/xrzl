@@ -166,6 +166,9 @@ class DeathManager {
       cause
     });
 
+    // 死亡结果以系统聊天消息广播（不再由客户端弹提示框）
+    this.engine.sendSystemChat(`${player.seat + 1}号 ${player.name} ${cause === 'EXECUTION' ? '被处决' : '死亡'}`);
+
     return result;
   }
 
@@ -188,6 +191,9 @@ class DeathManager {
       name: player.name,
       cause
     });
+
+    // 死亡结果以系统聊天消息广播（不再由客户端弹提示框）
+    this.engine.sendSystemChat(`${player.seat + 1}号 ${player.name} ${cause === 'EXECUTION' ? '被处决' : '死亡'}`);
 
     return player;
   }

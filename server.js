@@ -327,6 +327,26 @@ function forceRemovePlayer(roomId, playerId) {
   broadcastRoomState(roomId);
 }
 
+// 向房间广播一条系统聊天消息（聊天区居中提示；游戏内写入 chatLog 便于回看）
+function broadcastSystemChat(roomId, content) {
+  const room = rooms.get(roomId);
+  if (!room || !content) return;
+  const msg = {
+    id: Date.now() + Math.random(),
+    fromId: 'system',
+    fromName: '系统',
+    fromSeat: -1,
+    isDead: false,
+    isSystem: true,
+    content: String(content).substring(0, 200),
+    channel: 'public',
+    timestamp: Date.now()
+  };
+  const gs = room.gameState;
+  if (gs && gs.chatLog) gs.chatLog.push(msg);
+  io.to(roomId).emit('chat:message', msg);
+}
+
 // 将 socket 从其它房间中彻底清理，保证「一个 socket 同时只属于一个房间」
 // 背景：游戏中主动离开会被视同断线并保留 3 分钟以便重连，玩家在这期间创建/加入
 // 新房间时，socket.id 会同时存在于新旧两个房间，而 getPlayerRoom 按插入顺序返回
@@ -420,6 +440,10 @@ function handleDisconnect(socket) {
 
   // 通知其他玩家该玩家断线
   io.to(roomId).emit('room:playerDisconnected', { playerId: socket.id, name: player.name });
+  // 断线结果以系统聊天消息广播（不再由客户端弹提示框）
+  broadcastSystemChat(roomId, room.gameStarted
+    ? `${player.name} 已断线，暂由 AI 托管`
+    : `${player.name} 已断线`);
 
   if (room.gameStarted) {
     // 游戏中断线：设置超时移除，并让BotManager托管
@@ -570,6 +594,8 @@ io.on('connection', (socket) => {
 
       console.log(`玩家重连: ${disconnectedPlayer.name} (${oldId} -> ${socket.id})`);
       io.to(roomId).emit('room:playerReconnected', { playerId: socket.id, name: disconnectedPlayer.name });
+      // 重连结果以系统聊天消息广播（不再由客户端弹提示框）
+      broadcastSystemChat(roomId, `${disconnectedPlayer.name} 已重新连接`);
 
       // 如果是上帝视角玩家，需要重新加入godView
       // （客户端会重新登录上帝视角）
@@ -772,6 +798,8 @@ io.on('connection', (socket) => {
       player.disconnectedAt = Date.now();
 
       io.to(roomId).emit('room:playerDisconnected', { playerId: socket.id, name: player.name });
+      // 断线结果以系统聊天消息广播（不再由客户端弹提示框）
+      broadcastSystemChat(roomId, `${player.name} 已断线，暂由 AI 托管`);
 
       const timer = setTimeout(() => {
         actuallyRemovePlayer(socket.id);
