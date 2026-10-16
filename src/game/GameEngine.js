@@ -679,9 +679,11 @@ class GameEngine {
           team: p.role.team,
           isAlive: p.isAlive
         })) : null,
-      myAbilityState: viewer.abilityState ? {
-        pendingMoonchildSelect: !!viewer.abilityState.pendingSelect
-      } : null
+      myAbilityState: {
+        pendingMoonchildSelect: !!(viewer.abilityState && viewer.abilityState.pendingSelect),
+        // 白天技能是否已使用（杀手按钮据此显示「已使用」并禁用）
+        usedDayAbility: !!viewer.hasUsedDayAbility
+      }
     };
 
     return state;

@@ -1677,16 +1677,17 @@ function renderRoleCard(state) {
   const slayerBtn = $('slayerBtn');
   if (role.id === 'slayer' && me.isAlive &&
       (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE')) {
-    const slayerUsed = state.privateInfoHistory && state.privateInfoHistory.some(
-      info => info.type === 'slayer'
-    );
-    if (!slayerUsed) {
-      slayerBtn.style.display = 'block';
-    } else {
-      slayerBtn.style.display = 'none';
-    }
+    // 技能整局限一次：已使用后按钮保留可见，但文字改为「已使用」并禁用
+    const slayerUsed = !!(state.myAbilityState && state.myAbilityState.usedDayAbility);
+    slayerBtn.style.display = 'block';
+    slayerBtn.textContent = slayerUsed ? '杀手：已使用' : '杀手：击杀恶魔';
+    slayerBtn.disabled = slayerUsed;
+    slayerBtn.classList.toggle('disabled', slayerUsed);
   } else {
     slayerBtn.style.display = 'none';
+    slayerBtn.disabled = false;
+    slayerBtn.textContent = '杀手：击杀恶魔';
+    slayerBtn.classList.remove('disabled');
   }
 
   const gossipBtn = $('gossipBtn');
@@ -2239,17 +2240,10 @@ function showPlayerSelect(title, players, options = {}) {
 }
 
 function showAbilityUsed(data) {
-  let msg = '';
-  if (data.abilityName === 'slayer') {
-    if (data.result.killed) {
-      msg = `${data.fromName} 使用杀手技能击杀了恶魔！`;
-    } else {
-      msg = `${data.fromName} 使用杀手技能，但无事发生。`;
-    }
-  } else if (data.abilityName === 'gossip') {
-    msg = `${data.fromName} 发表了公开声明`;
+  // 杀手技能结果改由公聊消息气泡公布（见 server.js 的 day:useAbility 处理器）
+  if (data.abilityName === 'gossip') {
+    showToast(`${data.fromName} 发表了公开声明`);
   }
-  if (msg) showToast(msg);
 }
 
 function showPlayerDied(data) {
@@ -2835,6 +2829,9 @@ function updateAtSuggest() {
 
   const pos = input.selectionStart;
   if (pos === null || pos === undefined) { closeAtSuggest(); return; }
+
+  // 仅在输入框中只存在一个 @ 时提示；已有多个 @（如 @@ / 正文里再打 @）不再弹出
+  if ((input.value.match(/@/g) || []).length > 1) { closeAtSuggest(); return; }
 
   // 匹配光标前最后一个「@片段」：@ 后不含空格，否则视为已开始输入正文，不再提示
   const before = input.value.slice(0, pos);
@@ -3731,11 +3728,13 @@ const SCRIPT_INFO = {
 };
 
 // ========== 公开公告（伪装用，不触发任何角色能力） ==========
-// 仅列出真正具备「公开公告」能力的角色，并按剧本标注（前缀与真实公告格式一致）
+// 按剧本列出可供伪装的公开角色，前缀与其真实公告格式保持一致
 // inputType: text = 自由输入；player = 从当前房间存活玩家中选择
+// TB 的杀手是白天公开技能（选择一名玩家），因此同样可以通过公告伪装
 const ANNOUNCE_ROLE_PRESETS = [
+  { id: 'slayer', name: '杀手', script: 'tb', inputType: 'player', prefix: '【杀手声明】我选择 ', maxLen: 60 },
   { id: 'gossip', name: '造谣者', script: 'bmr', inputType: 'text', prefix: '【造谣者声明】', placeholder: '例如：3号 是恶魔', maxLen: 120 },
-  { id: 'moonchild', name: '月之子', script: 'bmr', inputType: 'player', prefix: '【月之子选择】我选择 ', maxLen: 60 }
+  { id: 'moonchild', name: '月之子', script: 'bmr', inputType: 'player', prefix: '【月之子声明】我选择 ', maxLen: 60 }
 ];
 
 // 当前剧本下可发起公告的角色（剧本内没有此类角色时返回空数组）
@@ -3773,7 +3772,7 @@ function openAnnouncePanel() {
   setTimeout(() => { if (ta) ta.focus(); }, 80);
 }
 
-// 月之子：只能从当前房间存活玩家中选择
+// inputType 为 player 的公告角色（杀手 / 月之子）：只能从当前房间存活玩家中选择
 function renderAnnouncePlayerOptions() {
   const sel = $('announcePlayer');
   if (!sel) return;
@@ -3827,7 +3826,7 @@ function updateAnnouncePreview() {
   const playerField = $('annPlayerField');
   const isPlayer = preset.inputType === 'player';
 
-  // 按角色切换输入方式：造谣者=自由文本，月之子=选择存活玩家
+  // 按角色切换输入方式：造谣者=自由文本，杀手 / 月之子=选择存活玩家
   if (textField) textField.style.display = isPlayer ? 'none' : '';
   if (playerField) playerField.style.display = isPlayer ? '' : 'none';
 

@@ -327,6 +327,36 @@ function forceRemovePlayer(roomId, playerId) {
   broadcastRoomState(roomId);
 }
 
+// 将 socket 从其它房间中彻底清理，保证「一个 socket 同时只属于一个房间」
+// 背景：游戏中主动离开会被视同断线并保留 3 分钟以便重连，玩家在这期间创建/加入
+// 新房间时，socket.id 会同时存在于新旧两个房间，而 getPlayerRoom 按插入顺序返回
+// 旧房间，导致 room:seat / room:addBot / game:start 等操作落到旧房间并报「游戏已开始」
+function detachSocketFromOtherRooms(socket, exceptRoomId) {
+  for (const [roomId, room] of Array.from(rooms)) {
+    if (roomId === exceptRoomId) continue;
+    if (!room.players.has(socket.id)) continue;
+
+    const engine = gameEngines.get(roomId);
+
+    // 清除该玩家的重连计时器
+    if (disconnectTimers.has(socket.id)) {
+      clearTimeout(disconnectTimers.get(socket.id));
+      disconnectTimers.delete(socket.id);
+    }
+
+    removeUserFromVoiceChannel(roomId, socket.id);
+    socket.leave(roomId);
+    // 清座位、更新房主，房间内无在线真人时销毁房间
+    removePlayerFromRoom(roomId, socket.id);
+
+    // 旧房间若仍在进行，推动 bot 与确认流程继续，避免因少人卡住
+    if (engine && rooms.has(roomId)) {
+      if (engine.botManager) engine.botManager.notifyAllBots();
+      if (engine.checkConfirmations) engine.checkConfirmations();
+    }
+  }
+}
+
 function removePlayerFromRoom(roomId, playerId) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -476,6 +506,8 @@ io.on('connection', (socket) => {
       socket.emit('room:error', { message: '请输入昵称' });
       return;
     }
+    // 先脱离其它房间，避免同一 socket 同时存在于多个房间
+    detachSocketFromOtherRooms(socket, null);
     const roomId = generateRoomId();
     const room = {
       id: roomId, players: new Map(), seats: new Array(15).fill(null),
@@ -514,6 +546,9 @@ io.on('connection', (socket) => {
       const oldId = disconnectedPlayer.id;
       const engine = gameEngines.get(roomId);
 
+      // 重连回本房间前，先脱离其它房间
+      detachSocketFromOtherRooms(socket, roomId);
+
       // 清除重连计时器
       if (disconnectTimers.has(oldId)) {
         clearTimeout(disconnectTimers.get(oldId));
@@ -551,6 +586,9 @@ io.on('connection', (socket) => {
       p => p.name.toLowerCase() === playerName.trim().toLowerCase() && p.isConnected
     );
     if (nameExists) { socket.emit('room:error', { message: '昵称已被使用' }); return; }
+
+    // 校验全部通过后再脱离其它房间，避免加入失败时把玩家踢出原房间
+    detachSocketFromOtherRooms(socket, roomId);
 
     const player = createPlayer(socket.id, playerName);
     room.players.set(socket.id, player);
@@ -1000,7 +1038,7 @@ io.on('connection', (socket) => {
             fromName: player ? player.name : '未知',
             fromSeat: player ? player.seat : -1,
             isDead: true,
-            content: `【月之子选择】我选择 ${res.targetSeat + 1}号 ${res.targetName}`,
+            content: `【月之子声明】我选择 ${res.targetSeat + 1}号 ${res.targetName}`,
             channel: 'public',
             timestamp: Date.now()
           };
@@ -1012,6 +1050,26 @@ io.on('connection', (socket) => {
             fromName: room.players.get(socket.id).name,
             abilityName, targetId, result: res
           });
+        } else if (abilityName === 'slayer') {
+          // 杀手技能以公聊消息气泡公布「选择了谁」，不公布结果
+          // （是否击杀恶魔由后续死亡信息体现，消息本身不透露成败）
+          // 文案与公开公告（ANNOUNCE_ROLE_PRESETS.slayer）完全一致：
+          // 真伪不可区分，与造谣者声明 / 月之子声明的体系保持一致
+          const player = room.players.get(socket.id);
+          const target = room.players.get(targetId);
+          const targetText = target ? `${target.seat + 1}号 ${target.name}` : '目标';
+          const slayerMsg = {
+            id: Date.now() + Math.random(),
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            fromSeat: player ? player.seat : -1,
+            isDead: player ? !player.isAlive : false,
+            content: `【杀手声明】我选择 ${targetText}`,
+            channel: 'public',
+            timestamp: Date.now()
+          };
+          io.to(roomId).emit('chat:message', slayerMsg);
+          if (room.gameState.chatLog) room.gameState.chatLog.push(slayerMsg);
         } else {
           io.to(roomId).emit('game:abilityUsed', {
             fromId: socket.id,
@@ -1182,10 +1240,11 @@ ${playerInfo}
   });
 
   // 公开公告（伪装身份用：仅作为公聊消息展示，不触发任何角色能力）
-  // 仅允许真实具备公开公告能力的角色，前缀与该角色真实公告格式一致
+  // 按剧本列出可供伪装的公开角色，前缀与其真实公告格式一致
   const ANNOUNCE_ROLE_PRESETS = {
+    slayer: { prefix: '【杀手声明】我选择 ', maxLen: 60, script: 'tb' },
     gossip: { prefix: '【造谣者声明】', maxLen: 120, script: 'bmr' },
-    moonchild: { prefix: '【月之子选择】我选择 ', maxLen: 60, script: 'bmr' }
+    moonchild: { prefix: '【月之子声明】我选择 ', maxLen: 60, script: 'bmr' }
   };
   socket.on('chat:announce', ({ roleId, text, channel }) => {
     const preset = ANNOUNCE_ROLE_PRESETS[roleId];
@@ -1215,7 +1274,7 @@ ${playerInfo}
     }
     room.announceCooldown[socket.id] = now;
 
-    // 与真实公开公告（造谣者声明 / 月之子选择）保持完全一致的消息结构：
+    // 与真实公开公告（造谣者声明 / 月之子声明）保持完全一致的消息结构：
     // 带发送者的公聊消息，不使用 isSystem 广播样式
     const annMsg = {
       id: Date.now() + Math.random(),
