@@ -560,6 +560,24 @@ body.resizing-active * {
   filter: grayscale(0.5);
   cursor: not-allowed;
 }
+/* 等待服务端（裁判 AI）响应时的加载提示：文字前置旋转圈 */
+.wx-role-abilities .btn-loading-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: roleAbilitySpin 0.8s linear infinite;
+}
+@keyframes roleAbilitySpin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wx-role-abilities .btn-loading-spinner { animation-duration: 2s; }
+}
 .wx-member .confirm-bar {
   margin: 8px 12px 0;
   padding: 10px;

@@ -580,23 +580,36 @@ class Gossip extends Role {
 
     const cleanStatement = statement.trim().substring(0, 200);
 
+    // 先预留当天声明机会与声明内容，等裁判（AI）判定请求成功后再正式生效
     player.abilityState.gossipDay = gameState.dayCount;
     player.abilityState.gossipStatement = cleanStatement;
     player.abilityState.gossipResult = null;
     player.abilityState.gossipAIPending = true;
 
-    engine.setPlayerPrivateInfo(player, {
-      type: 'gossip',
-      day: gameState.dayCount,
-      statement: cleanStatement,
-      message: `你发表了声明："${cleanStatement}"，等待裁判判断真伪...`
-    });
-
     return {
       success: true,
       statement: cleanStatement,
-      message: '声明已公布，等待裁判判断真伪...'
+      message: '声明已提交，等待裁判确认...'
     };
+  }
+
+  // 裁判（AI）判定请求成功 → 声明正式生效，结果（本阶段提示）只发给造谣者本人
+  confirmDayAbility(gameState, player, engine) {
+    const statement = player.abilityState.gossipStatement || '';
+    engine.setPlayerPrivateInfo(player, {
+      type: 'gossip',
+      day: gameState.dayCount,
+      statement,
+      message: `你发表了声明："${statement}"，裁判已记录，今晚判定真伪...`
+    });
+  }
+
+  // 裁判（AI）判定请求失败 → 回滚本次声明，允许造谣者重新发动
+  cancelDayAbility(gameState, player) {
+    player.abilityState.gossipDay = null;
+    player.abilityState.gossipStatement = null;
+    player.abilityState.gossipResult = null;
+    player.abilityState.gossipAIPending = false;
   }
 
   resolveNight(gameState, player, engine) {

@@ -1021,7 +1021,7 @@ io.on('connection', (socket) => {
   });
 
   // 使用白天技能
-  socket.on('day:useAbility', ({ abilityName, targetId, extra, statement }) => {
+  socket.on('day:useAbility', async ({ abilityName, targetId, extra, statement }) => {
     const result = getPlayerRoom(socket.id);
     if (!result || !result.room.gameStarted) return;
     const { roomId, room } = result;
@@ -1032,32 +1032,61 @@ io.on('connection', (socket) => {
         param = statement || extra;
       }
       const res = engine.processDayAbility(socket.id, abilityName, targetId, param);
+
+      // 造谣者声明：无论成功还是失败，结果只提示给造谣者本人。
+      // 裁判（AI）判定请求失败时回滚本次声明，允许玩家重新发动；
+      // 判定请求成功后才公开声明内容（不公开真伪），并禁用按钮。
+      if (abilityName === 'gossip') {
+        if (!res.success) {
+          socket.emit('gossip:result', { success: false, message: res.message });
+          return;
+        }
+        const player = room.players.get(socket.id);
+        const judge = await judgeGossipByAI(engine, roomId, socket.id, res.statement);
+        if (!judge.ok) {
+          engine.cancelDayAbility(socket.id);
+          socket.emit('gossip:result', {
+            success: false,
+            // 判定服务异常：把原文回传，前端重新填写时自动回填
+            retryable: true,
+            statement: res.statement,
+            message: '声明发表失败：裁判判定服务暂时不可用，请稍后重新发动'
+          });
+          return;
+        }
+        engine.confirmDayAbility(socket.id);
+
+        const gossipMsg = {
+          id: Date.now() + Math.random(),
+          fromId: socket.id,
+          fromName: player ? player.name : '未知',
+          fromSeat: player ? player.seat : -1,
+          isDead: player ? !player.isAlive : false,
+          content: `【造谣者声明】${res.statement}`,
+          channel: 'public',
+          timestamp: Date.now()
+        };
+        io.to(roomId).emit('chat:message', gossipMsg);
+        if (room.gameState.chatLog) room.gameState.chatLog.push(gossipMsg);
+
+        socket.emit('gossip:result', {
+          success: true,
+          statement: res.statement,
+          message: '声明已发表，裁判将于今晚判定真伪'
+        });
+        socket.emit('game:abilityUsed', {
+          fromId: socket.id,
+          fromName: player ? player.name : '未知',
+          abilityName, targetId, result: res
+        });
+        broadcastRoomState(roomId);
+        return;
+      }
+
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
-        if (abilityName === 'gossip' && res.statement) {
-          const player = room.players.get(socket.id);
-          const gossipMsg = {
-            id: Date.now() + Math.random(),
-            fromId: socket.id,
-            fromName: player ? player.name : '未知',
-            fromSeat: player ? player.seat : -1,
-            isDead: player ? !player.isAlive : false,
-            content: `【造谣者声明】${res.statement}`,
-            channel: 'public',
-            timestamp: Date.now()
-          };
-          io.to(roomId).emit('chat:message', gossipMsg);
-          if (room.gameState.chatLog) room.gameState.chatLog.push(gossipMsg);
-
-          judgeGossipByAI(engine, roomId, socket.id, res.statement);
-
-          socket.emit('game:abilityUsed', {
-            fromId: socket.id,
-            fromName: player ? player.name : '未知',
-            abilityName, targetId, result: res
-          });
-        } else if (abilityName === 'moonchild' && res.targetId) {
+        if (abilityName === 'moonchild' && res.targetId) {
           // 月之子公开选择：所有人都能看到
           const player = room.players.get(socket.id);
           const moonMsg = {
@@ -1111,6 +1140,7 @@ io.on('connection', (socket) => {
   });
 
   // AI判断造谣者声明真伪
+  // 返回 { ok: true, isTrue } 表示判定成功；{ ok: false } 表示请求失败（由调用方回滚声明）
   async function judgeGossipByAI(engine, roomId, playerId, statement) {
     try {
       const room = engine.room;
@@ -1128,29 +1158,35 @@ io.on('connection', (socket) => {
 
       const systemPrompt = `你是血染钟楼游戏的严格裁判。你必须判断造谣者的声明是否为"客观事实"。
 
-【当前游戏状态 - 这是你判断的唯一事实依据】
+【判断依据分两类】
+一、与游戏相关的声明 → 以下游戏状态是你唯一的事实依据
 在场玩家及真实角色（你全知全能）：
 ${playerInfo}
 
 已死亡玩家：${deadInfo}
 当前是第${gs.dayCount}天，第${gs.nightCount}夜。
 
+二、与游戏无关的通用常识 → 使用真实世界的客观事实判断，无需游戏状态证实
+（如"1+1=2""水在标准大气压下100摄氏度沸腾""地球绕着太阳转"为真；"1+1=3""地球是平的"为假）
+
 【严格判断规则 - 默认返回false，只有完全满足以下所有条件才返回true】
 判定为true的必要条件（缺一不可）：
-1. 声明是关于"已经发生的事实"或"当前确定的状态"，而非未来预测
-2. 声明中的每一个细节都能被上述游戏状态100%证实，没有任何歧义
-3. 声明不包含"可能""大概""也许""好像""应该"等推测性词语
-4. 声明提到的角色确实存在于当前游戏中
-5. 声明提到的玩家确实在场
-6. 声明不是疑问句、感叹句或无意义内容
+1. 声明是关于"客观事实"的陈述，而非未来预测、主观感受或猜测
+2. 声明不包含"可能""大概""也许""好像""应该"等推测性词语
+3. 与游戏相关的声明：其中每一个细节都能被上述游戏状态100%证实，没有任何歧义
+4. 与游戏无关的声明：必须是真实世界公认的客观事实（数学、科学、生活常识等）
+5. 声明提到的角色确实存在于当前游戏中，提到的玩家确实在场
+6. 声明不是疑问句、感叹句、乱码或无意义内容
 
 以下情况一律判定为false：
-- 对未来的预测（如"今晚恶魔会死""明天3号会被提名"）
+- 对未来的预测（如"今晚恶魔会死""明天3号会被提名""明天会下雨"）
 - 主观推测或猜测（如"我觉得5号是恶魔""2号可能是下毒者"）
 - 模糊表述或信息不足（如"有人是邪恶的""场上有男爵"）
-- 无意义的乱讲、玩笑、与游戏无关的内容
-- 涉及不在当前剧本中的角色
-- 涉及你无法从上述状态中确认的信息（如"3号昨晚被僧侣保护了"）
+- 无意义的乱讲、乱码、脏话、纯情绪宣泄
+- 与游戏相关的声明中，涉及不在当前剧本中的角色
+- 与游戏相关的声明中，涉及你无法从上述状态中确认的信息（如"3号昨晚被僧侣保护了"）
+- 与游戏无关，但无法被公认为客观事实的内容（个人经历、私人信息、有争议或尚未定论的说法，如"我昨晚吃了面条"）
+- 客观上是错误的通用常识（如"1+1=3""太阳绕着地球转"）
 - 自指的元游戏陈述（如"我是造谣者""我说的是真话"）
 - 多重陈述中有任何一部分为假，整体即为false
 
@@ -1171,23 +1207,51 @@ ${playerInfo}
             { role: 'user', content: `造谣者声明：${statement}\n\n这个声明是真的吗？请只回答true或false。` }
           ],
           temperature: 0.1,
-          max_tokens: 10,
+          // glm-4.7 系列默认开启思考（thinking），思考内容同样占用 max_tokens 预算，
+          // 预算过小会导致 message.content 为空（曾用 max_tokens:10 直接判不出结果）。
+          // 真伪判定只需输出一个单词，关闭思考并留足预算即可稳定拿到 true/false。
+          thinking: { type: 'disabled' },
+          max_tokens: 2048,
           stream: false
-        })
+        }),
+        // 超时按请求失败处理，避免请求悬挂导致声明一直处于判定中
+        signal: AbortSignal.timeout(20000)
       });
 
       if (!response.ok) {
-        console.log('[Gossip AI] API请求失败:', response.status);
-        const player = room.players.get(playerId);
-        if (player) {
-          player.abilityState.gossipResult = false;
-          player.abilityState.gossipAIPending = false;
+        // 解析服务端返回的具体失败原因，便于排查
+        let detail = '';
+        try {
+          const errText = await response.text();
+          try {
+            const errJson = JSON.parse(errText);
+            detail = errJson?.error?.message || errJson?.error?.code || errText;
+          } catch (e) {
+            detail = errText;
+          }
+        } catch (e) {
+          detail = '';
         }
-        return;
+        console.log('[Gossip AI] API请求失败:', response.status, detail);
+        return { ok: false, reason: `HTTP ${response.status}${detail ? ': ' + detail : ''}` };
       }
 
       const data = await response.json();
-      const aiReply = (data.choices?.[0]?.message?.content || '').trim().toLowerCase();
+      const choice = data.choices?.[0] || {};
+      const aiReply = String(choice.message?.content || '').trim().toLowerCase();
+      const finishReason = choice.finish_reason || '';
+
+      // content 为空或被截断、以及不是 true/false 的返回，都视为「判定失败」，
+      // 交由调用方回滚并允许玩家重新发动，绝不能当作「声明为假」处理
+      if (!aiReply) {
+        console.error(`[Gossip AI] 返回内容为空（finish_reason=${finishReason}, usage=${JSON.stringify(data.usage || {})}）`);
+        return { ok: false, reason: `空响应(finish_reason=${finishReason})` };
+      }
+      if (!aiReply.startsWith('true') && !aiReply.startsWith('false')) {
+        console.error(`[Gossip AI] 返回内容无法解析:"${aiReply}"（finish_reason=${finishReason}）`);
+        return { ok: false, reason: `无法解析:${aiReply.slice(0, 20)}` };
+      }
+
       const isTrue = aiReply.startsWith('true');
       console.log(`[Gossip AI] 声明:"${statement}" AI判断:${aiReply} => ${isTrue}`);
 
@@ -1196,14 +1260,10 @@ ${playerInfo}
         player.abilityState.gossipResult = isTrue;
         player.abilityState.gossipAIPending = false;
       }
+      return { ok: true, isTrue };
     } catch(err) {
       console.error('[Gossip AI] 判断错误:', err.message);
-      const room = engine.room;
-      const player = room.players.get(playerId);
-      if (player) {
-        player.abilityState.gossipResult = false;
-        player.abilityState.gossipAIPending = false;
-      }
+      return { ok: false, reason: err.message };
     }
   }
 

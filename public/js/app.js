@@ -20,6 +20,9 @@ let pendingManualJoin = false; // 是否由用户手动点击“加入房间”�
 let hasLeftRoom = false;
 let _nightDebugClicks = 0;
 let _nightDebugTimer = null;
+let gossipPending = false;      // 造谣者声明等待裁判判定中（期间禁止重复发动）
+let gossipPendingTimer = null;  // 等待兜底定时器（服务端长时间无响应时恢复可点击）
+let gossipRetryStatement = '';  // 判定服务异常导致失败的声明原文，重新发动时自动回填
 
 // ========== 初始化 ==========
 window.addEventListener('DOMContentLoaded', () => {
@@ -256,6 +259,18 @@ function initSocketEvents() {
         checkReconnectInfo();
       }
     }
+  });
+
+  // 造谣者声明结果：只发给造谣者本人（失败可重新发动，成功后按钮禁用）
+  socket.on('gossip:result', ({ success, message, retryable, statement } = {}) => {
+    if (hasLeftRoom) return;
+    clearGossipPending();
+    // 判定服务异常导致的失败：记住原文，玩家重新发动时自动回填
+    gossipRetryStatement = (success || !retryable) ? '' : (statement || '');
+    if (message) showToast(message);
+    // 成功后由紧随其后的房间状态广播刷新（按钮变为「今日已发表」）；
+    // 失败时服务端不会广播状态，需立即刷新以恢复可点击
+    if (!success && currentState) renderGameState(currentState);
   });
 
   // 概率设置相关事件
@@ -632,6 +647,8 @@ function showGameView() {
 function backToHome() {
   if (hasLeftRoom) return;
   hasLeftRoom = true;
+  clearGossipPending();
+  gossipRetryStatement = '';
 
   // 离开语音频道
   if (VoiceManager.isJoined) {
@@ -1683,11 +1700,24 @@ function renderRoleCard(state) {
   const todayGossipUsed = state.privateInfoHistory && state.privateInfoHistory.some(
     info => info.type === 'gossip' && info.day === state.dayCount
   );
-  if (role.id === 'gossip' && me.isAlive && !todayGossipUsed &&
+  if (role.id === 'gossip' && me.isAlive &&
       (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE')) {
+    // 判定中 / 今天已成功发表 → 禁用；发表失败（裁判判定服务不可用）后恢复可点击
+    const gossipDisabled = gossipPending || todayGossipUsed;
     gossipBtn.style.display = 'block';
+    gossipBtn.disabled = gossipDisabled;
+    gossipBtn.classList.toggle('disabled', gossipDisabled);
+    if (gossipPending) {
+      // 请求进行中：旋转圈 + 文案提示，避免玩家误以为无响应
+      gossipBtn.innerHTML = '<span class="btn-loading-spinner"></span>造谣者：判定中...';
+    } else {
+      gossipBtn.textContent = todayGossipUsed ? '造谣者：今日已发表' : '造谣者：发表声明';
+    }
   } else {
     gossipBtn.style.display = 'none';
+    gossipBtn.disabled = false;
+    gossipBtn.classList.remove('disabled');
+    gossipBtn.textContent = '造谣者：发表声明';
   }
 
   const moonchildBtn = $('moonchildBtn');
@@ -2153,9 +2183,14 @@ async function useSlayerAbility() {
 }
 
 async function useGossipAbility() {
+  if (gossipPending) return; // 等待裁判判定结果期间不可重复发动
+  const retryStatement = gossipRetryStatement;
   const statement = await showTextInput('造谣者：发表公开声明', {
     placeholder: '输入你的声明（2-200字）...',
-    description: '规则：今晚裁判会判断你的声明是否为真。若声明为真且你未中毒/醉酒，今晚一名玩家会死亡。',
+    description: retryStatement
+      ? '上次声明因裁判判定服务异常未能发表，已自动填入原文，可直接重新发表。<br>规则：今晚裁判会判断你的声明是否为真。若声明为真且你未中毒/醉酒，今晚一名玩家会死亡。'
+      : '规则：今晚裁判会判断你的声明是否为真。若声明为真且你未中毒/醉酒，今晚一名玩家会死亡。',
+    defaultValue: retryStatement,
     maxLength: 200,
     minLength: 2,
     multiline: true,
@@ -2164,7 +2199,29 @@ async function useGossipAbility() {
     cancelText: '取消'
   });
   if (statement) {
+    startGossipPending();
     socket.emit('day:useAbility', { abilityName: 'gossip', statement: statement });
+  }
+}
+
+// 声明提交后进入「判定中」：按钮禁用，由服务端下发的 gossip:result 决定恢复或保持禁用
+function startGossipPending() {
+  gossipPending = true;
+  if (gossipPendingTimer) clearTimeout(gossipPendingTimer);
+  gossipPendingTimer = setTimeout(() => {
+    gossipPendingTimer = null;
+    if (!gossipPending) return;
+    gossipPending = false;
+    if (currentState) renderGameState(currentState);
+  }, 30000);
+  if (currentState) renderGameState(currentState);
+}
+
+function clearGossipPending() {
+  gossipPending = false;
+  if (gossipPendingTimer) {
+    clearTimeout(gossipPendingTimer);
+    gossipPendingTimer = null;
   }
 }
 

@@ -539,6 +539,20 @@ class GameEngine {
     return { success: false, message: '该角色无此技能' };
   }
 
+  // 白天技能在异步（裁判 AI）判定请求成功后的确认（目前仅造谣者需要）
+  confirmDayAbility(playerId) {
+    const player = this.room.players.get(playerId);
+    if (!player || !player.role || typeof player.role.confirmDayAbility !== 'function') return;
+    player.role.confirmDayAbility(this.room.gameState, player, this);
+  }
+
+  // 白天技能在异步（裁判 AI）判定请求失败后的回滚，回滚后玩家可重新发动
+  cancelDayAbility(playerId) {
+    const player = this.room.players.get(playerId);
+    if (!player || !player.role || typeof player.role.cancelDayAbility !== 'function') return;
+    player.role.cancelDayAbility(this.room.gameState, player, this);
+  }
+
   endDefense(playerId) {
     return this.voteManager.endDefense(playerId);
   }

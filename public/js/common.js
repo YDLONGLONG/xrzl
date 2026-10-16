@@ -188,8 +188,8 @@ function showTextInput(title, options = {}) {
         ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#7f7f7f;">${options.description}</div>` : ''}
         <div class="confirm-input-area">
           ${multiline
-            ? `<textarea class="confirm-textarea" placeholder="${placeholder}" maxlength="${maxLength}" rows="3">${defaultValue}</textarea>`
-            : `<input type="text" class="confirm-input" placeholder="${placeholder}" maxlength="${maxLength}" value="${defaultValue}">`
+            ? `<textarea class="confirm-textarea" placeholder="${placeholder}" maxlength="${maxLength}" rows="3"></textarea>`
+            : `<input type="text" class="confirm-input" placeholder="${placeholder}" maxlength="${maxLength}">`
           }
           <div class="confirm-input-counter" style="text-align:right;font-size:11px;color:#999999;margin-top:4px;">
             <span class="confirm-counter-num">0</span>/${maxLength}
@@ -209,13 +209,23 @@ function showTextInput(title, options = {}) {
     const inputEl = overlay.querySelector(multiline ? '.confirm-textarea' : '.confirm-input');
     const counterNum = overlay.querySelector('.confirm-counter-num');
 
+    // 默认值用赋值方式写入，避免用户输入（如造谣者声明的重试回填）破坏弹窗结构
+    if (defaultValue) inputEl.value = defaultValue;
+
     const updateCounter = () => {
       if (counterNum) counterNum.textContent = inputEl.value.length;
     };
     updateCounter();
     inputEl.addEventListener('input', updateCounter);
 
-    setTimeout(() => inputEl.focus(), 100);
+    setTimeout(() => {
+      inputEl.focus();
+      // 有回填内容时光标置于末尾，便于直接补充或修改
+      if (defaultValue && inputEl.setSelectionRange) {
+        const len = inputEl.value.length;
+        inputEl.setSelectionRange(len, len);
+      }
+    }, 100);
 
     const close = (result) => {
       overlay.classList.add('confirm-closing');
