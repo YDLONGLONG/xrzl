@@ -687,6 +687,7 @@ function backToHome() {
   isAiThinking = false;
   customRoleMode = false;
   customRoleMap = {};
+  customGfDelta = 1;
   isGodView = false;
   godState = null;
   isReconnecting = false;
@@ -964,6 +965,7 @@ function toggleReady() {
 
 let customRoleMode = false;  // 是否启用自定义角色分配
 let customRoleMap = {};      // seat -> roleId
+let customGfDelta = 1;       // 教父「外来者±1」方向：1 = 外来者+1/村民-1，-1 = 外来者-1/村民+1
 
 function startGame() {
   const seatedPlayers = (currentState.players || []).filter(p => p.seat !== -1);
@@ -980,7 +982,11 @@ function startGame() {
         roleAssignments[p.seat] = customRoleMap[p.seat];
       }
     });
-    socket.emit('game:start', { customRoles: roleAssignments });
+    // 教父在场时把「外来者±1」的方向一并下发给服务端，保证与前端校验一致
+    socket.emit('game:start', {
+      customRoles: roleAssignments,
+      godfatherDelta: customGfDelta
+    });
   } else {
     socket.emit('game:start', {});
   }
@@ -4129,24 +4135,39 @@ const ROLE_COMPOSITION_TABLE = [
   [13, 9, 0, 3, 1], [14, 9, 1, 3, 1], [15, 9, 2, 3, 1]
 ];
 
-function getComp(playerCount, hasSetupChar, scriptId) {
+// gfDelta：教父「外来者±1」方向（1 / -1），默认取自定义面板当前选择
+function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
   const entry = ROLE_COMPOSITION_TABLE.find(c => c[0] === playerCount);
   if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
   let t = entry[1], o = entry[2];
   const setupType = (scriptId === 'bmr') ? 'godfather' : 'baron';
+  let effectiveDelta = null;
   if (hasSetupChar) {
     if (setupType === 'baron') {
       t -= 2; o += 2;
     } else if (setupType === 'godfather') {
-      // 教父：外来者±1（服务端随机），前端使用基准值显示
-      // 验证时单独允许 ±1 的容差
+      // 教父：外来者+1或-1（自定义模式下由房主明确选择，服务端按同一方向分配）
+      let delta = (gfDelta === -1) ? -1 : 1;
+      if (o + delta < 0) delta = 0;  // 基准外来者为 0 时 -1 无处可减，按不变化处理
+      o += delta;
+      t -= delta;
+      effectiveDelta = delta;
     }
   }
-  return { townsfolk: t, outsider: o, minion: entry[3], demon: entry[4], setupType };
+  return {
+    townsfolk: t,
+    outsider: o,
+    minion: entry[3],
+    demon: entry[4],
+    setupType,
+    baseOutsider: entry[2],   // 基准外来者数：为 0 时无法 -1
+    godfatherDelta: (hasSetupChar && setupType === 'godfather') ? ((gfDelta === -1) ? -1 : 1) : null,
+    effectiveDelta             // 实际生效的 ±1 方向（0 = 不变化）
+  };
 }
 
 // 验证自定义角色配置，返回 { valid: boolean, errors: string[], comp: object, counts: object }
-function validateCustomRoles(customRoleMap, playerCount, scriptId) {
+function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = customGfDelta) {
   const script = scriptId || 'tb';
   const setupCharId = (script === 'bmr') ? 'godfather' : 'baron';
   const setupCharName = (script === 'bmr') ? '教父' : '男爵';
@@ -4164,7 +4185,7 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId) {
 
   // 2. 确定是否有 setup 角色（TB:男爵 / BMR:教父）
   const hasSetupChar = assigned.includes(setupCharId);
-  const comp = getComp(playerCount, hasSetupChar, script);
+  const comp = getComp(playerCount, hasSetupChar, script, gfDelta);
 
   // 3. 按类别统计已指定角色
   const counts = { townsfolk: 0, outsider: 0, minion: 0, demon: 0 };
@@ -4174,10 +4195,10 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId) {
   });
 
   // 4. 检查各类别是否超限
-  // 对于教父，允许 ±1 容差（实际由服务端随机决定）
-  const outsiderTolerance = (hasSetupChar && comp.setupType === 'godfather') ? 1 : 0;
-  const maxOutsider = comp.outsider + outsiderTolerance;
-  const maxTownsfolk = comp.townsfolk + outsiderTolerance;
+  // 教父的「外来者±1」已在 getComp 中按房主选择的方向落到具体数值上，此处不再放宽
+  const gfTag = (hasSetupChar && comp.setupType === 'godfather' && comp.effectiveDelta !== 0)
+    ? `${setupCharName}外来者${comp.effectiveDelta > 0 ? '+1' : '-1'}`
+    : '';
 
   if (counts.demon > comp.demon) {
     errors.push(`恶魔最多 ${comp.demon} 名，已指定 ${counts.demon} 名`);
@@ -4185,19 +4206,19 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId) {
   if (counts.minion > comp.minion) {
     errors.push(`爪牙最多 ${comp.minion} 名${hasSetupChar ? '' : `（不含${setupCharName}）`}，已指定 ${counts.minion} 名`);
   }
-  if (counts.outsider > maxOutsider) {
-    errors.push(`外来者最多 ${maxOutsider} 名${hasSetupChar ? `（含${setupCharName}${comp.setupType === 'godfather' ? '±1' : '加成'}）` : ''}，已指定 ${counts.outsider} 名`);
+  if (counts.outsider > comp.outsider) {
+    errors.push(`外来者最多 ${comp.outsider} 名${gfTag ? `（含${gfTag}）` : ''}，已指定 ${counts.outsider} 名`);
   }
-  if (counts.townsfolk > maxTownsfolk) {
-    errors.push(`村民最多 ${maxTownsfolk} 名${hasSetupChar ? `（${setupCharName}${comp.setupType === 'godfather' ? '±1' : '-2'}）` : ''}，已指定 ${counts.townsfolk} 名`);
+  if (counts.townsfolk > comp.townsfolk) {
+    errors.push(`村民最多 ${comp.townsfolk} 名${gfTag ? `（含${gfTag}）` : ''}，已指定 ${counts.townsfolk} 名`);
   }
 
   // 5. 检查剩余空位是否足够填充必选角色
   const remaining = playerCount - assigned.length;
   const needDemon = Math.max(0, comp.demon - counts.demon);
   const needMinion = Math.max(0, comp.minion - counts.minion);
-  const needOutsider = Math.max(0, maxOutsider - counts.outsider);
-  const needTownsfolk = Math.max(0, maxTownsfolk - counts.townsfolk);
+  const needOutsider = Math.max(0, comp.outsider - counts.outsider);
+  const needTownsfolk = Math.max(0, comp.townsfolk - counts.townsfolk);
   const totalNeed = needDemon + needMinion + needOutsider + needTownsfolk;
   if (totalNeed > remaining) {
     errors.push(`剩余 ${remaining} 个空位不足以填满配置（还需 ${totalNeed} 个角色位置）`);
@@ -4330,8 +4351,33 @@ function renderCustomRoleList() {
     </div>`;
   });
 
+  // 教父「外来者±1」方向选择（切换后下方的配置概览同步刷新）
+  const isGodfather = v.hasSetupChar && v.comp.setupType === 'godfather';
+  if (isGodfather) {
+    const delta = v.comp.godfatherDelta;           // 房主选择的方向（1 / -1）
+    const noMinus = v.comp.baseOutsider <= 0;      // 基准外来者为 0 时 -1 等同不变化
+    html += `<div style="margin-top:10px; padding:10px; background:rgba(250,81,81,0.08); border:1px solid rgba(250,81,81,0.25); border-radius:6px; font-size:12px;">
+      <div style="color:#FA5151; font-weight:bold; margin-bottom:6px;">教父配置：外来者 +1 或 -1</div>
+      <label style="cursor:pointer; color:#191919; margin-right:16px; white-space:nowrap;">
+        <input type="radio" name="gfDeltaRadio" value="1" ${delta === 1 ? 'checked' : ''} onchange="setGodfatherDelta(1)">
+        外来者 +1（村民 -1）
+      </label>
+      <label style="cursor:pointer; color:#191919; white-space:nowrap;">
+        <input type="radio" name="gfDeltaRadio" value="-1" ${delta === -1 ? 'checked' : ''} onchange="setGodfatherDelta(-1)">
+        外来者 -1（村民 +1）
+      </label>
+      ${noMinus ? '<div style="color:#8c8c8c; margin-top:4px;">当前人数下外来者基准为 0，选择 -1 时人数配置不变</div>' : ''}
+    </div>`;
+  }
+
   // 配置概览面板
-  const setupTag = v.hasSetupChar ? ` <span style="color:#FA5151;">(${v.setupCharName}在场${v.comp.setupType === 'godfather' ? ': 外来者±1' : ': 村民-2, 外来者+2'})</span>` : '';
+  const setupTag = v.hasSetupChar
+    ? ` <span style="color:#FA5151;">(${v.setupCharName}在场: ${v.comp.setupType === 'godfather'
+        ? (v.comp.effectiveDelta === 1 ? '外来者+1, 村民-1'
+          : v.comp.effectiveDelta === -1 ? '外来者-1, 村民+1'
+          : '外来者±1 不生效（基准外来者为 0）')
+        : '村民-2, 外来者+2'})</span>`
+    : '';
   html += `<div style="margin-top:10px; padding:10px; background:rgba(0,0,0,0.08); border-radius:6px; font-size:12px;">
     <div style="color:#07C160; font-weight:bold; margin-bottom:6px;">当前人数配置 (${playerCount}人)${setupTag}</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
@@ -4374,6 +4420,12 @@ function setCustomRole(seat, roleId) {
   renderCustomRoleList();
 }
 
+// 教父「外来者±1」方向：切换后立即按新方向重算人数配置
+function setGodfatherDelta(delta) {
+  customGfDelta = (delta === -1) ? -1 : 1;
+  renderCustomRoleList();
+}
+
 function applyCustomRoles() {
   const seated = (currentState.players || []).filter(p => p.seat !== -1);
   const playerCount = seated.length;
@@ -4404,6 +4456,7 @@ function applyCustomRoles() {
 function clearCustomRoles() {
   customRoleMap = {};
   customRoleMode = false;
+  customGfDelta = 1;
   renderCustomRoleList();
 }
 

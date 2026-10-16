@@ -191,7 +191,7 @@ class RoleAllocator {
     });
   }
 
-  allocateCustom(seatedPlayers, customRoles) {
+  allocateCustom(seatedPlayers, customRoles, options = {}) {
     const playerCount = seatedPlayers.length;
     const sc = this.scriptConfig;
     const setupCharId = sc.setupCharacterId;
@@ -217,7 +217,12 @@ class RoleAllocator {
     });
 
     const hasSetupChar = assignedRoleIds.includes(setupCharId);
-    const composition = getRoleComposition(playerCount, hasSetupChar, setupType);
+    // 教父的「外来者 ±1」由房主在自定义角色面板中指定（未指定时随机）
+    const setupDelta = (hasSetupChar && setupType === 'godfather'
+      && (options.godfatherDelta === 1 || options.godfatherDelta === -1))
+      ? options.godfatherDelta
+      : null;
+    const composition = getRoleComposition(playerCount, hasSetupChar, setupType, setupDelta);
 
     const counts = {
       townsfolk: assignedRoleIds.filter(r => sc.townsfolkRoles.includes(r)).length,
@@ -286,7 +291,11 @@ class RoleAllocator {
       const role = this.createRoleInstance(rid);
       return `${Number(seat)+1}号→${role ? role.name : rid}`;
     }).join(', ');
-    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；${setupCharId}=${hasSetupChar ? '是' : '否'}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
+    const appliedDelta = composition.setupDelta;
+    const deltaText = (appliedDelta === 1) ? '（外来者+1, 村民-1）'
+      : (appliedDelta === -1) ? '（外来者-1, 村民+1）'
+      : '（外来者±1 不生效：基准外来者为 0）';
+    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；${setupCharId}=${hasSetupChar ? '是' : '否'}${hasSetupChar && setupType === 'godfather' ? deltaText : ''}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
   }
 
   // 设置邪恶阵营信息

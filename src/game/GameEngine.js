@@ -258,7 +258,7 @@ class GameEngine {
     }
   }
 
-  startGame(customRoles = {}) {
+  startGame(customRoles = {}, options = {}) {
     this.room.startedAt = new Date();
     const seatedPlayers = getSeatedPlayers(this.room);
     if (seatedPlayers.length < this.room.minPlayers) {
@@ -268,7 +268,7 @@ class GameEngine {
     const hasCustom = Object.keys(customRoles).length > 0;
     if (hasCustom) {
       // 自定义角色分配
-      this.roleAllocator.allocateCustom(seatedPlayers, customRoles);
+      this.roleAllocator.allocateCustom(seatedPlayers, customRoles, options);
     } else {
       // 随机分配身份
       this.roleAllocator.allocate(seatedPlayers);

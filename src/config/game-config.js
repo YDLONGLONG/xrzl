@@ -16,23 +16,32 @@ const ROLE_COMPOSITION = [
   [15, 9, 2, 3, 1]
 ];
 
-function getRoleComposition(playerCount, hasSetupChar, setupType = 'baron') {
+// setupDelta：教父的「外来者 ±1」方向。
+// 传入 1 / -1 时按房主（自定义角色模式）的指定值执行，否则随机。
+// 返回值含 setupDelta（实际生效的方向：1 / -1 / 0 表示不变化），便于日志与前端展示。
+function getRoleComposition(playerCount, hasSetupChar, setupType = 'baron', setupDelta = null) {
   const entry = ROLE_COMPOSITION.find(c => c[0] === playerCount);
-  if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
+  if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1, setupDelta: null };
   let townsfolk = entry[1];
   let outsider = entry[2];
+  let appliedDelta = null;
   if (hasSetupChar) {
     if (setupType === 'baron') {
       townsfolk -= 2;
       outsider += 2;
     } else if (setupType === 'godfather') {
-      // 教父：外来者+1或-1
-      const delta = Math.random() < 0.5 ? 1 : -1;
-      outsider = Math.max(0, outsider + delta);
-      townsfolk = Math.max(0, townsfolk - delta);
+      // 教父：外来者+1或-1。外来者基准为 0 时 -1 无处可减，
+      // 此时按「不变化」处理（否则村民会被凭空 +1，总人数对不上）。
+      let delta = (setupDelta === 1 || setupDelta === -1)
+        ? setupDelta
+        : (Math.random() < 0.5 ? 1 : -1);
+      if (outsider + delta < 0) delta = 0;
+      outsider += delta;
+      townsfolk -= delta;
+      appliedDelta = delta;
     }
   }
-  return { townsfolk, outsider, minion: entry[3], demon: entry[4] };
+  return { townsfolk, outsider, minion: entry[3], demon: entry[4], setupDelta: appliedDelta };
 }
 
 // ==================== 灾祸之酿 (TB) ====================

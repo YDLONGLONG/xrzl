@@ -907,12 +907,16 @@ io.on('connection', (socket) => {
     }
 
     const customRoles = data.customRoles || {};
+    // 教父「外来者 ±1」：自定义角色模式下由房主指定，缺省时服务端随机
+    const godfatherDelta = (data.godfatherDelta === 1 || data.godfatherDelta === -1)
+      ? data.godfatherDelta
+      : null;
     const engine = new GameEngine(room, io, (allRoles) => {
       saveGameHistory(room, engine, allRoles);
     });
     gameEngines.set(roomId, engine);
     room.gameStarted = true;
-    engine.startGame(customRoles);
+    engine.startGame(customRoles, { godfatherDelta });
     broadcastRoomState(roomId);
   });
 
