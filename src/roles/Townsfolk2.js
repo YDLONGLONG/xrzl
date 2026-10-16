@@ -532,13 +532,13 @@ class Gambler extends Role {
         message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜对了！`
       });
     } else {
+      // 猜错时不向赌徒透露目标的真实身份（真实身份只写入上帝视角行动日志）
       engine.setPlayerPrivateInfo(player, {
         type: 'gambler',
         targetId: targetId,
         guess: guess,
         result: false,
-        realRole: realRole,
-        message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，其实TA是【${realRole}】，你死了！`
+        message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜错了，你死了！`
       });
       if (player.isAlive && !player.isProtected) {
         engine.deathManager.killPlayer(player.id, 'GAMBLER', gameState.nightCount, -1);
