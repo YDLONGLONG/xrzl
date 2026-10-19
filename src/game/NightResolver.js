@@ -728,11 +728,12 @@ class NightResolver {
         cause: p.deathNight === 0 ? 'FIRST_NIGHT' : 'DEMON'
       }));
 
+    const nightLabel = gs.nightCount === 0 ? '首夜' : `第${gs.nightCount}夜`;
     if (gs.deathsToAnnounce.length > 0) {
       const names = gs.deathsToAnnounce.map(d => `${d.seat+1}号${d.name}`).join('、');
-      this.engine.logAction('NIGHT_END', `第${gs.nightCount}夜结束，死亡玩家：${names}`, { deaths: gs.deathsToAnnounce });
+      this.engine.logAction('NIGHT_END', `${nightLabel}结束，死亡玩家：${names}`, { deaths: gs.deathsToAnnounce });
     } else {
-      this.engine.logAction('NIGHT_END', `第${gs.nightCount}夜结束，平安夜`, {});
+      this.engine.logAction('NIGHT_END', `${nightLabel}结束，平安夜`, {});
     }
 
     // 兜底：技能互相抵消可能造成长期没有任何死亡，房间会永久卡住

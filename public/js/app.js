@@ -1064,11 +1064,12 @@ function updateHeader(state) {
   let phaseText = '';
   let phaseClass = 'phase-lobby';
 
-  if (state.dayCount > 0 || state.nightCount > 0) {
-    dayTextHTML =
-      `<span class="dc-day">第${state.dayCount}天</span>` +
-      `<span class="dc-sep">/</span>` +
-      `<span class="dc-night">第${state.nightCount}夜</span>`;
+  // 顶部天数徽标只显示当前阶段对应的时间：夜晚显示夜数，白天显示天数
+  const isNightPhase = state.phase === 'FIRST_NIGHT' || state.phase === 'NIGHT' || state.phase === 'NIGHT_WAKE';
+  if (isNightPhase) {
+    dayTextHTML = `<span class="dc-night">${state.nightCount === 0 ? '首夜' : `第${state.nightCount}夜`}</span>`;
+  } else if (state.gameStarted && state.phase !== 'LOBBY') {
+    dayTextHTML = `<span class="dc-day">第${state.dayCount > 0 ? state.dayCount : 1}天</span>`;
   }
 
   switch(state.phase) {
@@ -3312,29 +3313,63 @@ function hideVictoryEffect() {
 }
 
 function showGameOverRoles(allRoles) {
-  $('gameOverPanel').style.display = 'block';
+  const panel = $('gameOverPanel');
+  const isGood = currentState.winner === 'GOOD';
+
+  // 结算数据未变化时不重复渲染，避免入场动画重播
+  const signature = `${currentState.winner}|${allRoles.map(p => `${p.seat}:${p.roleId || p.roleName}:${p.isAlive ? 1 : 0}`).join(',')}`;
+  if (panel.style.display === 'block' && panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
+
+  panel.style.display = 'block';
+  panel.classList.toggle('good', isGood);
+  panel.classList.toggle('evil', !isGood);
+
   const title = $('gameOverTitle');
   const reason = $('gameOverReason');
+  const emblem = $('gameOverEmblem');
 
-  if (currentState.winner === 'GOOD') {
-    title.textContent = '🎉 善良阵营胜利！';
-    title.style.color = '#07C160';
-  } else {
-    title.textContent = '💀 邪恶阵营胜利！';
-    title.style.color = '#FA5151';
-  }
+  title.textContent = isGood ? '善良阵营胜利' : '邪恶阵营胜利';
+  if (emblem) emblem.textContent = isGood ? '🏆' : '💀';
   reason.textContent = currentState.winReason || '';
 
+  // 结算统计：双方存活人数 + 游戏天数
+  const aliveGood = allRoles.filter(p => p.team === 'GOOD' && p.isAlive).length;
+  const aliveEvil = allRoles.filter(p => p.team !== 'GOOD' && p.isAlive).length;
+  const stats = $('gameOverStats');
+  if (stats) {
+    stats.innerHTML = `
+      <div class="go-stat">
+        <div class="go-stat-value good">${aliveGood}</div>
+        <div class="go-stat-label">善良存活</div>
+      </div>
+      <div class="go-stat">
+        <div class="go-stat-value evil">${aliveEvil}</div>
+        <div class="go-stat-label">邪恶存活</div>
+      </div>
+      <div class="go-stat">
+        <div class="go-stat-value">${currentState.dayCount || 0}</div>
+        <div class="go-stat-label">游戏天数</div>
+      </div>
+    `;
+  }
+
+  const count = $('gameOverRolesCount');
+  if (count) count.textContent = `共 ${allRoles.length} 名玩家`;
+
   const tbody = $('rolesRevealBody');
-  tbody.innerHTML = allRoles.sort((a,b) => a.seat - b.seat).map(p => `
-    <tr class="${p.isAlive ? '' : 'dead-row'}">
-      <td>${p.seat + 1}</td>
-      <td>${escapeHtml(p.name)}</td>
-      <td>${p.roleName}</td>
-      <td class="${p.team === 'GOOD' ? 'good' : 'evil'}">${p.team === 'GOOD' ? '善良' : '邪恶'}</td>
-      <td>${p.isAlive ? '存活' : '死亡'}</td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = allRoles
+    .slice()
+    .sort((a, b) => a.seat - b.seat)
+    .map((p, i) => `
+      <tr class="${p.isAlive ? '' : 'is-dead'}" style="--go-i:${i}">
+        <td><span class="go-seat">${p.seat + 1}</span></td>
+        <td><span class="go-player">${escapeHtml(p.name)}</span>${p.isBot ? '<span class="go-bot-tag">机器人</span>' : ''}</td>
+        <td><span class="go-role-name">${p.roleName}</span></td>
+        <td><span class="go-team-chip ${p.team === 'GOOD' ? 'good' : 'evil'}">${p.team === 'GOOD' ? '善良' : '邪恶'}</span></td>
+        <td><span class="go-status ${p.isAlive ? 'alive' : 'dead'}">${p.isAlive ? '存活' : '阵亡'}</span></td>
+      </tr>
+    `).join('');
 }
 
 // ========== 工具函数 ==========
@@ -3408,8 +3443,14 @@ function renderGodView() {
     'EXECUTION': '处决', 'GAME_OVER': '游戏结束'
   };
   const phaseName = phaseNames[gs.phase] || gs.phase;
-  let statusHtml = `<div><strong>阶段：</strong>${phaseName}</div>`;
-  statusHtml += `<div><strong>天数：</strong>第${gs.dayCount}天 / 第${gs.nightCount}夜</div>`;
+  // 只显示当前阶段的时间：夜晚显示夜数、白天显示天数，不再同时显示两者
+  let phaseTimeText = '';
+  if (gs.phase === 'NIGHT' || gs.phase === 'NIGHT_WAKE') {
+    phaseTimeText = `第${gs.nightCount}夜`;
+  } else if (gs.phase !== 'FIRST_NIGHT' && gs.phase !== 'LOBBY' && gs.phase !== 'GAME_OVER') {
+    phaseTimeText = `第${gs.dayCount > 0 ? gs.dayCount : 1}天`;
+  }
+  let statusHtml = `<div><strong>阶段：</strong>${phaseName}${phaseTimeText ? `（${phaseTimeText}）` : ''}</div>`;
   
   if (gs.currentWakePlayerId) {
     const wp = players.find(p => p.id === gs.currentWakePlayerId);
@@ -3672,18 +3713,20 @@ const GOD_LOG_TYPE_META = {
 };
 const GOD_LOG_TYPE_DEFAULT = { icon: '•', label: '记录', color: '#8C8C8C' };
 
-// 日志分组：开局配置 / 首夜·第N夜 / 第N天 / 结算
+// 日志分组：首夜·第N夜 / 第N天 / 结算（开局配置不再展示）
 function godLogGroupOf(entry) {
   const type = entry.type || '';
-  if (type === 'ROLE_ASSIGN' || type === 'CUSTOM_ASSIGN' || type === 'GAME_START') {
-    return { key: 'setup', kind: 'setup', icon: '🎬', label: '开局配置' };
-  }
   if (type === 'GAME_OVER') {
     return { key: 'over', kind: 'over', icon: '🏁', label: '结算' };
   }
   if (String(entry.phase || '').includes('NIGHT')) {
     const n = Number(entry.night) || 0;
     return { key: `n${n}`, kind: 'night', icon: '🌙', label: n <= 0 ? '首夜' : `第 ${n} 夜` };
+  }
+  // 首夜信息（恶魔/爪牙/酒鬼身份等）在开局阶段就已下发，旧日志里 phase 可能仍是 LOBBY，
+  // 统一归入首夜，避免出现「白天」分组
+  if ((Number(entry.day) || 0) <= 0 && (Number(entry.night) || 0) <= 0) {
+    return { key: 'n0', kind: 'night', icon: '🌙', label: '首夜' };
   }
   const d = Number(entry.day) || 0;
   return { key: `d${d}`, kind: 'day', icon: '☀️', label: d <= 0 ? '白天' : `第 ${d} 天` };
@@ -3799,24 +3842,12 @@ function buildGodLogRows(entries) {
 
   entries.forEach(entry => {
     if (!entry) return;
+    // 开局配置（身份分配 / 开局提示）不再展示，身份可在玩家列表查看
+    const type = entry.type || '';
+    if (type === 'ROLE_ASSIGN' || type === 'CUSTOM_ASSIGN' || type === 'GAME_START') return;
+
     const last = lastOf();
     const data = entry.data || {};
-
-    // 1) 游戏开始 + 连续的身份分配 → 一行（阵容清单）
-    if (entry.type === 'GAME_START') {
-      rows.push({ ...entry, __kind: 'gameStart' });
-      return;
-    }
-    if (entry.type === 'ROLE_ASSIGN'
-      && last && (last.__kind === 'gameStart' || last.__kind === 'roleAssign')) {
-      if (last.__kind === 'gameStart') {
-        last.__kind = 'roleAssign';
-        last.assignIds = [];
-        last.time = entry.time || last.time;
-      }
-      if (data.playerId) last.assignIds.push(data.playerId);
-      return;
-    }
 
     // 2) 夜晚唤醒 + 同一玩家的夜间行动 → 一行
     if (entry.type === 'NIGHT_ACTION' && last && last.__kind === 'nightWake'
@@ -3869,10 +3900,6 @@ function buildGodLogRows(entries) {
 
   // 收尾：把「夜末 + 死亡」折叠成一条死亡行，并去掉被合并掉的「死亡玩家：…」冗余文案
   const out = rows.map(row => {
-    if (row.assignIds && row.assignIds.length > 0) {
-      row.mergeFlowHtml = row.assignIds.map(id => godLogPlayerChip(id)).join('');
-    }
-
     // 行动行追加同一玩家收到的信息（去掉重复的「X号 Y（角色）收到信息：」前缀）
     if (row.mergedInfos && row.mergedInfos.length > 0) {
       const base = row.mergeMessage !== undefined ? row.mergeMessage : row.message;
@@ -3887,7 +3914,12 @@ function buildGodLogRows(entries) {
     if (row.__kind !== 'nightEnd') return row;
 
     if (!row.deathRows || row.deathRows.length === 0) {
-      row.mergeMessage = String(row.message || '').replace(/，?死亡玩家[:：].*$/, '，平安夜');
+      // 夜晚死亡通常在「夜晚结算」之前就已记录（DEATH 行在前），此时结算行自身已带死亡名单，
+      // 只有确实无人死亡（data.deaths 为空）时才显示平安夜，避免把有死亡的夜晚误标为平安夜
+      const nightDeaths = (row.data && row.data.deaths) || [];
+      if (nightDeaths.length === 0) {
+        row.mergeMessage = String(row.message || '').replace(/，?死亡玩家[:：].*$/, '，平安夜');
+      }
       return row;
     }
     row.type = 'DEATH';

@@ -2545,27 +2545,300 @@ body.resizing-active * {
 .vote-detail-label.wait { color: #999999; }
 .vote-detail-names { color: #4F4F4F; word-break: break-all; }
 
-/* 游戏结束身份表 */
-.roles-reveal {
-  margin-top: 20px;
-  width: 100%;
+/* ========== 游戏结束 · 结算面板 ========== */
+.game-over-panel {
+  --go-accent: #FA5151;
+  --go-accent-soft: rgba(250, 81, 81, 0.16);
+  --go-accent-glow: rgba(250, 81, 81, 0.42);
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #F2F3F5;
+  background:
+    radial-gradient(120% 70% at 50% -12%, rgba(250, 81, 81, 0.2) 0%, rgba(250, 81, 81, 0) 62%),
+    radial-gradient(90% 60% at 50% 108%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, #16171B 0%, #0E0F12 100%);
+  animation: goPanelIn 0.35s ease-out both;
 }
-.roles-reveal table {
+.game-over-panel.good {
+  --go-accent: #07C160;
+  --go-accent-soft: rgba(7, 193, 96, 0.16);
+  --go-accent-glow: rgba(7, 193, 96, 0.4);
+  background:
+    radial-gradient(120% 70% at 50% -12%, rgba(7, 193, 96, 0.22) 0%, rgba(7, 193, 96, 0) 62%),
+    radial-gradient(90% 60% at 50% 108%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, #141A17 0%, #0D100F 100%);
+}
+
+.go-scroll {
+  position: relative;
+  min-height: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 36px 20px 48px;
+}
+.go-card {
+  width: 100%;
+  max-width: 760px;
+}
+
+/* ---------- 胜方信息 ---------- */
+.go-hero { text-align: center; }
+.go-emblem {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 58%),
+    var(--go-accent-soft);
+  box-shadow: 0 14px 40px var(--go-accent-glow), inset 0 0 24px rgba(255, 255, 255, 0.05);
+  animation: goEmblemIn 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.go-kicker {
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  color: rgba(255, 255, 255, 0.42);
+}
+.go-title {
+  font-size: clamp(1.7em, 5vw, 2.2em);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #FFFFFF;
+  text-shadow: 0 0 20px var(--go-accent-glow);
+  animation: goTitleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.06s both;
+}
+.go-reason {
+  display: inline-block;
+  max-width: 620px;
+  margin: 12px auto 0;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.68);
+  animation: goTitleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+}
+.go-reason:empty { display: none; }
+
+/* ---------- 结算数据 ---------- */
+.go-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 22px 0 16px;
+  animation: goTitleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.16s both;
+}
+.go-stat {
+  padding: 11px 8px 9px;
+  text-align: center;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.045);
+}
+.go-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #FFFFFF;
+  font-variant-numeric: tabular-nums;
+}
+.go-stat-value.good { color: #46E08E; }
+.go-stat-value.evil { color: #FF8585; }
+.go-stat-label {
+  margin-top: 3px;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ---------- 身份列表 ---------- */
+.roles-reveal.go-roles {
+  margin-top: 0;
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+  animation: goTitleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+}
+.go-roles-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.go-roles-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #FFFFFF;
+}
+.go-roles-title::before {
+  content: '';
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--go-accent);
+  box-shadow: 0 0 10px var(--go-accent-glow);
+}
+.go-roles-count {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.42);
+}
+.go-roles table {
   width: 100%;
   border-collapse: collapse;
 }
-.roles-reveal th, .roles-reveal td {
-  padding: 10px;
+.go-roles thead th {
+  padding: 9px 10px;
   text-align: center;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-}
-.roles-reveal th {
-  color: #7F7F7F;
+  font-size: 11.5px;
   font-weight: 500;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-.roles-reveal .good { color: #06AD56; }
-.roles-reveal .evil { color: #E64340; }
-.roles-reveal .dead-row { opacity: 0.5; }
+.go-roles tbody td {
+  padding: 9px 10px;
+  text-align: center;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.go-roles tbody tr:last-child td { border-bottom: none; }
+.go-roles tbody tr {
+  animation: goRowIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--go-i, 0) * 45ms + 240ms);
+}
+.go-roles tbody tr:hover td { background: rgba(255, 255, 255, 0.035); }
+.go-roles tbody tr.is-dead td { color: rgba(255, 255, 255, 0.5); }
+
+.go-seat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.09);
+  font-size: 12px;
+  font-weight: 700;
+  color: #FFFFFF;
+  font-variant-numeric: tabular-nums;
+}
+.go-player { font-weight: 600; color: inherit; }
+.go-bot-tag {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(16, 174, 255, 0.16);
+  font-size: 10px;
+  color: #7FD0FF;
+  vertical-align: 1px;
+}
+.go-role-name { color: inherit; }
+.go-team-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.go-team-chip.good {
+  color: #4BE38B;
+  background: rgba(7, 193, 96, 0.14);
+  border-color: rgba(7, 193, 96, 0.35);
+}
+.go-team-chip.evil {
+  color: #FF8A8A;
+  background: rgba(250, 81, 81, 0.14);
+  border-color: rgba(250, 81, 81, 0.35);
+}
+.go-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.go-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+.go-status.alive { color: #46E08E; }
+.go-status.dead { color: rgba(255, 255, 255, 0.4); }
+
+/* ---------- 底部操作 ---------- */
+.go-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 22px;
+  animation: goTitleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.3s both;
+}
+.go-btn {
+  width: auto;
+  min-width: 190px;
+  padding: 12px 36px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  box-shadow: 0 10px 26px rgba(7, 193, 96, 0.28);
+}
+.go-btn:active { transform: scale(0.98); }
+
+@keyframes goPanelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes goEmblemIn {
+  from { opacity: 0; transform: scale(0.7) translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes goTitleIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes goRowIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-over-panel,
+  .go-emblem,
+  .go-title,
+  .go-reason,
+  .go-stats,
+  .roles-reveal.go-roles,
+  .go-roles tbody tr,
+  .go-actions {
+    animation: none;
+  }
+}
 
 /* 提名相关 */
 .nominate-btn {
@@ -3514,14 +3787,32 @@ body.resizing-active * {
   }
 
   /* 游戏结束面板 */
-  #gameOverPanel {
-    padding: 20px 12px;
-    padding-top: max(30px, env(safe-area-inset-top));
-    padding-bottom: max(20px, env(safe-area-inset-bottom));
+  #gameOverPanel { padding: 0; }
+  .go-scroll {
+    padding: max(30px, env(safe-area-inset-top)) 12px max(24px, env(safe-area-inset-bottom));
   }
-  #gameOverPanel h1 {
-    font-size: 1.5em;
+  .go-emblem {
+    width: 66px;
+    height: 66px;
+    margin-bottom: 14px;
+    font-size: 30px;
   }
+  .go-kicker { letter-spacing: 0.22em; text-indent: 0.22em; }
+  #gameOverPanel h1 { font-size: 1.5em; }
+  .go-reason {
+    margin-top: 12px;
+    padding: 8px 14px;
+    border-radius: 14px;
+    font-size: 12.5px;
+  }
+  .go-stats {
+    gap: 8px;
+    margin: 20px 0 16px;
+  }
+  .go-stat { padding: 10px 4px 9px; border-radius: 12px; }
+  .go-stat-value { font-size: 18px; }
+  .go-stat-label { font-size: 10.5px; letter-spacing: 0.02em; }
+  .go-roles-head { padding: 12px 14px 10px; }
   #gameOverPanel table {
     font-size: 12px;
     display: block;
@@ -3531,6 +3822,11 @@ body.resizing-active * {
   #gameOverPanel th, #gameOverPanel td {
     padding: 8px 6px;
   }
+  .go-seat { min-width: 22px; height: 22px; font-size: 11px; }
+  .go-team-chip { padding: 1px 7px; font-size: 11px; }
+  .go-status { font-size: 11.5px; gap: 4px; }
+  .go-actions { margin-top: 20px; }
+  .go-btn { width: 100%; min-width: 0; }
   #gameOverPanel .btn {
     min-height: 48px;
     padding: 12px 30px;

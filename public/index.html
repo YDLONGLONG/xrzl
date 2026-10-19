@@ -480,19 +480,35 @@
   </div>
 
   <!-- 游戏结束身份展示 -->
-  <div id="gameOverPanel" style="display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:#EDEDED; z-index:150; padding:40px; overflow-y:auto;">
-    <div style="max-width:800px; margin:0 auto; text-align:center;">
-      <h1 id="gameOverTitle" style="font-size:2.5em; margin-bottom:20px;"></h1>
-      <p id="gameOverReason" style="font-size:1.2em; color:#7f7f7f; margin-bottom:30px;"></p>
-      <div class="roles-reveal">
-        <table>
-          <thead>
-            <tr><th>座位</th><th>玩家</th><th>角色</th><th>阵营</th><th>状态</th></tr>
-          </thead>
-          <tbody id="rolesRevealBody"></tbody>
-        </table>
+  <div id="gameOverPanel" class="game-over-panel" style="display:none;">
+    <div class="go-scroll">
+      <div class="go-card">
+        <div class="go-hero">
+          <div class="go-emblem"><span id="gameOverEmblem">🏆</span></div>
+          <div class="go-kicker">游戏结束 · 身份揭晓</div>
+          <h1 id="gameOverTitle" class="go-title"></h1>
+          <p id="gameOverReason" class="go-reason"></p>
+        </div>
+
+        <div id="gameOverStats" class="go-stats"></div>
+
+        <div class="roles-reveal go-roles">
+          <div class="go-roles-head">
+            <span class="go-roles-title">全员身份</span>
+            <span id="gameOverRolesCount" class="go-roles-count"></span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>座位</th><th>玩家</th><th>角色</th><th>阵营</th><th>状态</th></tr>
+            </thead>
+            <tbody id="rolesRevealBody"></tbody>
+          </table>
+        </div>
+
+        <div class="go-actions">
+          <button class="btn btn-primary go-btn" onclick="backToHome()">返回大厅</button>
+        </div>
       </div>
-      <button class="btn btn-primary btn-sm" style="margin-top:30px;" onclick="backToHome()">返回大厅</button>
     </div>
   </div>
 

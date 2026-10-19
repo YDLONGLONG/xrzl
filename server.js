@@ -1168,7 +1168,7 @@ io.on('connection', (socket) => {
 ${playerInfo}
 
 已死亡玩家：${deadInfo}
-当前是第${gs.dayCount}天，第${gs.nightCount}夜。
+当前是第${gs.dayCount}天，${gs.nightCount === 0 ? '首夜' : `第${gs.nightCount}夜`}。
 
 二、与游戏无关的通用常识 → 使用真实世界的客观事实判断，无需游戏状态证实
 （如"1+1=2""水在标准大气压下100摄氏度沸腾""地球绕着太阳转"为真；"1+1=3""地球是平的"为假）

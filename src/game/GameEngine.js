@@ -281,6 +281,9 @@ class GameEngine {
       });
     }
 
+    // 这些信息属于首夜：先把阶段切到首夜，避免私密信息日志被记录成「开局/白天」
+    this.room.gameState.phase = PHASES.FIRST_NIGHT;
+
     // 再设置恶魔/爪牙/酒鬼信息（会产生PRIVATE_INFO日志）
     this.roleAllocator.setupEvilTeamInfo(seatedPlayers);
 
