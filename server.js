@@ -91,6 +91,18 @@ const gameEngines = new Map();
 const disconnectTimers = new Map(); // playerId -> timeout
 
 const RECONNECT_TIMEOUT = 180000; // 3分钟重连窗口
+// 掉线（含游戏中主动离开）后多久交由 AI 托管：重连窗口内先保留给真人操作，避免影响真实对局
+const AI_TAKEOVER_DELAY = (() => {
+  const env = parseInt(process.env.AI_TAKEOVER_DELAY, 10);
+  return Number.isFinite(env) && env > 0 ? env : RECONNECT_TIMEOUT;
+})();
+
+function formatTakeoverDelay() {
+  if (AI_TAKEOVER_DELAY < 60000) {
+    return `${Math.max(1, Math.round(AI_TAKEOVER_DELAY / 1000))} 秒`;
+  }
+  return `${Math.max(1, Math.round(AI_TAKEOVER_DELAY / 60000))} 分钟`;
+}
 
 function generateRoomId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -422,6 +434,47 @@ function removePlayerFromRoom(roomId, playerId) {
   broadcastRoomState(roomId);
 }
 
+// 游戏内掉线/离开：重连窗口内不托管（保留真人操作机会），超时未重连才交给 BotManager
+function scheduleAiTakeover(roomId, playerId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  const player = room.players.get(playerId);
+  if (!player) return;
+
+  if (disconnectTimers.has(playerId)) {
+    clearTimeout(disconnectTimers.get(playerId));
+    disconnectTimers.delete(playerId);
+  }
+
+  const timer = setTimeout(() => {
+    disconnectTimers.delete(playerId);
+    const currentRoom = rooms.get(roomId);
+    if (!currentRoom) return;
+    const p = currentRoom.players.get(playerId);
+    // 已重连 / 已被移除 / 本身是机器人：无需托管
+    if (!p || p.isConnected || p.isBot) return;
+
+    p.aiTakeover = true;
+
+    // 房主超时未重连：移交给在线的真人玩家，避免房间操作被卡住
+    if (currentRoom.hostId === playerId) {
+      const onlineHost = Array.from(currentRoom.players.values())
+        .find(x => !x.isBot && x.isConnected && x.id !== playerId);
+      if (onlineHost) currentRoom.hostId = onlineHost.id;
+    }
+
+    broadcastSystemChat(roomId, `${p.name} 重连超时，已交由 AI 托管`);
+    broadcastRoomState(roomId);
+
+    const engine = gameEngines.get(roomId);
+    if (engine && engine.botManager) {
+      engine.botManager.notifyAllBots();
+    }
+  }, AI_TAKEOVER_DELAY);
+
+  disconnectTimers.set(playerId, timer);
+}
+
 function handleDisconnect(socket) {
   const result = getPlayerRoom(socket.id);
   if (!result) return;
@@ -438,24 +491,18 @@ function handleDisconnect(socket) {
 
   const engine = gameEngines.get(roomId);
 
+  player.aiTakeover = false;
+
   // 通知其他玩家该玩家断线
   io.to(roomId).emit('room:playerDisconnected', { playerId: socket.id, name: player.name });
   // 断线结果以系统聊天消息广播（不再由客户端弹提示框）
   broadcastSystemChat(roomId, room.gameStarted
-    ? `${player.name} 已断线，暂由 AI 托管`
+    ? `${player.name} 已断线，等待重连（${formatTakeoverDelay()}内未重连将由 AI 托管）`
     : `${player.name} 已断线`);
 
   if (room.gameStarted) {
-    // 游戏中断线：设置超时移除，并让BotManager托管
-    const timer = setTimeout(() => {
-      actuallyRemovePlayer(socket.id);
-    }, RECONNECT_TIMEOUT);
-    disconnectTimers.set(socket.id, timer);
-
-    // 让BotManager托管该断线玩家
-    if (engine && engine.botManager) {
-      engine.botManager.notifyAllBots();
-    }
+    // 游戏中断线：重连窗口内保持真人控制，超时后才由 AI 托管
+    scheduleAiTakeover(roomId, socket.id);
 
     // 玩家断线后，检查确认进度是否已满足（防止最后一个未确认的人断线后卡住）
     if (engine && engine.checkConfirmations) {
@@ -578,6 +625,12 @@ io.on('connection', (socket) => {
         clearTimeout(disconnectTimers.get(oldId));
         disconnectTimers.delete(oldId);
       }
+
+      // 取消 AI 托管，恢复真人控制（并清掉可能已排队的机器人动作）
+      if (engine && engine.botManager) {
+        engine.botManager.releaseAiControl(disconnectedPlayer);
+      }
+      disconnectedPlayer.aiTakeover = false;
 
       // 更新所有ID引用
       replacePlayerId(room, engine, oldId, socket.id);
@@ -796,19 +849,14 @@ io.on('connection', (socket) => {
       // 游戏中主动离开：视同断线，保留数据允许重连
       player.isConnected = false;
       player.disconnectedAt = Date.now();
+      player.aiTakeover = false;
 
       io.to(roomId).emit('room:playerDisconnected', { playerId: socket.id, name: player.name });
       // 断线结果以系统聊天消息广播（不再由客户端弹提示框）
-      broadcastSystemChat(roomId, `${player.name} 已断线，暂由 AI 托管`);
+      broadcastSystemChat(roomId, `${player.name} 已断线，等待重连（${formatTakeoverDelay()}内未重连将由 AI 托管）`);
 
-      const timer = setTimeout(() => {
-        actuallyRemovePlayer(socket.id);
-      }, RECONNECT_TIMEOUT);
-      disconnectTimers.set(socket.id, timer);
-
-      if (engine && engine.botManager) {
-        engine.botManager.notifyAllBots();
-      }
+      // 重连窗口内不托管，超时后才由 AI 接管
+      scheduleAiTakeover(roomId, socket.id);
 
       // 玩家离开后，检查确认进度是否已满足（防止最后一个未确认的人离开后卡住）
       if (engine && engine.checkConfirmations) {

@@ -67,6 +67,22 @@ class BotManager {
     }
   }
 
+  // 真人重连：取消 AI 托管与已排队的机器人动作，交还操作权
+  releaseAiControl(player) {
+    if (!player) return;
+    player.aiTakeover = false;
+    this._clearBotTimer(player);
+    player._botVoted = false;
+    player._botNominated = false;
+    player._botConfirmed = false;
+    player._botDefensed = false;
+  }
+
+  // 该玩家当前是否由 AI 操作：机器人，或掉线超过重连窗口后被托管的真人
+  _isAiControlled(player) {
+    return !!(player && (player.isBot || (player.aiTakeover && !player.isConnected)));
+  }
+
   // 调度bot行动（带防抖）
   _scheduleBot(botId, delay, callback) {
     const bot = this.engine.room.players.get(botId);
@@ -77,7 +93,8 @@ class BotManager {
       if (!this.engine.room || !this.engine.room.gameState) return;
       const b = this.engine.room.players.get(botId);
       if (!b) return;
-      if (!b.isBot && b.isConnected) return;
+      // 真人已重连 / 尚未托管：取消本次 AI 操作
+      if (!this._isAiControlled(b)) return;
       callback(b);
     }, delay);
   }
@@ -91,7 +108,7 @@ class BotManager {
     // 阶段变化时重置bot状态标记
     if (this._lastPhase !== gs.phase) {
       room.players.forEach(p => {
-        if (p.isBot || !p.isConnected) {
+        if (this._isAiControlled(p)) {
           p._botVoted = false;
           p._botNominated = false;
           p._botConfirmed = false;
@@ -106,7 +123,7 @@ class BotManager {
     // 提名变化时（同一阶段内的新提名）重置投票状态
     if (gs.phase === 'VOTING' && gs.currentNominationIndex !== this._lastNominationIndex) {
       room.players.forEach(p => {
-        if (p.isBot || !p.isConnected) {
+        if (this._isAiControlled(p)) {
           p._botVoted = false;
           this._clearBotTimer(p);
         }
@@ -115,7 +132,7 @@ class BotManager {
     }
 
     room.players.forEach((p, pid) => {
-      if (p.isBot || !p.isConnected) {
+      if (this._isAiControlled(p)) {
         this._processBot(pid);
       }
     });
@@ -126,7 +143,8 @@ class BotManager {
     if (!room) return;
     const bot = room.players.get(botId);
     if (!bot) return;
-    if (!bot.isBot && bot.isConnected) return;
+    // 未托管（重连窗口内）的真人玩家保持手动操作
+    if (!this._isAiControlled(bot)) return;
 
     const gs = room.gameState;
     if (!room.gameStarted) return;
@@ -174,7 +192,7 @@ class BotManager {
             b._botVoted = false;
             return;
           }
-          const vote = b.isBot ? this._getBotVoteDecision(b) : false;
+          const vote = this._isAiControlled(b) ? this._getBotVoteDecision(b) : false;
           const result = this.engine.processVote(botId, vote);
           if (!result || !result.success) {
             b._botVoted = false;
@@ -244,7 +262,7 @@ class BotManager {
         b._botVoted = true;
         return;
       }
-      const vote = b.isBot ? this._getBotVoteDecision(b) : false;
+      const vote = this._isAiControlled(b) ? this._getBotVoteDecision(b) : false;
       const result = this.engine.processVote(botId, vote);
       if (!result || !result.success) {
         b._botVoted = false;
