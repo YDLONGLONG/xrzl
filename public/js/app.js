@@ -453,7 +453,8 @@ function initSocketEvents() {
     if (godState) {
       godState.actionLog.push(entry);
       if (godState.actionLog.length > 200) godState.actionLog.shift();
-      appendGodLogEntry(entry);
+      // 合并后的显示行会变化，统一重建；原本就在底部时自动跟随最新日志
+      renderGodLog();
     }
   });
 
@@ -3508,10 +3509,8 @@ function renderGodView() {
     $('godStatus').innerHTML += debugHtml;
   }
 
-  // 渲染全部日志
-  const logContainer = $('godActionLog');
-  logContainer.innerHTML = '';
-  gs.actionLog.forEach(entry => appendGodLogEntry(entry));
+  // 渲染行动日志（内部会合并同类事件并保留滚动位置）
+  renderGodLog();
 }
 
 function updateGodPlayers() {
@@ -3654,45 +3653,359 @@ function formatProbInfo(pi) {
   </div>`;
 }
 
-function appendGodLogEntry(entry) {
+// ========== 上帝视角 · 行动日志渲染 ==========
+// 类型 → 图标 / 短标签 / 主色（左侧色条与类型标签用）
+const GOD_LOG_TYPE_META = {
+  'ROLE_ASSIGN':   { icon: '🎭', label: '身份分配', color: '#07C160' },
+  'CUSTOM_ASSIGN': { icon: '🎭', label: '自定义配置', color: '#07C160' },
+  'GAME_START':    { icon: '🎬', label: '开局', color: '#191919' },
+  'NIGHT_WAKE':    { icon: '🌙', label: '夜晚唤醒', color: '#9B59B6' },
+  'NIGHT_ACTION':  { icon: '🌙', label: '夜间行动', color: '#9B59B6' },
+  'NIGHT_END':     { icon: '🌅', label: '夜晚结算', color: '#10AEFF' },
+  'DEATH':         { icon: '💀', label: '死亡', color: '#FA5151' },
+  'NOMINATION':    { icon: '🗳️', label: '提名', color: '#FF9500' },
+  'VOTE_RESULT':   { icon: '📊', label: '投票', color: '#FF9500' },
+  'EXECUTION':     { icon: '⚖️', label: '处决', color: '#FA5151' },
+  'ABILITY':       { icon: '✨', label: '技能', color: '#F5822B' },
+  'PRIVATE_INFO':  { icon: '📜', label: '私密信息', color: '#00B578' },
+  'GAME_OVER':     { icon: '🏁', label: '结束', color: '#191919' }
+};
+const GOD_LOG_TYPE_DEFAULT = { icon: '•', label: '记录', color: '#8C8C8C' };
+
+// 日志分组：开局配置 / 首夜·第N夜 / 第N天 / 结算
+function godLogGroupOf(entry) {
+  const type = entry.type || '';
+  if (type === 'ROLE_ASSIGN' || type === 'CUSTOM_ASSIGN' || type === 'GAME_START') {
+    return { key: 'setup', kind: 'setup', icon: '🎬', label: '开局配置' };
+  }
+  if (type === 'GAME_OVER') {
+    return { key: 'over', kind: 'over', icon: '🏁', label: '结算' };
+  }
+  if (String(entry.phase || '').includes('NIGHT')) {
+    const n = Number(entry.night) || 0;
+    return { key: `n${n}`, kind: 'night', icon: '🌙', label: n <= 0 ? '首夜' : `第 ${n} 夜` };
+  }
+  const d = Number(entry.day) || 0;
+  return { key: `d${d}`, kind: 'day', icon: '☀️', label: d <= 0 ? '白天' : `第 ${d} 天` };
+}
+
+// 玩家徽标：座位号 + 昵称 + 角色，按阵营着色，死亡者置灰
+function godLogPlayerChip(playerId) {
+  const players = (godState && godState.players) || [];
+  const p = players.find(x => x.id === playerId);
+  if (!p || p.seat < 0) return '';
+  const teamCls = p.team === 'EVIL' ? 'evil' : (p.team === 'GOOD' ? 'good' : '');
+  const deadCls = p.isAlive === false ? ' dead' : '';
+  const roleText = p.roleName ? `<i>${escapeHtml(p.roleName)}</i>` : '';
+  const title = `${p.seat + 1}号 ${p.name}${p.roleName ? ' · ' + p.roleName : ''}${p.isAlive === false ? '（已死亡）' : ''}`;
+  return `<span class="gl-chip ${teamCls}${deadCls}" title="${escapeHtml(title)}">`
+    + `<b>${p.seat + 1}</b><span class="gl-chip-name">${escapeHtml(p.name)}</span>${roleText}</span>`;
+}
+
+// 需要判定为「发动者」的字段（其余玩家 id 视为被作用者）
+const GOD_LOG_ACTOR_KEYS = ['playerId', 'nominatorId', 'acterId', 'pacifistId', 'lunaticId', 'executorId'];
+
+// 从 data 中提取玩家 id，渲染「发动者 → 被作用者」流程
+function godLogFlowHtml(entry) {
+  const data = entry.data || {};
+  const players = (godState && godState.players) || [];
+  if (players.length === 0) return '';
+  const known = new Set(players.map(p => p.id));
+  const ids = [];
+  const addId = (v) => {
+    if (typeof v === 'string' && known.has(v) && !ids.includes(v)) ids.push(v);
+  };
+  Object.keys(data).forEach(k => {
+    const v = data[k];
+    if (typeof v === 'string') {
+      addId(v);
+    } else if (Array.isArray(v)) {
+      // 兼容 targets: ['id']、deaths: [{ playerId, ... }] 两种形态
+      v.forEach(el => {
+        if (typeof el === 'string') addId(el);
+        else if (el && typeof el === 'object') { addId(el.playerId); addId(el.id); }
+      });
+    }
+  });
+  if (ids.length === 0) return '';
+
+  let actorId = null;
+  for (const k of GOD_LOG_ACTOR_KEYS) {
+    if (known.has(data[k])) { actorId = data[k]; break; }
+  }
+  if (!actorId) actorId = ids[0];
+
+  const parts = [];
+  const actorChip = godLogPlayerChip(actorId);
+  if (actorChip) parts.push(actorChip);
+  const targets = ids.filter(id => id !== actorId);
+  if (targets.length > 0) {
+    parts.push('<span class="gl-arrow">→</span>');
+    targets.forEach(id => {
+      const chip = godLogPlayerChip(id);
+      if (chip) parts.push(chip);
+    });
+  }
+  return parts.join('');
+}
+
+// 消息内高亮「N号 昵称」与关键结果词，便于扫读
+const GOD_LOG_RESULT_TERMS = [
+  ['未通过', 'gl-kw-bad'], ['无事发生', 'gl-kw-bad'], ['击杀', 'gl-kw-bad'], ['被杀', 'gl-kw-bad'],
+  ['死亡', 'gl-kw-bad'], ['处决', 'gl-kw-bad'], ['猜错', 'gl-kw-bad'], ['失败', 'gl-kw-bad'], ['为假', 'gl-kw-bad'],
+  ['存活', 'gl-kw-good'], ['复活', 'gl-kw-good'], ['猜对', 'gl-kw-good'], ['成功', 'gl-kw-good'],
+  ['为真', 'gl-kw-good'], ['通过', 'gl-kw-good'], ['拯救', 'gl-kw-good'], ['免疫', 'gl-kw-good'], ['守护', 'gl-kw-good'],
+  ['中毒', 'gl-kw-warn'], ['醉酒', 'gl-kw-warn']
+];
+const GOD_LOG_RESULT_RE = new RegExp(GOD_LOG_RESULT_TERMS.map(t => t[0]).join('|'), 'g');
+
+function highlightGodLogMessage(message) {
+  let html = escapeHtml(String(message == null ? '' : message));
+
+  // 座位 + 昵称高亮（如「3号 张三」）
+  const players = (godState && godState.players) || [];
+  players.forEach(p => {
+    if (!p.name || p.seat < 0) return;
+    const seat = p.seat + 1;
+    const name = escapeHtml(p.name);
+    [`${seat}号 ${name}`, `${seat}号${name}`].forEach(pat => {
+      html = html.split(pat).join(`<span class="gl-ref"><b>${seat}</b>${name}</span>`);
+    });
+  });
+
+  // 关键结果词高亮（单次扫描，长词优先，避免「未通过」被拆成「未」+「通过」）
+  html = html.replace(GOD_LOG_RESULT_RE, (m) => {
+    const hit = GOD_LOG_RESULT_TERMS.find(t => t[0] === m);
+    return `<span class="${hit ? hit[1] : 'gl-kw-warn'}">${m}</span>`;
+  });
+  return html;
+}
+
+// 可以「吃掉」同一玩家后续私密信息的行动类日志
+const GOD_LOG_INFO_MERGE_TYPES = new Set(['NIGHT_ACTION', 'NIGHT_WAKE', 'ABILITY', 'EXECUTION', 'DEATH']);
+
+// 该玩家是否是恶魔（用于把恶魔的击杀行动并入夜晚死亡日志）
+function godLogIsDemon(playerId) {
+  const players = (godState && godState.players) || [];
+  const p = players.find(x => x.id === playerId);
+  return !!(p && p.category === 'DEMON');
+}
+
+// 把原始日志折叠成「显示行」：同一次事件的多条记录合并为一行
+// 合并后仍保留 row.time / row.type / row.data，供分组与状态判断使用
+function buildGodLogRows(entries) {
+  const rows = [];
+  const lastOf = () => rows[rows.length - 1];
+
+  entries.forEach(entry => {
+    if (!entry) return;
+    const last = lastOf();
+    const data = entry.data || {};
+
+    // 1) 游戏开始 + 连续的身份分配 → 一行（阵容清单）
+    if (entry.type === 'GAME_START') {
+      rows.push({ ...entry, __kind: 'gameStart' });
+      return;
+    }
+    if (entry.type === 'ROLE_ASSIGN'
+      && last && (last.__kind === 'gameStart' || last.__kind === 'roleAssign')) {
+      if (last.__kind === 'gameStart') {
+        last.__kind = 'roleAssign';
+        last.assignIds = [];
+        last.time = entry.time || last.time;
+      }
+      if (data.playerId) last.assignIds.push(data.playerId);
+      return;
+    }
+
+    // 2) 夜晚唤醒 + 同一玩家的夜间行动 → 一行
+    if (entry.type === 'NIGHT_ACTION' && last && last.__kind === 'nightWake'
+      && last.data && last.data.playerId === data.playerId && last.night === entry.night) {
+      rows[rows.length - 1] = { ...entry, __kind: 'nightAction' };
+      return;
+    }
+
+    // 3) 纯信息角色：唤醒 + 紧随其后的私密信息 → 一行（信息默认折叠）
+    if (entry.type === 'PRIVATE_INFO' && last && last.__kind === 'nightWake'
+      && last.data && last.data.playerId === data.playerId) {
+      rows[rows.length - 1] = { ...entry, __kind: 'nightInfo' };
+      return;
+    }
+
+    // 3b) 同一玩家的「行动」+「收到信息」→ 一行（行动描述下附信息内容）
+    if (entry.type === 'PRIVATE_INFO' && last && last.data && last.data.playerId
+      && last.data.playerId === data.playerId && last.night === entry.night
+      && last.day === entry.day && GOD_LOG_INFO_MERGE_TYPES.has(last.type)) {
+      (last.mergedInfos = last.mergedInfos || []).push(entry);
+      return;
+    }
+
+    // 4) 提名 + 该次提名的投票结果 → 一行
+    if (entry.type === 'VOTE_RESULT' && last && last.__kind === 'nomination'
+      && last.data && last.data.nomineeId && last.data.nomineeId === data.nomineeId) {
+      last.mergeMessage = `${last.message}\n${entry.message}`;
+      last.votePassed = data.passed;
+      return;
+    }
+
+    // 5) 夜晚结算 + 紧随其后的死亡 → 一行
+    if (entry.type === 'DEATH' && last && last.__kind === 'nightEnd') {
+      last.deathRows.push(entry);
+      return;
+    }
+
+    if (entry.type === 'NIGHT_WAKE') { rows.push({ ...entry, __kind: 'nightWake' }); return; }
+    if (entry.type === 'NOMINATION') { rows.push({ ...entry, __kind: 'nomination' }); return; }
+    if (entry.type === 'NIGHT_END') {
+      // 找出本夜恶魔（小恶魔等）的行动行，目标确实死亡时并入死亡行
+      const demonRow = rows.slice().reverse().find(r =>
+        r.type === 'NIGHT_ACTION' && r.night === entry.night
+        && r.data && godLogIsDemon(r.data.playerId));
+      rows.push({ ...entry, __kind: 'nightEnd', deathRows: [], demonRow: demonRow || null });
+      return;
+    }
+    rows.push({ ...entry });
+  });
+
+  // 收尾：把「夜末 + 死亡」折叠成一条死亡行，并去掉被合并掉的「死亡玩家：…」冗余文案
+  const out = rows.map(row => {
+    if (row.assignIds && row.assignIds.length > 0) {
+      row.mergeFlowHtml = row.assignIds.map(id => godLogPlayerChip(id)).join('');
+    }
+
+    // 行动行追加同一玩家收到的信息（去掉重复的「X号 Y（角色）收到信息：」前缀）
+    if (row.mergedInfos && row.mergedInfos.length > 0) {
+      const base = row.mergeMessage !== undefined ? row.mergeMessage : row.message;
+      const infoLines = row.mergedInfos.map(inf => {
+        const text = (inf.data && inf.data.info) || inf.message || '';
+        const falseMark = inf.data && inf.data.isFalse ? ' ⚠️【假信息】' : '';
+        return `📜 ${text}${falseMark}`;
+      });
+      row.mergeMessage = [base, ...infoLines].join('\n');
+    }
+
+    if (row.__kind !== 'nightEnd') return row;
+
+    if (!row.deathRows || row.deathRows.length === 0) {
+      row.mergeMessage = String(row.message || '').replace(/，?死亡玩家[:：].*$/, '，平安夜');
+      return row;
+    }
+    row.type = 'DEATH';
+    // 恶魔击杀成功时，把恶魔的行动并进这条死亡日志（原行动行不再单独显示）
+    // 顺序按因果排列：先「杀害」再「死亡」
+    const demonRow = row.demonRow;
+    const demonTargets = (demonRow && demonRow.data && demonRow.data.targets) || [];
+    const killedByDemon = demonRow
+      && row.deathRows.some(d => d.data && demonTargets.includes(d.data.playerId));
+
+    const lines = [];
+    if (killedByDemon) {
+      const demonLine = String(demonRow.message || '')
+        .replace(/(夜晚)?行动[:：][ \t]*选择了/, '杀害了');
+      lines.push(`👹 ${demonLine}`);
+      demonRow.__drop = true;
+    }
+    // 分组表头已经标明是第几夜，「第N夜结束」不再重复
+    row.deathRows.forEach(d => lines.push(d.message));
+
+    row.mergeMessage = lines.join('\n');
+    row.mergeFlowHtml = row.deathRows
+      .map(d => godLogPlayerChip(d.data && d.data.playerId))
+      .filter(Boolean).join('');
+    return row;
+  });
+
+  return out.filter(r => !r.__drop);
+}
+
+// 已有「谁→谁」徽标时，去掉文案里重复的「N号 名字（角色）夜晚行动：」前缀
+function stripGodLogPrefix(message, hasFlow) {
+  const text = String(message == null ? '' : message);
+  if (!hasFlow) return text;
+  return text.replace(/^\d+号[ \t]*[^\s（(]+(（[^）]*）|\([^)]*\))?[ \t]*(夜晚)?行动[:：][ \t]*/, '');
+}
+
+// 长信息（如间谍魔典）默认折叠，只显示首行
+function godLogMessageHtml(message) {
+  const text = String(message == null ? '' : message);
+  const lines = text.split('\n').filter(l => l.trim() !== '');
+  if (text.length <= 160 && lines.length <= 4) return highlightGodLogMessage(text);
+
+  const head = lines[0] || '';
+  const rest = lines.slice(1).join('\n').trim() || text.slice(head.length).trim();
+  return `<details class="gl-details"><summary>${highlightGodLogMessage(head)}<span class="gl-more"> …展开</span></summary>`
+    + `<div class="gl-details-body">${highlightGodLogMessage(rest)}</div></details>`;
+}
+
+function appendGodLogRow(row) {
   const logContainer = $('godActionLog');
   if (!logContainer) return;
-  
-  const typeColors = {
-    'ROLE_ASSIGN': '#07C160',
-    'GAME_START': '#191919',
-    'NIGHT_WAKE': '#9b59b6',
-    'NIGHT_ACTION': '#9b59b6',
-    'NIGHT_END': '#10AEFF',
-    'DEATH': '#FA5151',
-    'NOMINATION': '#FF9500',
-    'VOTE_RESULT': '#FF9500',
-    'EXECUTION': '#FA5151',
-    'GAME_OVER': '#191919',
-    'PRIVATE_INFO': '#00B578',
-    'ABILITY': '#F5822B',
-    'CUSTOM_ASSIGN': '#07C160'
-  };
-  const color = typeColors[entry.type] || '#aaa';
-  let msg = entry.message;
-  if (entry.type === 'PRIVATE_INFO' && entry.data && entry.data.isFalse) {
-    msg = `<span style="color:#FA5151;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
-  } else {
-    msg = escapeHtml(msg);
+
+  // 分组表头（滚动时吸顶）
+  const group = godLogGroupOf(row);
+  if (logContainer.dataset.godGroup !== group.key) {
+    logContainer.dataset.godGroup = group.key;
+    const header = document.createElement('div');
+    header.className = `gl-group gl-group-${group.kind}`;
+    header.innerHTML = `<span class="gl-group-icon">${group.icon}</span><span>${group.label}</span>`;
+    logContainer.appendChild(header);
   }
 
+  const meta = GOD_LOG_TYPE_META[row.type] || GOD_LOG_TYPE_DEFAULT;
+  const isFalseInfo = row.type === 'PRIVATE_INFO' && row.data && row.data.isFalse;
+  const flow = (row.mergeFlowHtml !== undefined) ? row.mergeFlowHtml : godLogFlowHtml(row);
+  let rawMessage = row.mergeMessage !== undefined ? row.mergeMessage : row.message;
+  // 私密信息只保留信息正文，去掉「N号 名字（角色）收到信息：」前缀（徽标已有座位/名字）
+  if (row.type === 'PRIVATE_INFO' && row.data && typeof row.data.info === 'string') {
+    rawMessage = row.data.info;
+  }
+  let msgText = stripGodLogPrefix(rawMessage, !!flow);
+  if (flow) {
+    // 目标已经由徽标呈现，去掉纯「选择了 X」这类冗余描述（「选择了角色【X】」保留）
+    const lines = msgText.split('\n');
+    if (/^选择了(?!角色)/.test(lines[0].trim())) lines.shift();
+    msgText = lines.join('\n');
+  }
+  const messageHtml = godLogMessageHtml(msgText);
+
   let probHtml = '';
-  if (entry.data) {
+  if (row.data) {
     const probInfos = [];
-    if (entry.data.probInfo) probInfos.push(entry.data.probInfo);
-    if (entry.data.correctProbInfo) probInfos.push(entry.data.correctProbInfo);
+    if (row.data.probInfo) probInfos.push(row.data.probInfo);
+    if (row.data.correctProbInfo) probInfos.push(row.data.correctProbInfo);
     probHtml = probInfos.map(pi => formatProbInfo(pi)).join('');
   }
 
-  const div = document.createElement('div');
-  div.style.cssText = `color:${color}; padding:2px 0; line-height:1.5;`;
-  div.innerHTML = `<span style="color:#999999;">[${entry.time}]</span> ${msg}${probHtml}`;
-  logContainer.appendChild(div);
+  const el = document.createElement('div');
+  el.className = 'gl-entry';
+  el.style.setProperty('--gl-color', meta.color);
+  el.innerHTML = `
+    <div class="gl-head">
+      <span class="gl-time">${escapeHtml(row.time || '')}</span>
+      <span class="gl-type">${meta.icon} ${meta.label}</span>
+      ${isFalseInfo ? '<span class="gl-false">⚠️ 假信息</span>' : ''}
+      ${flow ? `<span class="gl-flow">${flow}</span>` : ''}
+    </div>
+    ${messageHtml ? `<div class="gl-msg">${messageHtml}</div>` : ''}
+    ${probHtml}
+  `;
+  logContainer.appendChild(el);
+}
+
+// 全量重建日志：内容变化（尤其是合并）时统一走这里，并保持滚动位置
+function renderGodLog() {
+  const container = $('godActionLog');
+  if (!container) return;
+  const firstRender = container.dataset.godRendered !== '1';
+  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+  const prevScrollTop = container.scrollTop;
+
+  container.innerHTML = '';
+  container.dataset.godGroup = '';
+  container.dataset.godRendered = '1';
+  buildGodLogRows((godState && godState.actionLog) || []).forEach(appendGodLogRow);
+
+  container.scrollTop = (firstRender || nearBottom) ? container.scrollHeight : prevScrollTop;
 }
 
 // ========== 角色总览 ==========

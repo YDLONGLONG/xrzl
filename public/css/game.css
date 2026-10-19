@@ -956,16 +956,175 @@ body.resizing-active * {
   vertical-align: top;
 }
 .wx-god-log {
-  max-height: 320px;
+  max-height: 380px;
   overflow-y: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px;
-  line-height: 1.8;
-  background: #FFFFFF;
-  border: 1px solid #F0F0F0;
-  border-radius: 6px;
-  padding: 10px;
+  line-height: 1.5;
+  background: #F2F2F2;
+  border: 1px solid #EBEBEB;
+  border-radius: 8px;
+  padding: 8px;
 }
+
+/* 夜 / 白天 分组表头（滚动时吸顶） */
+.wx-god-log .gl-group {
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px -8px 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+.wx-god-log .gl-group:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+.wx-god-log .gl-group-icon { font-size: 12px; }
+.wx-god-log .gl-group-setup { color: #06AD56; background: #E8F8EE; }
+.wx-god-log .gl-group-night { color: #6C3FA8; background: #F0E9F8; }
+.wx-god-log .gl-group-day   { color: #B26B00; background: #FDF1DF; }
+.wx-god-log .gl-group-over  { color: #E64340; background: #FCEBEB; }
+
+/* 单条行动 */
+.wx-god-log .gl-entry {
+  padding: 5px 9px 6px 9px;
+  margin-bottom: 4px;
+  background: #FFFFFF;
+  border-left: 3px solid var(--gl-color, #DDDDDD);
+  border-radius: 5px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+}
+.wx-god-log .gl-entry:last-child { margin-bottom: 0; }
+
+.wx-god-log .gl-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 18px;
+}
+.wx-god-log .gl-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: #B2B2B2;
+}
+.wx-god-log .gl-type {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--gl-color, #8C8C8C);
+  background: rgba(0, 0, 0, 0.035);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.wx-god-log .gl-false {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #E64340;
+  background: rgba(250, 81, 81, 0.1);
+  border: 1px solid rgba(250, 81, 81, 0.35);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+/* 发动者 → 被作用者 */
+.wx-god-log .gl-flow {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.wx-god-log .gl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px 1px 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #191919;
+  background: #FFFFFF;
+  border: 1px solid #E2E2E2;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.wx-god-log .gl-chip b {
+  display: inline-block;
+  min-width: 17px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #FFFFFF;
+  text-align: center;
+  background: #9E9E9E;
+  border-radius: 9px;
+}
+.wx-god-log .gl-chip i {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #8C8C8C;
+}
+.wx-god-log .gl-chip.good { background: #EFFBF3; border-color: rgba(7, 193, 96, 0.45); }
+.wx-god-log .gl-chip.good b { background: #07C160; }
+.wx-god-log .gl-chip.evil { background: #FEF1F1; border-color: rgba(250, 81, 81, 0.45); }
+.wx-god-log .gl-chip.evil b { background: #FA5151; }
+.wx-god-log .gl-chip.dead { opacity: 0.6; }
+.wx-god-log .gl-chip.dead .gl-chip-name { text-decoration: line-through; }
+.wx-god-log .gl-arrow {
+  color: #B2B2B2;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+/* 明细文案 */
+.wx-god-log .gl-msg {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #5F5F5F;
+  word-break: break-word;
+  white-space: pre-line; /* 保留多行信息（如间谍魔典）的换行 */
+}
+.wx-god-log .gl-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 600;
+  color: #191919;
+}
+.wx-god-log .gl-ref b {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #4F4F4F;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 7px;
+}
+.wx-god-log .gl-details summary {
+  cursor: pointer;
+  list-style: none;
+  color: #5F5F5F;
+}
+.wx-god-log .gl-details summary::-webkit-details-marker { display: none; }
+.wx-god-log .gl-more { color: #0FA958; font-size: 11px; }
+.wx-god-log .gl-details-body {
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 2px solid #EDEDED;
+  color: #8C8C8C;
+}
+.wx-god-log .gl-kw-bad { color: #E64340; font-weight: 700; }
+.wx-god-log .gl-kw-good { color: #06AD56; font-weight: 700; }
+.wx-god-log .gl-kw-warn { color: #C77700; font-weight: 700; }
 
 /* 成员网格（座位） */
 .seats-area {

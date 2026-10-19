@@ -251,6 +251,7 @@ class VoteManager {
 
     const nominee = this.engine.room.players.get(nomination.nomineeId);
     this.engine.logAction('VOTE_RESULT', `${nominee ? nominee.seat+1+'号 '+nominee.name : '?'} 获得${nomination.voteCount}票（需要${threshold}票），${nomination.passed ? '通过' : '未通过'}`, {
+      nomineeId: nomination.nomineeId,
       voteCount: nomination.voteCount, threshold, passed: nomination.passed
     });
 

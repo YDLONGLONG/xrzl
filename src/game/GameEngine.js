@@ -476,9 +476,29 @@ class GameEngine {
         return t ? `${t.seat+1}号${t.name}` : tid;
       }).join('、');
       const roleName = isDrunk ? player.fakeRole.name : player.role.name;
-      this.logAction('NIGHT_ACTION', `${player.seat+1}号 ${player.name}（${roleName}${isDrunk?'/酒鬼':''}）夜晚行动：选择了 ${targetNames || '无目标'}`, {
-        playerId, role: isDrunk ? player.fakeRole.id : player.role.id, targets
-      });
+
+      // 描述本次行动实际做了什么：跳过 / 选角色 / 选玩家 / 无目标
+      let actionText = '';
+      if (action.skip === true) {
+        actionText = '跳过了本夜行动';
+      } else if (action.roleId) {
+        let pickedName = action.roleId;
+        try {
+          const picked = this.roleAllocator.createRoleInstance(action.roleId);
+          if (picked) pickedName = picked.name;
+        } catch (e) { /* 角色 id 无法解析时退化为原始 id */ }
+        actionText = `选择了角色【${pickedName}】`;
+      } else if (targets.length > 0) {
+        actionText = `选择了 ${targetNames}`;
+      }
+
+      // 无目标的被动角色（如间谍查看魔典、教父首夜得知外来者）只在「唤醒」与
+      // 「私密信息」里记录，这里不再生成「选择了无目标」这种误导性行动日志
+      if (actionText) {
+        this.logAction('NIGHT_ACTION', `${player.seat+1}号 ${player.name}（${roleName}${isDrunk?'/酒鬼':''}）夜晚行动：${actionText}`, {
+          playerId, role: isDrunk ? player.fakeRole.id : player.role.id, targets
+        });
+      }
     }
 
     const result = this.nightResolver.processNightAction(playerId, action);
