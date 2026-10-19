@@ -2675,14 +2675,18 @@ body.resizing-active * {
   inset: 0;
   /* 高于处决动画(190)、通用弹窗/角色总览(300)：动画期间不显示任何页面内容 */
   z-index: 340;
-  display: none;
   overflow: hidden;
-  pointer-events: auto; /* 动画期间屏蔽误触（不改动任何游戏状态） */
+  /* 用 visibility + opacity 而不是 display 切换：
+     display 反复销毁/重建全屏图层，在部分显卡上会出现一帧黑屏 */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
   /* 完全不透明的底：底部身份卡、角色技能页等界面内容不会透过动画显示 */
   background: radial-gradient(circle at 50% 44%, #16141F 0%, #07080C 78%), #07080C;
 }
 .phase-transition.active {
-  display: block;
+  visibility: visible;
+  pointer-events: auto; /* 动画期间屏蔽误触（不改动任何游戏状态） */
   animation: ptBackdropIn 0.35s ease-out both;
 }
 /* 停留结束后的淡出（停留时长由 JS 控制，便于「动画结束后停留观看结果」） */
@@ -2698,7 +2702,7 @@ body.resizing-active * {
   margin: -39vmin 0 0 -39vmin;
   border-radius: 50%;
   opacity: 0;
-  filter: blur(6px);
+  /* 渐变本身已是软边，不再用大面积 filter: blur（会额外占用合成层，淡出时易闪黑） */
 }
 .phase-transition.to-day .pt-glow {
   background: radial-gradient(circle, rgba(255, 196, 92, 0.5) 0%, rgba(255, 196, 92, 0) 62%);
@@ -2744,8 +2748,7 @@ body.resizing-active * {
   height: 110px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(255, 205, 130, 0.22) 0%, rgba(255, 205, 130, 0.07) 44%, rgba(255, 205, 130, 0) 74%);
-  filter: blur(3px);
+  background: radial-gradient(ellipse at center, rgba(255, 205, 130, 0.24) 0%, rgba(255, 205, 130, 0.08) 40%, rgba(255, 205, 130, 0.03) 58%, rgba(255, 205, 130, 0) 74%);
   opacity: 0;
 }
 .phase-transition.to-night .pt-horizon {
@@ -2803,35 +2806,39 @@ body.resizing-active * {
 }
 /* 动画结束后光晕与地平线保持可见，供停留观看结果时作为背景 */
 @keyframes ptGlow {
-  0%, 26% { opacity: 0; transform: scale(0.86); }
-  52% { opacity: 0.95; transform: scale(1.02); }
+  0%, 36% { opacity: 0; transform: scale(0.86); }
+  62% { opacity: 0.95; transform: scale(1.02); }
   100% { opacity: 0.62; transform: scale(1.08); }
 }
 @keyframes ptHorizon {
   0% { opacity: 0; transform: translate(-50%, -50%) scaleX(0.72); }
-  16% { opacity: 0.8; transform: translate(-50%, -50%) scaleX(1); }
+  22% { opacity: 0.8; transform: translate(-50%, -50%) scaleX(1); }
   100% { opacity: 0.52; transform: translate(-50%, -50%) scaleX(1); }
 }
-/* 落山：保持原位片刻后向下沉入地平线，边沉边缩小淡出（先完全隐去再让新天体升起） */
+/* 落山：先在原位停留约 0.4s（轻微放大蓄势），再向下沉入地平线并淡出 */
 @keyframes ptSet {
-  0% { opacity: 1; transform: translateY(0) scale(1); }
-  6% { opacity: 1; transform: translateY(0) scale(1); }
-  26% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
+  0% { opacity: 1; transform: translateY(0) scale(0.98); }
+  18% { opacity: 1; transform: translateY(0) scale(1.02); }
+  38% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
   100% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
 }
-/* 升起：从地平线下升起，回到天体的固定位置并轻微回弹稳定 */
+/* 升起：等旧天体完全落下后，从地平线下升起并轻微回弹稳定 */
 @keyframes ptRise {
-  0%, 34% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
-  56% { opacity: 1; transform: translateY(-0.08em) scale(1.03); }
-  64%, 100% { opacity: 1; transform: translateY(0) scale(1); }
+  0%, 46% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
+  68% { opacity: 1; transform: translateY(-0.08em) scale(1.03); }
+  76%, 100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 /* 文案淡入后保持可见，直到整层淡出（便于停留观看结果） */
 @keyframes ptTextIn {
-  0%, 44% { opacity: 0; transform: translate(-50%, 14px); }
-  58%, 100% { opacity: 1; transform: translate(-50%, 0); }
+  0%, 60% { opacity: 0; transform: translate(-50%, 14px); }
+  72%, 100% { opacity: 1; transform: translate(-50%, 0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .phase-transition.active,
+  /* 关闭位移动画后仍需保证整层可见（基础样式是 opacity:0 + visibility:hidden） */
+  .phase-transition.active {
+    opacity: 1;
+    visibility: visible;
+  }
   .phase-transition.active .pt-glow,
   .phase-transition.active .pt-horizon,
   .phase-transition.active .pt-icon,
