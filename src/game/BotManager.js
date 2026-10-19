@@ -488,7 +488,13 @@ class BotManager {
           infoMsg = msg;
         } else if (roleName === '占卜师') {
           const targetInfo = this._extractTargetInfo(info);
-          const resultText = msg.includes('有恶魔') ? '结果显示有恶魔嫌疑' : '结果显示没有恶魔';
+          // 以信息条目中的 result 布尔值为准。不能用 msg.includes('有恶魔') 判断：
+          // “没有恶魔”同样包含“有恶魔”子串，会把结果说反，导致发言与上帝视角中的
+          // 实际信息不一致（尤其是中毒后拿到假信息时）。
+          const hasDemon = (typeof info.result === 'boolean')
+            ? info.result
+            : (msg.includes('有恶魔') && !msg.includes('没有恶魔'));
+          const resultText = hasDemon ? '结果显示有恶魔嫌疑' : '结果显示没有恶魔';
           infoMsg = targetInfo ? `昨晚我查了${targetInfo}，${resultText}` : msg;
         } else if (roleName === '送葬者') {
           infoMsg = msg;

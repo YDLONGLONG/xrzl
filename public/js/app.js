@@ -3728,9 +3728,16 @@ function godLogGroupOf(entry) {
   return { key: `d${d}`, kind: 'day', icon: '☀️', label: d <= 0 ? '白天' : `第 ${d} 天` };
 }
 
+// 渲染上下文：上帝视角实时日志默认取 godState.players；
+// 历史记录详情页渲染时临时注入该局的玩家列表，复用同一套渲染逻辑。
+let godLogPlayersOverride = null;
+function godLogPlayers() {
+  return godLogPlayersOverride || (godState && godState.players) || [];
+}
+
 // 玩家徽标：座位号 + 昵称 + 角色，按阵营着色，死亡者置灰
 function godLogPlayerChip(playerId) {
-  const players = (godState && godState.players) || [];
+  const players = godLogPlayers();
   const p = players.find(x => x.id === playerId);
   if (!p || p.seat < 0) return '';
   const teamCls = p.team === 'EVIL' ? 'evil' : (p.team === 'GOOD' ? 'good' : '');
@@ -3747,7 +3754,7 @@ const GOD_LOG_ACTOR_KEYS = ['playerId', 'nominatorId', 'acterId', 'pacifistId', 
 // 从 data 中提取玩家 id，渲染「发动者 → 被作用者」流程
 function godLogFlowHtml(entry) {
   const data = entry.data || {};
-  const players = (godState && godState.players) || [];
+  const players = godLogPlayers();
   if (players.length === 0) return '';
   const known = new Set(players.map(p => p.id));
   const ids = [];
@@ -3788,6 +3795,44 @@ function godLogFlowHtml(entry) {
   return parts.join('');
 }
 
+// 行动行上的状态徽标：行动者当时是否醉酒/中毒（历史日志在写入时已快照）
+const GOD_LOG_STATUS_TYPES = new Set(['NIGHT_ACTION', 'NIGHT_WAKE', 'ABILITY', 'PRIVATE_INFO']);
+function godLogActorStatusHtml(row) {
+  const st = row && row.data && row.data.actorStatus;
+  if (!st || !GOD_LOG_STATUS_TYPES.has(row.type)) return '';
+  const badges = [];
+  if (st.poisoned) badges.push('<span class="gl-state poisoned">🧪 中毒</span>');
+  if (st.drunk) badges.push('<span class="gl-state drunk">🍺 醉酒</span>');
+  return badges.join('');
+}
+
+// 投票面板里的玩家小标签（座位 + 昵称，不重复角色名以免过于拥挤）
+function godLogVoterChip(playerId) {
+  const p = godLogPlayers().find(x => x.id === playerId);
+  if (!p) return '';
+  return `<span class="gl-voter" title="${escapeHtml((p.seat + 1) + '号 ' + p.name)}"><b>${p.seat + 1}</b>${escapeHtml(p.name)}</span>`;
+}
+
+// 提名投票结果：通过/未通过 + 票数阈值 + 赞成/反对名单
+function godLogVoteHtml(voteResult) {
+  if (!voteResult) return '';
+  const votes = Array.isArray(voteResult.votes) ? voteResult.votes : [];
+  const yes = votes.filter(v => v && v.yes === true).map(v => v.playerId);
+  const no = votes.filter(v => v && v.yes !== true).map(v => v.playerId);
+  const countText = `${voteResult.voteCount}/${voteResult.threshold} 票`;
+  const badge = voteResult.passed
+    ? `<span class="gl-vote-badge pass">✅ 通过 ${countText}</span>`
+    : `<span class="gl-vote-badge fail">❌ 未通过 ${countText}</span>`;
+  const groups = [];
+  if (yes.length > 0) {
+    groups.push(`<span class="gl-vote-group"><i class="yes">赞成</i>${yes.map(godLogVoterChip).join('')}</span>`);
+  }
+  if (no.length > 0) {
+    groups.push(`<span class="gl-vote-group"><i class="no">反对</i>${no.map(godLogVoterChip).join('')}</span>`);
+  }
+  return `<div class="gl-vote">${badge}${groups.join('')}</div>`;
+}
+
 // 消息内高亮「N号 昵称」与关键结果词，便于扫读
 const GOD_LOG_RESULT_TERMS = [
   ['未通过', 'gl-kw-bad'], ['无事发生', 'gl-kw-bad'], ['击杀', 'gl-kw-bad'], ['被杀', 'gl-kw-bad'],
@@ -3802,7 +3847,7 @@ function highlightGodLogMessage(message) {
   let html = escapeHtml(String(message == null ? '' : message));
 
   // 座位 + 昵称高亮（如「3号 张三」）
-  const players = (godState && godState.players) || [];
+  const players = godLogPlayers();
   players.forEach(p => {
     if (!p.name || p.seat < 0) return;
     const seat = p.seat + 1;
@@ -3825,7 +3870,7 @@ const GOD_LOG_INFO_MERGE_TYPES = new Set(['NIGHT_ACTION', 'NIGHT_WAKE', 'ABILITY
 
 // 该玩家是否是恶魔（用于把恶魔的击杀行动并入夜晚死亡日志）
 function godLogIsDemon(playerId) {
-  const players = (godState && godState.players) || [];
+  const players = godLogPlayers();
   const p = players.find(x => x.id === playerId);
   return !!(p && p.category === 'DEMON');
 }
@@ -3867,11 +3912,10 @@ function buildGodLogRows(entries) {
       return;
     }
 
-    // 4) 提名 + 该次提名的投票结果 → 一行
+    // 4) 提名 + 该次提名的投票结果 → 一行（投票结果由专用面板呈现，不再拼接冗余文案）
     if (entry.type === 'VOTE_RESULT' && last && last.__kind === 'nomination'
       && last.data && last.data.nomineeId && last.data.nomineeId === data.nomineeId) {
-      last.mergeMessage = `${last.message}\n${entry.message}`;
-      last.votePassed = data.passed;
+      last.voteResult = data;
       return;
     }
 
@@ -3965,8 +4009,8 @@ function godLogMessageHtml(message) {
     + `<div class="gl-details-body">${highlightGodLogMessage(rest)}</div></details>`;
 }
 
-function appendGodLogRow(row) {
-  const logContainer = $('godActionLog');
+function appendGodLogRow(row, logContainer) {
+  logContainer = logContainer || $('godActionLog');
   if (!logContainer) return;
 
   // 分组表头（滚动时吸顶）
@@ -4004,6 +4048,9 @@ function appendGodLogRow(row) {
     probHtml = probInfos.map(pi => formatProbInfo(pi)).join('');
   }
 
+  const statusHtml = godLogActorStatusHtml(row);
+  const voteHtml = row.voteResult ? godLogVoteHtml(row.voteResult) : '';
+
   const el = document.createElement('div');
   el.className = 'gl-entry';
   el.style.setProperty('--gl-color', meta.color);
@@ -4012,12 +4059,31 @@ function appendGodLogRow(row) {
       <span class="gl-time">${escapeHtml(row.time || '')}</span>
       <span class="gl-type">${meta.icon} ${meta.label}</span>
       ${isFalseInfo ? '<span class="gl-false">⚠️ 假信息</span>' : ''}
+      ${statusHtml}
       ${flow ? `<span class="gl-flow">${flow}</span>` : ''}
     </div>
     ${messageHtml ? `<div class="gl-msg">${messageHtml}</div>` : ''}
+    ${voteHtml}
     ${probHtml}
   `;
   logContainer.appendChild(el);
+}
+
+// 把一份行动日志渲染进指定容器：
+// 上帝视角实时日志与历史记录详情页共用同一套分组/合并/高亮/配色逻辑。
+// players 为该局玩家列表（用于徽标、流程与高亮），渲染期间临时覆盖上下文。
+function renderGodLogInto(container, entries, players) {
+  if (!container) return;
+  const prevOverride = godLogPlayersOverride;
+  godLogPlayersOverride = players || null;
+  try {
+    container.innerHTML = '';
+    container.dataset.godGroup = '';
+    container.dataset.godRendered = '1';
+    buildGodLogRows(entries || []).forEach(row => appendGodLogRow(row, container));
+  } finally {
+    godLogPlayersOverride = prevOverride;
+  }
 }
 
 // 全量重建日志：内容变化（尤其是合并）时统一走这里，并保持滚动位置
@@ -4028,10 +4094,9 @@ function renderGodLog() {
   const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
   const prevScrollTop = container.scrollTop;
 
-  container.innerHTML = '';
-  container.dataset.godGroup = '';
-  container.dataset.godRendered = '1';
-  buildGodLogRows((godState && godState.actionLog) || []).forEach(appendGodLogRow);
+  renderGodLogInto(container,
+    (godState && godState.actionLog) || [],
+    (godState && godState.players) || []);
 
   container.scrollTop = (firstRender || nearBottom) ? container.scrollHeight : prevScrollTop;
 }
@@ -5432,203 +5497,175 @@ function closeHistoryDetail() {
   $('historyTitle').textContent = '📜 历史记录';
 }
 
-function formatHistoryTime(date) {
+function formatHistoryTime(date, short = false) {
   if (!date) return '未知时间';
   const d = new Date(date);
+  if (short) {
+    return d.toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  }
   return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+// 对局时长文案（列表与详情共用）
+function formatHistoryDuration(startedAt, endedAt) {
+  if (!startedAt || !endedAt) return '';
+  const duration = new Date(endedAt) - new Date(startedAt);
+  if (!(duration > 0)) return '';
+  const mins = Math.floor(duration / 60000);
+  if (mins <= 0) return '不到1分钟';
+  if (mins >= 60) return `${Math.floor(mins / 60)}小时${mins % 60}分钟`;
+  return `${mins}分钟`;
+}
+
+// 历史列表里的玩家小标签：座位 + 昵称 + 角色（死亡置灰、AI 标记）
+function historyPlayerTag(p) {
+  const teamCls = p.team === 'GOOD' ? 'good' : 'evil';
+  const deadCls = p.isAlive === false ? ' dead' : '';
+  const bot = p.isBot ? '<span class="hist-tag-bot">🤖</span>' : '';
+  const title = `${p.seat + 1}号 ${p.name} · ${p.roleName || ''}${p.isAlive === false ? '（已死亡）' : ''}`;
+  return `<span class="hist-tag ${teamCls}${deadCls}" title="${escapeHtml(title)}">`
+    + `<b>${p.seat + 1}</b>`
+    + `<span class="hist-tag-name">${escapeHtml(p.name)}</span>`
+    + `<span class="hist-tag-role">${escapeHtml(p.roleName || '')}</span>`
+    + bot
+    + `</span>`;
 }
 
 async function loadHistoryList() {
   const container = $('historyListContent');
   if (!container) return;
-  container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:40px;">加载中...</div>';
-  
+  container.innerHTML = '<div class="hist-empty">加载中…</div>';
+
   try {
     const res = await fetch('/api/history');
     const data = await res.json();
     if (!data.success) {
-      container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(data.message || '未知错误')}</div>`;
       return;
     }
     const list = data.history || [];
     if (list.length === 0) {
-      container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:60px;">暂无历史记录，完成一局游戏后会显示在这里</div>';
+      container.innerHTML = '<div class="hist-empty"><span class="hist-empty-icon">📜</span>暂无历史记录<br>完成一局游戏后会显示在这里</div>';
       return;
     }
-    
-    let html = '';
+
+    let html = '<div class="hist-list">';
     list.forEach(h => {
-      const winnerColor = h.winner === 'GOOD' ? '#07C160' : '#FA5151';
+      const teamCls = h.winner === 'GOOD' ? 'good' : 'evil';
       const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
-      const endedTime = formatHistoryTime(h.endedAt);
-      
-      // 计算游戏时长
-      let durationText = '';
-      if (h.startedAt && h.endedAt) {
-        const duration = new Date(h.endedAt) - new Date(h.startedAt);
-        const mins = Math.floor(duration / 60000);
-        if (mins >= 60) {
-          durationText = `${Math.floor(mins/60)}小时${mins%60}分钟`;
-        } else if (mins > 0) {
-          durationText = `${mins}分钟`;
-        }
-      }
+      const endedTime = formatHistoryTime(h.endedAt, true);
+      const durationText = formatHistoryDuration(h.startedAt, h.endedAt);
 
-      const goodPlayers = h.players.filter(p => p.team === 'GOOD').sort((a,b) => a.seat - b.seat);
-      const evilPlayers = h.players.filter(p => p.team === 'EVIL').sort((a,b) => a.seat - b.seat);
-      const aliveCount = h.players.filter(p => p.isAlive).length;
-      const botCount = h.players.filter(p => p.isBot).length;
+      const players = h.players || [];
+      const goodPlayers = players.filter(p => p.team === 'GOOD').sort((a, b) => a.seat - b.seat);
+      const evilPlayers = players.filter(p => p.team === 'EVIL').sort((a, b) => a.seat - b.seat);
+      const aliveCount = players.filter(p => p.isAlive).length;
+      const botCount = players.filter(p => p.isBot).length;
 
-      // 按座位排序的所有玩家
-      const allPlayers = [...h.players].sort((a,b) => a.seat - b.seat);
+      const teamRow = (cls, label, group) => `
+        <div class="hist-team-row">
+          <span class="hist-team-label ${cls}">${label} ${group.length}</span>
+          <div class="hist-tags">${group.map(historyPlayerTag).join('') || '<span class="hist-none">—</span>'}</div>
+        </div>`;
 
-      // 生成玩家标签
-      function playerTag(p) {
-        const color = p.team === 'GOOD' ? '#07C160' : '#FA5151';
-        const aliveIcon = p.isAlive ? '' : ' <span style="opacity:0.5;">☠</span>';
-        const botIcon = p.isBot ? ' <span style="font-size:10px; color:#8c8c8c;">🤖</span>' : '';
-        return `<span style="display:inline-block; background:rgba(0,0,0,0.04); border:1px solid ${color}55; border-radius:4px; padding:2px 6px; margin:2px; font-size:12px; color:${color};">${p.seat+1}号 ${escapeHtml(p.name)} <span style="opacity:0.7;">(${escapeHtml(p.roleName)})</span>${aliveIcon}${botIcon}</span>`;
-      }
-      
-      html += `<div style="background:rgba(0,0,0,0.05); border:1px solid rgba(16,174,255,0.3); border-radius:8px; padding:15px; margin-bottom:12px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#10AEFF';this.style.background='rgba(16,174,255,0.1)'" onmouseout="this.style.borderColor='rgba(16,174,255,0.3)';this.style.background='rgba(0,0,0,0.05)'" onclick="viewHistoryDetail('${h.id}')">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-          <div style="font-size:1.2em; font-weight:bold;">
-            <span style="color:${winnerColor};">${winnerText}</span>
-          </div>
-          <div style="color:#8c8c8c; font-size:13px;">${endedTime}</div>
+      html += `<div class="hist-item ${teamCls}" onclick="viewHistoryDetail('${h.id}')">
+        <div class="hist-item-head">
+          <span class="hist-win ${teamCls}">${winnerText}</span>
+          <span class="hist-time">${endedTime}</span>
         </div>
-        <div style="color:#7f7f7f; font-size:13px; margin-bottom:8px;">${escapeHtml(h.winReason || '')}</div>
-        <div style="display:flex; gap:15px; flex-wrap:wrap; color:#7f7f7f; font-size:12px; margin-bottom:10px;">
-          <span>👥 ${h.playerCount}人${botCount > 0 ? `（${botCount}AI）` : ''}</span>
-          ${durationText ? `<span>⏱ ${durationText}</span>` : ''}
-          <span>💀 ${aliveCount}人存活</span>
+        ${h.winReason ? `<div class="hist-reason">${escapeHtml(h.winReason)}</div>` : ''}
+        <div class="hist-meta">
+          <span class="hist-meta-item">👥 ${h.playerCount} 人${botCount > 0 ? `（${botCount} AI）` : ''}</span>
+          ${durationText ? `<span class="hist-meta-item">⏱ ${durationText}</span>` : ''}
+          <span class="hist-meta-item">❤ ${aliveCount} 人存活</span>
         </div>
-        <div style="margin-top:6px;">
-          <div style="font-size:12px; margin-bottom:4px;">
-            <span style="color:#07C160;">善良阵营</span>
-            <span style="color:#999999; margin-left:4px;">（${goodPlayers.length}人）</span>
-          </div>
-          <div>${goodPlayers.map(playerTag).join('')}</div>
-        </div>
-        <div style="margin-top:8px;">
-          <div style="font-size:12px; margin-bottom:4px;">
-            <span style="color:#FA5151;">邪恶阵营</span>
-            <span style="color:#999999; margin-left:4px;">（${evilPlayers.length}人）</span>
-          </div>
-          <div>${evilPlayers.map(playerTag).join('')}</div>
+        <div class="hist-teams">
+          ${teamRow('good', '善良', goodPlayers)}
+          ${teamRow('evil', '邪恶', evilPlayers)}
         </div>
       </div>`;
     });
+    html += '</div>';
     container.innerHTML = html;
   } catch (e) {
-    container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${e.message}</div>`;
+    container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(e.message)}</div>`;
   }
 }
 
 async function viewHistoryDetail(historyId) {
   const container = $('historyDetailContent');
   if (!container) return;
-  container.innerHTML = '<div style="text-align:center; color:#7f7f7f; padding:40px;">加载中...</div>';
+  container.innerHTML = '<div class="hist-empty">加载中…</div>';
   $('historyList').style.display = 'none';
   $('historyDetail').style.display = 'block';
   $('historyBackBtn').style.display = 'inline-block';
   $('historyTitle').textContent = '📜 游戏详情';
-  
+
   try {
     const res = await fetch(`/api/history/${historyId}`);
     const data = await res.json();
     if (!data.success) {
-      container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${data.message || '未知错误'}</div>`;
+      container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(data.message || '未知错误')}</div>`;
       return;
     }
     const h = data.data;
-    
-    const winnerColor = h.winner === 'GOOD' ? '#07C160' : '#FA5151';
+
+    const teamCls = h.winner === 'GOOD' ? 'good' : 'evil';
     const winnerText = h.winner === 'GOOD' ? '善良阵营获胜' : '邪恶阵营获胜';
-    
+    const durationText = formatHistoryDuration(h.startedAt, h.endedAt);
+    const players = [...(h.players || [])].sort((a, b) => a.seat - b.seat);
+    const logCount = (h.actionLog || []).length;
+
     let html = `
-      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:20px; margin-bottom:20px;">
-        <div style="font-size:1.5em; font-weight:bold; color:${winnerColor}; margin-bottom:10px;">${winnerText}</div>
-        <div style="color:#7f7f7f; margin-bottom:10px;">${h.winReason}</div>
-        <div style="color:#8c8c8c; font-size:13px;">开始时间：${formatHistoryTime(h.startedAt)} | 结束时间：${formatHistoryTime(h.endedAt)} | 玩家数：${h.playerCount}</div>
-      </div>
-      
-      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:15px; margin-bottom:20px;">
-        <h3 style="color:#07C160; margin-bottom:12px;">👥 玩家角色</h3>
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr style="border-bottom:1px solid rgba(0,0,0,0.12);">
-              <th style="padding:8px; text-align:left; color:#7f7f7f;">座位</th>
-              <th style="padding:8px; text-align:left; color:#7f7f7f;">昵称</th>
-              <th style="padding:8px; text-align:left; color:#7f7f7f;">角色</th>
-              <th style="padding:8px; text-align:left; color:#7f7f7f;">阵营</th>
-              <th style="padding:8px; text-align:left; color:#7f7f7f;">状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${h.players.sort((a,b) => a.seat - b.seat).map(p => {
-              const teamColor = p.team === 'GOOD' ? '#07C160' : '#FA5151';
-              const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
-              const statusText = p.isAlive ? '存活' : '死亡';
-              const statusColor = p.isAlive ? '#07C160' : '#888';
-              const botMark = p.isBot ? ' 🤖' : '';
-              return `<tr style="border-bottom:1px solid rgba(0,0,0,0.05);">
-                <td style="padding:8px;">${p.seat+1}号</td>
-                <td style="padding:8px;">${p.name}${botMark}</td>
-                <td style="padding:8px; font-weight:bold;">${p.roleName}</td>
-                <td style="padding:8px; color:${teamColor};">${teamText}</td>
-                <td style="padding:8px; color:${statusColor};">${statusText}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      
-      <div style="background:rgba(0,0,0,0.05); border-radius:8px; padding:15px;">
-        <h3 style="color:#07C160; margin-bottom:12px;">📋 行动日志</h3>
-        <div id="historyActionLog" style="max-height:600px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.8; background:rgba(0,0,0,0.05); padding:10px; border-radius:4px;">
-          ${(h.actionLog || []).map(entry => {
-            const typeColors = {
-              'ROLE_ASSIGN': '#07C160',
-              'GAME_START': '#191919',
-              'NIGHT_WAKE': '#9b59b6',
-              'NIGHT_ACTION': '#9b59b6',
-              'NIGHT_END': '#10AEFF',
-              'DEATH': '#FA5151',
-              'NOMINATION': '#FF9500',
-              'VOTE_RESULT': '#FF9500',
-              'EXECUTION': '#FA5151',
-              'GAME_OVER': '#191919',
-              'PRIVATE_INFO': '#00B578',
-              'ABILITY': '#F5822B',
-              'CUSTOM_ASSIGN': '#07C160'
-            };
-            const color = typeColors[entry.type] || '#aaa';
-            let msg = entry.message;
-            if (entry.type === 'PRIVATE_INFO' && entry.data && entry.data.isFalse) {
-              msg = `<span style="color:#FA5151;">⚠️【假信息】</span> ${escapeHtml(entry.message)}`;
-            } else {
-              msg = escapeHtml(msg);
-            }
-            
-            let probHtml = '';
-            if (entry.data) {
-              const probInfos = [];
-              if (entry.data.probInfo) probInfos.push(entry.data.probInfo);
-              if (entry.data.correctProbInfo) probInfos.push(entry.data.correctProbInfo);
-              probHtml = probInfos.map(pi => formatProbInfo(pi)).join('');
-            }
-            
-            return `<div style="color:${color}; padding:2px 0;">
-              <span style="color:#999999;">[${entry.time}]</span> ${msg}${probHtml}
-            </div>`;
-          }).join('')}
+      <div class="hist-hero ${teamCls}">
+        <div class="hist-hero-title">${winnerText}</div>
+        ${h.winReason ? `<div class="hist-hero-reason">${escapeHtml(h.winReason)}</div>` : ''}
+        <div class="hist-hero-meta">
+          <span>🏁 ${formatHistoryTime(h.endedAt)}</span>
+          ${durationText ? `<span>⏱ ${durationText}</span>` : ''}
+          <span>👥 ${h.playerCount} 人</span>
         </div>
+      </div>
+
+      <div class="hist-card">
+        <h3 class="hist-card-title">👥 玩家角色<span class="hist-count">共 ${h.playerCount} 人</span></h3>
+        <div class="hist-table-wrap">
+          <table class="hist-table">
+            <thead>
+              <tr>
+                <th>座位</th><th>昵称</th><th>角色</th><th>阵营</th><th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${players.map(p => {
+                const cls = p.team === 'GOOD' ? 'good' : 'evil';
+                const teamText = p.team === 'GOOD' ? '善良' : '邪恶';
+                const alive = p.isAlive !== false;
+                return `<tr>
+                  <td class="hist-seat">${p.seat + 1}号</td>
+                  <td>${escapeHtml(p.name)}${p.isBot ? ' <span class="hist-bot">🤖</span>' : ''}</td>
+                  <td class="hist-role">${escapeHtml(p.roleName || '')}</td>
+                  <td class="hist-team ${cls}">${teamText}</td>
+                  <td class="hist-status ${alive ? 'alive' : 'dead'}">${alive ? '存活' : '死亡'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="hist-card">
+        <h3 class="hist-card-title">📋 行动日志<span class="hist-count">${logCount} 条记录</span></h3>
+        <div id="historyActionLog" class="wx-god-log hist-log"></div>
       </div>
     `;
     container.innerHTML = html;
+    // 行动日志与上帝视角共用同一套渲染（分组表头、徽标流程、合并规则、真假信息标记）
+    renderGodLogInto($('historyActionLog'), h.actionLog || [], h.players || []);
   } catch (e) {
-    container.innerHTML = `<div style="text-align:center; color:#FA5151; padding:40px;">加载失败：${e.message}</div>`;
+    container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(e.message)}</div>`;
   }
 }
 

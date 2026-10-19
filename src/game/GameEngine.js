@@ -1,5 +1,5 @@
 // 游戏引擎 - 状态机核心
-const { PHASES } = require('../config/game-config');
+const { PHASES, ROLE_IDS } = require('../config/game-config');
 const { getSeatedPlayers, getAlivePlayers } = require('../utils/helpers');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('../config/prob-config');
 const RoleAllocator = require('./RoleAllocator');
@@ -63,6 +63,16 @@ class GameEngine {
   // 添加行动日志
   logAction(type, message, data = {}) {
     const gs = this.room.gameState;
+    // 行动者的醉酒/中毒状态在此刻快照：日志是历史数据，事后无法再还原当时状态。
+    // 上帝视角与历史记录据此在行动行上标注（酒鬼角色本身视为醉酒）。
+    const actorId = data.playerId || data.nominatorId || data.acterId;
+    const actor = (actorId && this.room.players) ? this.room.players.get(actorId) : null;
+    let actorStatus = null;
+    if (actor) {
+      const drunk = actor.isDrunk === true || !!(actor.role && actor.role.id === ROLE_IDS.DRUNK);
+      const poisoned = actor.isPoisoned === true;
+      if (drunk || poisoned) actorStatus = { drunk, poisoned };
+    }
     const entry = {
       time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
       phase: gs.phase,
@@ -70,7 +80,7 @@ class GameEngine {
       night: gs.nightCount,
       type,
       message,
-      data
+      data: actorStatus ? { ...data, actorStatus } : data
     };
     gs.actionLog.push(entry);
     // 只保留最近200条

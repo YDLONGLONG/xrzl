@@ -138,6 +138,7 @@ class VictoryChecker {
         seat: p.seat,
         roleName: p.role.name,
         roleId: p.role.id,
+        category: p.role.category,
         team: getPlayerEffectiveTeam(p),
         isAlive: p.isAlive,
         isBot: !!p.isBot
