@@ -200,8 +200,7 @@ function initSocketEvents() {
     clearReconnectInfo();
     saveSession();
     showGameView();
-    // 重连成功只写入会话记录，不再弹提示
-    addSystemChatMessage(`已重新连接到房间 ${roomId}`);
+    // 重连提示统一由服务端广播系统消息，避免重复
     // 关闭可能打开的断线遮罩
     const overlay = $('disconnectOverlay');
     if (overlay) overlay.style.display = 'none';
@@ -2482,8 +2481,6 @@ function pickIdentityMark(roleId) {
   const pid = identityMarkTargetId;
   const name = getRoleShortName(opt);
   setIdentityMark(pid, { roleId, name, color: opt.color });
-  const p = ((currentState && currentState.players) || []).find(x => x.id === pid);
-  showToast(`已标记 ${p ? p.name : '该玩家'} 为「${name}」`, 'success');
   closeIdentityMarkPanel();
 }
 
@@ -2491,7 +2488,6 @@ function clearIdentityMark() {
   const pid = identityMarkTargetId;
   if (!pid) return;
   setIdentityMark(pid, null);
-  showToast('已清除身份标记');
   closeIdentityMarkPanel();
 }
 

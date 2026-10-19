@@ -647,8 +647,8 @@ io.on('connection', (socket) => {
 
       console.log(`玩家重连: ${disconnectedPlayer.name} (${oldId} -> ${socket.id})`);
       io.to(roomId).emit('room:playerReconnected', { playerId: socket.id, name: disconnectedPlayer.name });
-      // 重连结果以系统聊天消息广播（不再由客户端弹提示框）
-      broadcastSystemChat(roomId, `${disconnectedPlayer.name} 已重新连接`);
+      // 重连结果以系统聊天消息广播（含房间号，客户端不再单独提示）
+      broadcastSystemChat(roomId, `${disconnectedPlayer.name} 已重新连接到房间 ${roomId}`);
 
       // 如果是上帝视角玩家，需要重新加入godView
       // （客户端会重新登录上帝视角）
