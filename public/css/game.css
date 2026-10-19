@@ -2388,19 +2388,43 @@ body.resizing-active * {
   pointer-events: none;
 }
 .night-confirm-btn {
-  margin-top: 30px;
+  /* 上间距由 .night-btn-area 统一控制，避免按钮与选择区之间出现双倍留白 */
+  margin-top: 0;
   padding: 12px 40px;
   width: auto;
+  border-radius: 8px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 6px 18px rgba(7, 193, 96, 0.28);
 }
 .night-btn-area {
   display: flex;
   gap: 15px;
   justify-content: center;
+  align-items: center;
   margin-top: 30px;
 }
+/* 跳过 / 空刀：与夜晚遮罩同色系的玻璃质感按钮，不再使用浅底深字的次级按钮样式 */
 .night-skip-btn {
-  padding: 12px 30px;
+  padding: 12px 32px;
   width: auto;
+  min-width: 120px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 8px;
+  color: #DCDCDC;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.1s;
+}
+.night-skip-btn:hover {
+  background: rgba(250, 81, 81, 0.16);
+  border-color: rgba(250, 81, 81, 0.55);
+  color: #FF8A8A;
+}
+.night-skip-btn:active {
+  transform: scale(0.97);
 }
 .night-role-btn {
   padding: 10px 16px;
@@ -2567,7 +2591,7 @@ body.resizing-active * {
 .execution-effect.hiding {
   animation: executionEffectFadeOut 0.45s ease-in forwards;
 }
-/* 刀光改为与标题居中对齐的水平分隔线：不再旋转，避免看似“歪斜” */
+/* 刀光改为与标题居中对齐的水平分隔线：不再旋转，避免看似"歪斜" */
 .execution-effect-blade {
   width: min(340px, 76vw);
   height: 2px;
@@ -2643,6 +2667,180 @@ body.resizing-active * {
   .execution-effect-name {
     animation: none;
   }
+}
+
+/* ---------- 昼夜转场动画（天亮：月→日 / 入夜：日→月） ---------- */
+.phase-transition {
+  position: fixed;
+  inset: 0;
+  /* 高于处决动画(190)、通用弹窗/角色总览(300)：动画期间不显示任何页面内容 */
+  z-index: 340;
+  display: none;
+  overflow: hidden;
+  pointer-events: auto; /* 动画期间屏蔽误触（不改动任何游戏状态） */
+  /* 完全不透明的底：底部身份卡、角色技能页等界面内容不会透过动画显示 */
+  background: radial-gradient(circle at 50% 44%, #16141F 0%, #07080C 78%), #07080C;
+}
+.phase-transition.active {
+  display: block;
+  animation: ptBackdropIn 0.35s ease-out both;
+}
+/* 停留结束后的淡出（停留时长由 JS 控制，便于「动画结束后停留观看结果」） */
+.phase-transition.leaving {
+  animation: ptBackdropOut 0.42s ease-in forwards;
+}
+.pt-glow {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  width: 78vmin;
+  height: 78vmin;
+  margin: -39vmin 0 0 -39vmin;
+  border-radius: 50%;
+  opacity: 0;
+  filter: blur(6px);
+}
+.phase-transition.to-day .pt-glow {
+  background: radial-gradient(circle, rgba(255, 196, 92, 0.5) 0%, rgba(255, 196, 92, 0) 62%);
+}
+.phase-transition.to-night .pt-glow {
+  background: radial-gradient(circle, rgba(132, 156, 255, 0.42) 0%, rgba(132, 156, 255, 0) 62%);
+}
+.phase-transition.active .pt-glow {
+  animation: ptGlow 2.2s ease-out both;
+}
+
+/* 天体固定悬在天空同一位置：旧天体落山、新天体从地平线下升起顶替 */
+.pt-icon-track {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 56px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1px;
+  height: 1px;
+}
+.pt-icon {
+  position: absolute;
+  font-size: clamp(2.7em, 11vw, 5.4em);
+  line-height: 1;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+/* 光晕跟随天体本身：太阳暖光、月亮冷光，不受转场方向影响 */
+.pt-icon-sun {
+  filter: drop-shadow(0 0 26px rgba(255, 190, 80, 0.65));
+}
+.pt-icon-moon {
+  filter: drop-shadow(0 0 26px rgba(160, 180, 255, 0.5));
+}
+/* 地平线：落山/升起的参照线 */
+.pt-horizon {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 30px);
+  width: min(92vw, 760px);
+  height: 110px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(255, 205, 130, 0.22) 0%, rgba(255, 205, 130, 0.07) 44%, rgba(255, 205, 130, 0) 74%);
+  filter: blur(3px);
+  opacity: 0;
+}
+.phase-transition.to-night .pt-horizon {
+  background: radial-gradient(ellipse at center, rgba(150, 175, 255, 0.2) 0%, rgba(150, 175, 255, 0.06) 44%, rgba(150, 175, 255, 0) 74%);
+}
+.phase-transition.active .pt-horizon {
+  animation: ptHorizon 2.2s ease-out both;
+}
+
+/* 入夜：太阳落山 → 月亮升起顶替 */
+.phase-transition.to-night .pt-icon-sun { animation: ptSet 2.2s ease-in both; }
+.phase-transition.to-night .pt-icon-moon { animation: ptRise 2.2s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+/* 天亮：月亮落山 → 太阳升起顶替 */
+.phase-transition.to-day .pt-icon-moon { animation: ptSet 2.2s ease-in both; }
+.phase-transition.to-day .pt-icon-sun { animation: ptRise 2.2s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+
+.pt-text {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 58px);
+  width: min(680px, 88vw);
+  transform: translate(-50%, 0);
+  text-align: center;
+  opacity: 0;
+}
+.phase-transition.active .pt-text {
+  animation: ptTextIn 2.2s ease-out both;
+}
+.pt-title {
+  font-size: clamp(1.25em, 4.6vw, 1.85em);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
+  color: #FBF3E4;
+  text-shadow: 0 0 20px rgba(255, 200, 120, 0.55);
+}
+.phase-transition.to-night .pt-title {
+  color: #E8EEFF;
+  text-shadow: 0 0 20px rgba(140, 165, 255, 0.55);
+}
+.pt-body {
+  margin-top: 10px;
+  font-size: clamp(0.95em, 3vw, 1.12em);
+  line-height: 1.65;
+  color: rgba(242, 242, 248, 0.9);
+}
+
+@keyframes ptBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ptBackdropOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+/* 动画结束后光晕与地平线保持可见，供停留观看结果时作为背景 */
+@keyframes ptGlow {
+  0%, 26% { opacity: 0; transform: scale(0.86); }
+  52% { opacity: 0.95; transform: scale(1.02); }
+  100% { opacity: 0.62; transform: scale(1.08); }
+}
+@keyframes ptHorizon {
+  0% { opacity: 0; transform: translate(-50%, -50%) scaleX(0.72); }
+  16% { opacity: 0.8; transform: translate(-50%, -50%) scaleX(1); }
+  100% { opacity: 0.52; transform: translate(-50%, -50%) scaleX(1); }
+}
+/* 落山：保持原位片刻后向下沉入地平线，边沉边缩小淡出（先完全隐去再让新天体升起） */
+@keyframes ptSet {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  6% { opacity: 1; transform: translateY(0) scale(1); }
+  26% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
+  100% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
+}
+/* 升起：从地平线下升起，回到天体的固定位置并轻微回弹稳定 */
+@keyframes ptRise {
+  0%, 34% { opacity: 0; transform: translateY(1.9em) scale(0.72); }
+  56% { opacity: 1; transform: translateY(-0.08em) scale(1.03); }
+  64%, 100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* 文案淡入后保持可见，直到整层淡出（便于停留观看结果） */
+@keyframes ptTextIn {
+  0%, 44% { opacity: 0; transform: translate(-50%, 14px); }
+  58%, 100% { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .phase-transition.active,
+  .phase-transition.active .pt-glow,
+  .phase-transition.active .pt-horizon,
+  .phase-transition.active .pt-icon,
+  .phase-transition.active .pt-text {
+    animation: none;
+  }
+  .pt-icon-track { display: none; }
+  .pt-horizon { display: none; }
+  .phase-transition.active .pt-text { opacity: 1; }
 }
 
 /* 投票界面 */

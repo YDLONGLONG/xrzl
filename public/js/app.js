@@ -330,6 +330,19 @@ function initSocketEvents() {
     showExecutionResult(data);
   });
 
+  // 天亮公布（死亡名单 / 平安夜）：月亮→太阳转场动画，结果在动画中央展示
+  socket.on('game:dawnReport', (data) => {
+    if (hasLeftRoom) return;
+    const deaths = (data && data.deaths) || [];
+    const body = deaths.length > 0
+      ? '昨夜死亡：' + deaths.map(d => {
+          const seat = Number.isInteger(d.seat) ? `${d.seat + 1}号 ` : '';
+          return `${seat}${d.name || ''}`.trim();
+        }).filter(Boolean).join('、')
+      : '平安夜，无人死亡';
+    playPhaseTransition('day', '天亮了', body);
+  });
+
   // 技能使用结果：已由服务端以聊天区消息展示（公聊气泡 / 系统消息），不再弹提示框
 
   socket.on('chat:message', (msg) => {
@@ -677,6 +690,9 @@ function backToHome() {
   myRoomId = null;
   myName = null;
   currentState = null;
+  // 重置昼夜转场相关的状态，避免下一局沿用上一局阶段造成误播动画
+  lastRenderedPhase = null;
+  lastExecutionInfo = null;
   chatMessages = [];
   whisperTargetId = null;
   unreadPublic = 0;
@@ -1039,8 +1055,14 @@ function getCompHTML(playerCount) {
 }
 
 // ========== 游戏状态渲染 ==========
+let lastRenderedPhase = null;
 function renderGameState(state) {
   if (!state) return;
+  if (state.phase !== lastRenderedPhase) {
+    const prevPhase = lastRenderedPhase;
+    lastRenderedPhase = state.phase;
+    handlePhaseChange(prevPhase, state.phase);
+  }
   updateHeader(state);
   renderSeats(state);
   renderCenter(state);
@@ -2200,9 +2222,23 @@ function showVoteResult(data) {
 
 // 处决动画：仅在真正有人被处决时播放（平安日 / 平票 / 被拯救 / 免死均不播放）
 let executionEffectTimer = null;
+let lastExecutionInfo = null;
 function showExecutionResult(data) {
-  if (!data || !data.executedId) return;
+  if (!data) return;
+  // 记录本次处决结果，供「处决结束 → 入夜」的转场动画展示
+  lastExecutionInfo = data;
+  if (!data.executedId) return;
   playExecutionEffect(data);
+}
+
+function hideExecutionEffectNow() {
+  const overlay = $('executionEffect');
+  if (!overlay) return;
+  if (executionEffectTimer) {
+    clearTimeout(executionEffectTimer);
+    executionEffectTimer = null;
+  }
+  overlay.classList.remove('active', 'hiding');
 }
 
 function playExecutionEffect(data) {
@@ -2223,6 +2259,70 @@ function playExecutionEffect(data) {
     overlay.classList.add('hiding');
     setTimeout(() => overlay.classList.remove('active', 'hiding'), 480);
   }, 2600);
+}
+
+// ========== 昼夜转场动画 ==========
+// direction: 'day' 天亮（月亮落山、太阳升起顶替）| 'night' 入夜（太阳落山、月亮升起顶替）
+// 天体固定悬在天空同一位置，旧的沉入地平线，新的从地平线下升起，结果文案随后在中央显示
+const PHASE_TRANSITION_ANIM_MS = 2200;   // 天体落山/升起动画时长（与 CSS 保持一致）
+const PHASE_TRANSITION_FADE_MS = 420;    // 整层淡出时长
+const PHASE_TRANSITION_HOLD_MS = { day: 1500, night: 900 }; // 动画结束后停留观看结果的时长
+let phaseTransitionTimers = [];
+function clearPhaseTransitionTimers() {
+  phaseTransitionTimers.forEach(t => clearTimeout(t));
+  phaseTransitionTimers = [];
+}
+
+function playPhaseTransition(direction, title, body) {
+  const overlay = $('phaseTransition');
+  if (!overlay) return;
+  // 与处决动画可能时间重叠，先收掉处决特效，避免两层动画叠在一起
+  hideExecutionEffectNow();
+  clearPhaseTransitionTimers();
+
+  const titleEl = $('phaseTransitionTitle');
+  const bodyEl = $('phaseTransitionBody');
+  if (titleEl) titleEl.textContent = title || '';
+  if (bodyEl) bodyEl.textContent = body || '';
+
+  const isNight = direction === 'night';
+  overlay.classList.remove('active', 'to-day', 'to-night', 'leaving');
+  void overlay.offsetWidth; // 强制重排，保证连续两次转场动画都能重新播放
+  overlay.classList.add('active', isNight ? 'to-night' : 'to-day');
+
+  // 动画播放完先停留一段时间展示结果，再整层淡出
+  const hold = isNight ? PHASE_TRANSITION_HOLD_MS.night : PHASE_TRANSITION_HOLD_MS.day;
+  phaseTransitionTimers.push(setTimeout(() => {
+    overlay.classList.add('leaving');
+    phaseTransitionTimers.push(setTimeout(() => {
+      overlay.classList.remove('active', 'to-day', 'to-night', 'leaving');
+      phaseTransitionTimers = [];
+    }, PHASE_TRANSITION_FADE_MS));
+  }, PHASE_TRANSITION_ANIM_MS + hold));
+}
+
+const DAY_PHASES = ['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'DEFENSE', 'VOTING', 'EXECUTION'];
+function handlePhaseChange(prevPhase, nextPhase) {
+  if (!prevPhase) return; // 首次渲染 / 断线重连时不播放
+  // 白天结束（处决/平安日/平票）进入夜晚：太阳 → 月亮
+  // 入夜后可能立刻唤醒玩家（NIGHT_WAKE），因此两种情况都算进入夜晚
+  if (DAY_PHASES.includes(prevPhase) && (nextPhase === 'NIGHT' || nextPhase === 'NIGHT_WAKE' || nextPhase === 'FIRST_NIGHT')) {
+    playPhaseTransition('night', '夜幕降临', buildExecutionSummary());
+  }
+  if (nextPhase === 'DAY_DAWN') {
+    // 天亮动画由 game:dawnReport 驱动（需要死亡名单），这里只重置上一次的处决结果
+    lastExecutionInfo = null;
+  }
+}
+
+function buildExecutionSummary() {
+  const info = lastExecutionInfo;
+  if (!info) return '今日无人被处决';
+  if (info.executedId) {
+    const seat = Number.isInteger(info.seat) ? `${info.seat + 1}号 ` : '';
+    return `${seat}${info.name || ''} 被处决`;
+  }
+  return info.message || '今日无人被处决';
 }
 
 function confirmPhase() {

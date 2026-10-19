@@ -381,12 +381,13 @@ class GameEngine {
       clearTimeout(this._dawnEndTimer);
       this._dawnEndTimer = null;
     }
+    // 留出「昼夜转场动画 + 结束后停留观看结果」的时间（前端动画约 4.1s）
     this._dawnEndTimer = setTimeout(() => {
       this._dawnEndTimer = null;
       const cur = this.room.gameState;
       if (!cur || cur.phase !== PHASES.DAY_DAWN) return;
       this.transitionTo(PHASES.DAY_DISCUSSION);
-    }, 3000);
+    }, 4200);
   }
 
   handleDayDiscussion() {
