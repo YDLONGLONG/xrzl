@@ -2548,6 +2548,103 @@ body.resizing-active * {
   }
 }
 
+/* ---------- 处决动画 ---------- */
+.execution-effect {
+  position: fixed;
+  inset: 0;
+  z-index: 190; /* 低于胜利特效(200)：处决直接触发胜利时由胜利动画覆盖 */
+  display: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(46, 8, 10, 0.82) 0%, rgba(8, 5, 7, 0.94) 100%);
+}
+.execution-effect.active {
+  display: flex;
+  animation: executionEffectFadeIn 0.25s ease-out;
+}
+.execution-effect.hiding {
+  animation: executionEffectFadeOut 0.45s ease-in forwards;
+}
+/* 刀光改为与标题居中对齐的水平分隔线：不再旋转，避免看似“歪斜” */
+.execution-effect-blade {
+  width: min(340px, 76vw);
+  height: 2px;
+  margin: 14px auto 0;
+  background: linear-gradient(90deg, rgba(255, 120, 120, 0) 0%, rgba(255, 120, 120, 0.9) 30%, #FFFFFF 50%, rgba(255, 120, 120, 0.9) 70%, rgba(255, 120, 120, 0) 100%);
+  box-shadow: 0 0 20px rgba(250, 81, 81, 0.85);
+  transform-origin: center;
+  animation: executionEffectBlade 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
+}
+.execution-effect-inner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 24px;
+  text-align: center;
+}
+.execution-effect-icon {
+  font-size: clamp(2em, 7vw, 3.4em);
+  filter: drop-shadow(0 0 18px rgba(250, 81, 81, 0.8));
+  animation: executionEffectIcon 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+.execution-effect-title {
+  margin-top: 6px;
+  font-size: clamp(1.8em, 6vw, 3.2em);
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em; /* 抵消最后一个字后的字距，保证视觉居中 */
+  color: #FFF2F2;
+  text-shadow: 0 0 14px rgba(250, 81, 81, 0.95), 0 0 40px rgba(250, 81, 81, 0.5);
+  animation: executionEffectTitle 0.75s ease-out 0.08s both;
+}
+.execution-effect-name {
+  margin-top: 12px;
+  font-size: clamp(0.95em, 2.6vw, 1.15em);
+  letter-spacing: 0.06em;
+  text-indent: 0.06em;
+  color: rgba(255, 235, 235, 0.86);
+  animation: executionEffectName 0.6s ease-out 0.35s both;
+}
+@keyframes executionEffectFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes executionEffectFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes executionEffectBlade {
+  0% { transform: scaleX(0); opacity: 0; }
+  55% { opacity: 1; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+@keyframes executionEffectIcon {
+  from { transform: translateY(-26px) scale(0.6); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes executionEffectTitle {
+  from { transform: scale(0.82); opacity: 0; letter-spacing: 0.8em; text-indent: 0.8em; }
+  to { transform: scale(1); opacity: 1; letter-spacing: 0.32em; text-indent: 0.32em; }
+}
+@keyframes executionEffectName {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .execution-effect.active,
+  .execution-effect.hiding,
+  .execution-effect-blade,
+  .execution-effect-icon,
+  .execution-effect-title,
+  .execution-effect-name {
+    animation: none;
+  }
+}
+
 /* 投票界面 */
 .vote-panel {
   text-align: center;

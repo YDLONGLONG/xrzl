@@ -139,6 +139,8 @@ class NightResolver {
     const isFirstNight = gs.nightCount === 0;
     const queue = gs.nightQueue;
 
+    // 每次进入下一位玩家前清空缓存的唤醒信息，避免把上一人的面板下发给新的状态
+    gs.currentWakeInfo = null;
     gs.currentNightIndex++;
 
     while (gs.currentNightIndex < queue.length) {
@@ -211,13 +213,17 @@ class NightResolver {
           }
           const wakeSelectType = wakeInfo?.selectType || selectType;
 
-          // 防御：需要选人但场上已无可选目标（例如只剩自己且技能不能自选）时，
-          // 直接跳过本次唤醒，避免夜晚流程永远无法结算。
+          // 防御：需要选人但可选目标数量不足（例如只剩自己且技能不能自选、
+          // 或需要选2名死者但场上没有死者）时，直接跳过本次唤醒，
+          // 避免玩家无合法目标可点、夜晚流程永远无法结算。
           if (effectiveSelectCount > 0 && wakeSelectType === 'player') {
-            const othersAlive = getAlivePlayers(this.engine.room).filter(p => p.id !== player.id).length;
+            const allSeated = Array.from(this.engine.room.players.values()).filter(p => p.seat !== -1);
             const selfSelectable = wakeInfo?.excludeSelf !== true;
-            if (othersAlive === 0 && !selfSelectable) {
-              this.engine.logAction('NIGHT_WAKE', `${player.seat+1}号 ${player.name}（${roleName}）没有可选目标，跳过本次唤醒`, {
+            const available = wakeInfo?.selectDead
+              ? allSeated.filter(p => !p.isAlive)
+              : allSeated.filter(p => p.isAlive && (selfSelectable || p.id !== player.id));
+            if (available.length < effectiveSelectCount) {
+              this.engine.logAction('NIGHT_WAKE', `${player.seat+1}号 ${player.name}（${roleName}）可选目标不足（${available.length}/${effectiveSelectCount}），跳过本次唤醒`, {
                 playerId: player.id
               });
               gs.currentNightIndex++;
@@ -225,17 +231,23 @@ class NightResolver {
             }
           }
 
-          this.engine.io.to(player.id).emit('night:wake', {
+          const wakePayload = {
             role: roleName,
             canSelectCount: effectiveSelectCount,
             selectType: wakeSelectType,
             selectRoles: wakeInfo?.selectRoles || null,
             canSkip: wakeInfo?.canSkip !== undefined ? wakeInfo.canSkip : canSkip,
+            skipLabel: wakeInfo?.skipLabel || null,
             selectDead: wakeInfo?.selectDead || false,
             selectPlayerAndRole: wakeInfo?.selectPlayerAndRole || false,
             excludeSelf: wakeInfo?.excludeSelf || false,
             message: wakeInfo?.message || '请行动'
-          });
+          };
+          // 缓存本夜唤醒信息：玩家掉线/刷新后重新拿到状态时仍能补出行动面板，
+          // 否则会一直停在「等待其他玩家行动」且无按钮可点。
+          gs.currentWakeInfo = wakePayload;
+
+          this.engine.io.to(player.id).emit('night:wake', wakePayload);
 
           this.engine.broadcastState();
           return;
@@ -248,6 +260,24 @@ class NightResolver {
     }
 
     this.resolveNight();
+  }
+
+  // 兜底：该玩家无法给出合法行动（如 bot 选不到合法目标）时跳过本次唤醒，
+  // 避免整套夜晚流程永远停在「等待其他玩家行动」。
+  forceSkipCurrentWake(playerId, reason = '') {
+    const gs = this.engine.room.gameState;
+    if (gs.currentWakePlayerId !== playerId) return false;
+    const player = this.engine.room.players.get(playerId);
+
+    this.engine.logAction('NIGHT_WAKE', `${player ? `${player.seat + 1}号 ${player.name}` : playerId} 跳过本夜行动${reason ? `（${reason}）` : ''}`, {
+      playerId, autoSkipped: true
+    });
+
+    gs.currentWakePlayerId = null;
+    gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
+    this.engine.io.to(playerId).emit('night:actionAck', { success: true });
+    this.wakeNext();
+    return true;
   }
 
   findAlivePlayerWithRole(roleId) {
@@ -275,7 +305,9 @@ class NightResolver {
       // 注册真实的击杀/中毒等副作用（例如普卡会 Po 化目标、沙巴洛斯会记录真实击杀），
       // 而不会有任何真恶魔去覆盖这些 nightActions，从而制造出「虚假的真实伤害」。
       // 因此此处只做目标数校验，实际效果由下方「假确认信息 + 通知真恶魔」完成。
-      if (effectiveSelectCount > 0) {
+      // 假恶魔同样可以「空刀」（与真小恶魔表现一致）
+      const fakeSkip = action.skip === true;
+      if (effectiveSelectCount > 0 && !fakeSkip) {
         const targets = action.targets || [];
         if (targets.length !== effectiveSelectCount) {
           return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
@@ -289,7 +321,7 @@ class NightResolver {
       }).join('、');
       this.engine.setPlayerPrivateInfo(player, {
         type: 'fake_demon_action',
-        message: targetNames ? `你选择了 ${targetNames}` : '你执行了行动',
+        message: fakeSkip ? '你选择了空刀，本夜不杀人' : (targetNames ? `你选择了 ${targetNames}` : '你执行了行动'),
         isFakeDemon: true
       }, true, { realInfo: `${player.role.name}无实际效果` });
 
@@ -312,7 +344,9 @@ class NightResolver {
 
     const effectiveSelectCount = player.role.selectCount || 0;
     const roleSelectType = player.role.selectType || 'player';
-    const roleCanSkip = player.role.canSkip === true;
+    // 跳过权限跟随假身份：酒鬼/疯子以为自己是可跳过的角色（如小恶魔空刀）时同样可用
+    const roleCanSkip = player.role.canSkip === true
+      || !!(player.fakeRole && player.fakeRole.canSkip === true);
 
     if (action.skip && roleCanSkip) {
       if (player.role && player.role.onNightAction) {
@@ -392,11 +426,13 @@ class NightResolver {
     gs.currentWakePlayerId = player.id;
     gs.phase = PHASES.NIGHT_WAKE;
 
-    this.engine.io.to(player.id).emit('night:wake', {
+    gs.currentWakeInfo = {
       role: player.role.name,
       canSelectCount: 1,
+      selectType: 'player',
       message: '你死了。选择一名玩家查看其身份'
-    });
+    };
+    this.engine.io.to(player.id).emit('night:wake', gs.currentWakeInfo);
     this.engine.broadcastState();
   }
 

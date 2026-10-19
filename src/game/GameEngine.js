@@ -28,6 +28,7 @@ class GameEngine {
       nightQueue: [],
       currentNightIndex: -1,
       currentWakePlayerId: null,
+      currentWakeInfo: null, // 当前唤醒玩家的行动面板数据（掉线重连后补发用）
       currentDefensePlayerId: null,
       nightActions: {},
       deathsToAnnounce: [],
@@ -270,6 +271,15 @@ class GameEngine {
 
   startGame(customRoles = {}, options = {}) {
     this.room.startedAt = new Date();
+    // 清理上一局可能残留的自动推进定时器
+    if (this._executionEndTimer) {
+      clearTimeout(this._executionEndTimer);
+      this._executionEndTimer = null;
+    }
+    if (this._dawnEndTimer) {
+      clearTimeout(this._dawnEndTimer);
+      this._dawnEndTimer = null;
+    }
     const seatedPlayers = getSeatedPlayers(this.room);
     if (seatedPlayers.length < this.room.minPlayers) {
       return;
@@ -322,13 +332,11 @@ class GameEngine {
         break;
 
       case PHASES.DAY_DISCUSSION:
+        // 讨论与提名合并：进入白天即重置今日提名，玩家可边聊边提名
         gs.dayCount++;
+        this.voteManager.openNominations();
         this.handleDayDiscussion();
         break;
-
-      case PHASES.NOMINATION_PHASE:
-        this.voteManager.openNominations();
-        return;
 
       case PHASES.NIGHT:
         this.nightResolver.beginNight(gs.nightCount + 1);
@@ -366,8 +374,19 @@ class GameEngine {
       }))
     });
 
-    // 等待确认后进入白天讨论
-    this.waitForConfirmation();
+    // 天亮不再需要全员确认：公布死亡后短暂停留，自动进入白天讨论
+    this.room.confirmations.clear();
+    this.broadcastState();
+    if (this._dawnEndTimer) {
+      clearTimeout(this._dawnEndTimer);
+      this._dawnEndTimer = null;
+    }
+    this._dawnEndTimer = setTimeout(() => {
+      this._dawnEndTimer = null;
+      const cur = this.room.gameState;
+      if (!cur || cur.phase !== PHASES.DAY_DAWN) return;
+      this.transitionTo(PHASES.DAY_DISCUSSION);
+    }, 3000);
   }
 
   handleDayDiscussion() {
@@ -383,6 +402,27 @@ class GameEngine {
     this.broadcastState();
   }
 
+  // 处决阶段自动结束：保留一小段时间给前端播放处决动画，随后自动进入夜晚。
+  // 处决不需要全员确认，也不再作为独立可确认阶段。
+  scheduleExecutionEnd(delayMs = 3600) {
+    const gs = this.room.gameState;
+    if (!gs) return;
+    if (this._executionEndTimer) {
+      clearTimeout(this._executionEndTimer);
+      this._executionEndTimer = null;
+    }
+    this.broadcastState();
+    this._executionEndTimer = setTimeout(() => {
+      this._executionEndTimer = null;
+      const cur = this.room.gameState;
+      if (!cur || cur.phase !== PHASES.EXECUTION) return;
+      // 处决后先检查胜负，无人获胜才进入夜晚
+      const victory = this.victoryChecker.checkVictory();
+      if (victory) return;
+      this.transitionTo(PHASES.NIGHT);
+    }, Math.max(0, delayMs));
+  }
+
   onAllConfirmed() {
     const gs = this.room.gameState;
 
@@ -392,18 +432,8 @@ class GameEngine {
         break;
 
       case PHASES.DAY_DISCUSSION:
-        this.transitionTo(PHASES.NOMINATION_PHASE);
-        break;
-
-      case PHASES.NOMINATION_PHASE:
+        // 讨论/提名合并阶段结束：立即结算处决（处决阶段自动进入夜晚，无需确认）
         this.voteManager.closeNominations();
-        break;
-
-      case PHASES.EXECUTION:
-        // 处决后检查胜负
-        const victory = this.victoryChecker.checkVictory();
-        if (victory) return;
-        this.transitionTo(PHASES.NIGHT);
         break;
 
       case PHASES.NIGHT_WAKE:
@@ -439,7 +469,8 @@ class GameEngine {
   // 主动检查确认进度（玩家断线等情况导致需要确认人数变化时调用）
   checkConfirmations() {
     const gs = this.room.gameState;
-    const needConfirmPhases = ['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'EXECUTION'];
+    // 只有「讨论+提名」阶段需要确认；天亮与处决阶段均自动推进
+    const needConfirmPhases = ['DAY_DISCUSSION'];
     if (!needConfirmPhases.includes(gs.phase)) return;
 
     const seatedPlayers = getSeatedPlayers(this.room).filter(p => p.isBot || p.isConnected);
@@ -473,7 +504,9 @@ class GameEngine {
 
     const targets = action.targets || [];
     const isDrunk = player.role && player.role.id === 'drunk' && player.fakeRole;
-    const canSkip = player.role.canSkip === true;
+    // 酒鬼/疯子按假身份行动时，跳过权限也跟随假身份（如假小恶魔的「空刀」）
+    const canSkip = player.role.canSkip === true
+      || !!(player.fakeRole && player.fakeRole.canSkip === true);
     // 「跳过行动」由 NightResolver 处理。这里不能再按 selectCount 校验目标数量，
     // 否则像珀这样 selectCount>0 且 canSkip=true 的角色永远无法跳过，
     // 其「上次未选择→今晚选三人」的机制也就无法触发。
@@ -493,7 +526,10 @@ class GameEngine {
       // 描述本次行动实际做了什么：跳过 / 选角色 / 选玩家 / 无目标
       let actionText = '';
       if (action.skip === true) {
-        actionText = '跳过了本夜行动';
+        // 小恶魔（含以为自己是小恶魔的酒鬼/疯子）的跳过是「空刀」：规则上允许，日志需明确本夜不杀人
+        const actsAsImp = player.role.id === ROLE_IDS.IMP
+          || !!(player.fakeRole && player.fakeRole.id === ROLE_IDS.IMP);
+        actionText = actsAsImp ? '选择空刀（本夜不杀人）' : '跳过了本夜行动';
       } else if (action.roleId) {
         let pickedName = action.roleId;
         try {
@@ -660,6 +696,8 @@ class GameEngine {
       isNight: gs.phase === PHASES.FIRST_NIGHT || gs.phase === PHASES.NIGHT || gs.phase === PHASES.NIGHT_WAKE,
       currentWakePlayerId: gs.currentWakePlayerId,
       currentDefensePlayerId: gs.currentDefensePlayerId,
+      // 本夜唤醒面板数据：玩家刷新/掉线重连后据此补出行动界面
+      nightWake: gs.currentWakePlayerId === viewerId ? (gs.currentWakeInfo || null) : null,
       isYourTurn: gs.currentWakePlayerId === viewerId || gs.currentDefensePlayerId === viewerId,
       nominations: gs.nominations.map(n => ({
         nominatorId: n.nominatorId,

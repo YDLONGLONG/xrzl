@@ -522,15 +522,27 @@ class Gambler extends Role {
     const realRoleId = target.role ? target.role.id : '';
     const realRole = target.role ? target.role.name : '';
     const correct = (realRoleId === guessId);
+    // 醉酒/中毒时技能失效：无论猜对猜错都不会因自己的能力死亡。
+    // 为不让玩家察觉能力被打断，猜错时给出「猜对了」的假信息（真相只写入上帝视角日志）。
+    const debuff = player.isPoisoned ? '中毒' : (player.isDrunk ? '醉酒' : null);
+    const abilityDisabled = !!debuff;
 
-    if (correct) {
+    if (correct || abilityDisabled) {
       engine.setPlayerPrivateInfo(player, {
         type: 'gambler',
         targetId: targetId,
         guess: guess,
         result: true,
         message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜对了！`
-      });
+      }, abilityDisabled && !correct, abilityDisabled && !correct ? {
+        realInfo: `赌徒${debuff}，技能失效；实际猜错但不会死亡`
+      } : null);
+
+      if (abilityDisabled) {
+        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（赌徒）${debuff}，技能失效：猜测${correct ? '正确' : '错误'}都不会死亡。目标 ${target.seat + 1}号 ${target.name} 实为【${realRole}】`, {
+          playerId: player.id, targetId, guess, guessId, realRole, realRoleId, correct, disabledBy: player.isPoisoned ? 'poison' : 'drunk'
+        });
+      }
     } else {
       // 猜错时不向赌徒透露目标的真实身份（真实身份只写入上帝视角行动日志）
       engine.setPlayerPrivateInfo(player, {

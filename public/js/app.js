@@ -1163,8 +1163,11 @@ function renderSeats(state) {
       if (!state.gameStarted && p.isReady) markHtml += '<span class="seat-mark good">已准备</span>';
       if (p.isConnected === false) markHtml += '<span class="seat-mark" style="color:#F5822B; background:rgba(245,130,43,0.15);">断线</span>';
 
+      // 白天可以提名任意座位（包括死亡玩家）：死者同样可被提名，
+      // 僵怖这类"被当作死亡但仍存活"的角色因此仍能被再次处决。
+      // 但发起提名的必须是存活玩家：死亡玩家（含被当作死亡的僵怖）不能发起提名。
       const canNominate = (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE') &&
-                          state.gameStarted && me && me.isAlive && !isDead;
+                          state.gameStarted && me && me.isAlive && !me.isDead;
       const isHostView = state.hostId === myId;
       const canKick = isHostView && !state.gameStarted && !p.isHost;
       const clickHandler = canNominate ? `onclick="nominatePlayer('${p.id}')"` : '';
@@ -1284,6 +1287,49 @@ function toggleCenterMessage() {
   applyCenterMessageCollapsed();
 }
 
+// 白天提名列表（含每次提名的投票结果）：
+// 讨论与提名已合并为同一阶段，讨论界面直接展示今日提名
+function buildDayNominationsHtml(state) {
+  if (!state.nominations || state.nominations.length === 0) return '';
+  let html = '<div style="margin-top:8px;">今日提名：</div><div class="ss-grid">';
+  html += state.nominations.map(n => {
+    const nom = state.players.find(p => p.id === n.nominatorId);
+    const nm = state.players.find(p => p.id === n.nomineeId);
+    let resultHtml = '';
+    if (n.resolved) {
+      const yesVoters = [];
+      const noVoters = [];
+      const abstain = [];
+      const cvotes = n.currentVotes || {};
+      state.players.forEach(p => {
+        if (p.seat < 0) return;
+        const voted = cvotes[p.id];
+        if (voted === true) yesVoters.push(p);
+        else if (voted === false) noVoters.push(p);
+        else abstain.push(p);
+      });
+      const passTag = n.passed
+        ? `<span style="color:#07C160; font-weight:bold;">✅ 通过 (${n.voteCount}票)</span>`
+        : `<span style="color:#FA5151; font-weight:bold;">❌ 未通过 (${n.voteCount}票)</span>`;
+      resultHtml = `<div style="margin:6px 0 8px 0; padding:8px 10px; background:rgba(0,0,0,0.04); border-radius:6px; border-left:3px solid ${n.passed ? '#07C160' : '#FA5151'};">
+        <div style="margin-bottom:4px;">${passTag}</div>
+        <div style="font-size:0.85em; line-height:1.6;">
+          <div><span style="color:#07C160;">✅ 赞成(${yesVoters.length})：</span><span style="color:#4f4f4f;">${yesVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
+          <div><span style="color:#FA5151;">❌ 反对(${noVoters.length})：</span><span style="color:#4f4f4f;">${noVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
+          ${abstain.length > 0 ? `<div><span style="color:#999999;">⏳ 未投票(${abstain.length})：</span><span style="color:#999999;">${abstain.map(p => `${p.seat+1}号`).join(' ')}</span></div>` : ''}
+        </div>
+      </div>`;
+    } else {
+      resultHtml = ' <span style="color:#FF9500;">⏳ 投票中</span>';
+    }
+    return `<div style="font-size:0.95em;">
+      <div>${nom ? nom.seat+1 : '?'}号提名 <strong>${nm ? nm.seat+1 : '?'}号 ${nm ? escapeHtml(nm.name) : ''}</strong></div>
+      ${resultHtml}
+    </div>`;
+  }).join('') + '</div>';
+  return html;
+}
+
 function renderCenter(state) {
   const actionPanel = $('actionPanel');
   const confirmBar = $('confirmBar');
@@ -1363,7 +1409,9 @@ function renderCenter(state) {
 
       case 'NIGHT_WAKE':
         msgClass = 'night';
-        html = '<div style="color:#9b59b6;">🌙 你的回合</div>';
+        html = state.isYourTurn
+          ? '<div style="color:#9b59b6;">🌙 你的回合</div>'
+          : '<div style="color:#9b59b6;">🌙 夜幕降临</div><div style="margin-top:10px; color:#999999;">等待其他玩家行动...</div>';
         break;
 
       case 'DAY_DAWN':
@@ -1377,60 +1425,23 @@ function renderCenter(state) {
         } else {
           html += '<div style="margin-top:8px; color:#06AD56;">平安夜，无人死亡</div>';
         }
-        showConfirm = true;
+        // 天亮自动进入白天，无需全员确认
+        html += '<div style="margin-top:10px; color:#999999; font-size:0.9em;">即将自动进入白天...</div>';
         break;
 
       case 'DAY_DISCUSSION':
         msgClass = '';
-        html = `<div>💬 自由讨论中 - 第${state.dayCount}天</div>`;
-        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击右侧玩家可提名；全员确认后进入提名投票</div>';
+        html = `<div>💬 自由讨论 / 提名 - 第${state.dayCount}天</div>`;
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击右侧玩家可提名；全员确认后立即结算处决</div>';
+        html += buildDayNominationsHtml(state);
         showConfirm = true;
         break;
 
       case 'NOMINATION_PHASE':
+        // 兼容旧存档/旧广播：提名已并入白天讨论阶段
         msgClass = '';
-        html = '<div>📋 提名阶段</div>';
-        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">点击右侧玩家提名；全员确认后结束提名</div>';
-        if (state.nominations && state.nominations.length > 0) {
-          html += '<div style="margin-top:8px;">今日提名：</div>';
-          html += '<div class="ss-grid">' + state.nominations.map((n, idx) => {
-            const nom = state.players.find(p => p.id === n.nominatorId);
-            const nm = state.players.find(p => p.id === n.nomineeId);
-            let resultHtml = '';
-            if (n.resolved) {
-              // 已完成投票：显示结果 + 详细投票名单
-              const yesVoters = [];
-              const noVoters = [];
-              const abstain = [];
-              const cvotes = n.currentVotes || {};
-              state.players.forEach(p => {
-                if (p.seat < 0) return;
-                const voted = cvotes[p.id];
-                if (voted === true) yesVoters.push(p);
-                else if (voted === false) noVoters.push(p);
-                else abstain.push(p);
-              });
-              const passTag = n.passed
-                ? `<span style="color:#07C160; font-weight:bold;">✅ 通过 (${n.voteCount}票)</span>`
-                : `<span style="color:#FA5151; font-weight:bold;">❌ 未通过 (${n.voteCount}票)</span>`;
-              resultHtml = `<div style="margin:6px 0 8px 0; padding:8px 10px; background:rgba(0,0,0,0.04); border-radius:6px; border-left:3px solid ${n.passed ? '#07C160' : '#FA5151'};">
-                <div style="margin-bottom:4px;">${passTag}</div>
-                <div style="font-size:0.85em; line-height:1.6;">
-                  <div><span style="color:#07C160;">✅ 赞成(${yesVoters.length})：</span><span style="color:#4f4f4f;">${yesVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
-                  <div><span style="color:#FA5151;">❌ 反对(${noVoters.length})：</span><span style="color:#4f4f4f;">${noVoters.map(p => `${p.seat+1}号`).join(' ') || '—'}</span></div>
-                  ${abstain.length > 0 ? `<div><span style="color:#999999;">⏳ 未投票(${abstain.length})：</span><span style="color:#999999;">${abstain.map(p => `${p.seat+1}号`).join(' ')}</span></div>` : ''}
-                </div>
-              </div>`;
-            } else {
-              // 投票中或待投票
-              resultHtml = ` <span style="color:#FF9500;">⏳ 投票中</span>`;
-            }
-            return `<div style="font-size:0.95em;">
-              <div>${nom ? nom.seat+1 : '?'}号提名 <strong>${nm ? nm.seat+1 : '?'}号 ${nm ? escapeHtml(nm.name) : ''}</strong></div>
-              ${resultHtml}
-            </div>`;
-          }).join('') + '</div>';
-        }
+        html = `<div>💬 自由讨论 / 提名 - 第${state.dayCount}天</div>`;
+        html += buildDayNominationsHtml(state);
         showConfirm = true;
         break;
 
@@ -1529,8 +1540,9 @@ function renderCenter(state) {
         break;
 
       case 'EXECUTION':
-        html = '<div>⚰️ 处决阶段</div>';
-        showConfirm = true;
+        // 处决自动结算：动画播放完毕后自动进入夜晚，无需确认
+        html = '<div>⚰️ 处决中...</div>';
+        html += '<div style="margin-top:10px; color:#7f7f7f; font-size:0.9em;">处决结果揭晓后自动进入夜晚</div>';
         break;
 
       case 'GAME_OVER':
@@ -1599,6 +1611,13 @@ function renderCenter(state) {
     const pct = Math.min((confirmed / total) * 100, 100);
     $('confirmText').textContent = `确认进度: ${confirmed}/${total}`;
     $('confirmProgressFill').style.width = pct + '%';
+    // 白天阶段确认即结束讨论并执行处决
+    const confirmBtn = $('confirmBtn');
+    if (confirmBtn) {
+      confirmBtn.textContent = state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE'
+        ? '结束讨论并执行处决'
+        : '我已准备好，进入下一阶段';
+    }
 
     // 显示已确认/未确认的玩家列表
     const confirmedIds = state.confirmedIds || [];
@@ -1771,6 +1790,8 @@ function showNightWake(data) {
   // 纯信息类（如间谍查看魔典）左对齐并允许滚动，长文本更易阅读
   subtext.classList.toggle('info-list', nightSelectType === 'info');
   nightCanSkip = data.canSkip || false;
+  // 跳过按钮文案可按角色定制（如小恶魔为「空刀」）
+  skipBtn.textContent = data.skipLabel || '跳过/不使用';
   const canSelectCount = data.canSelectCount || 0;
   nightCanSelectCount = canSelectCount;
   const excludeSelf = data.excludeSelf || false;
@@ -2095,8 +2116,13 @@ function showWaitingNight() {
 
 function handleNightOverlay(state) {
   if (state.isNight && state.phase !== 'GAME_OVER') {
+    const overlay = $('nightOverlay');
     if (state.isYourTurn && state.phase === 'NIGHT_WAKE') {
-      // 被唤醒，showNightWake已处理
+      // 正常由 night:wake 事件唤起 showNightWake；若刷新/掉线重连漏收了该事件，
+      // 用状态里缓存的唤醒信息补出行动面板，避免页面一直停在「等待其他玩家行动」。
+      if (!overlay.classList.contains('wake') && state.nightWake) {
+        showNightWake(state.nightWake);
+      }
     } else if (!state.isYourTurn) {
       showWaitingNight();
     }
@@ -2113,14 +2139,19 @@ async function nominatePlayer(targetId) {
     return;
   }
   const me = currentState.players.find(p => p.id === myId);
-  if (!me.isAlive) {
-    if (me.voteToken <= 0) {
-      showToast('你已使用死后投票标记');
-      return;
-    }
+  if (!me) {
+    showToast('你不在游戏中');
+    return;
+  }
+  // 死亡玩家不能发起提名（死后投票标记仅用于投票）
+  if (!me.isAlive || me.isDead) {
+    showToast('死亡玩家不能发起提名');
+    return;
   }
   const target = currentState.players.find(p => p.id === targetId);
-  const ok = await showConfirm(`确定提名 ${target.seat+1}号 ${target.name} 吗？`, { title: '提名确认' });
+  if (!target) return;
+  const deadHint = target.isDead ? '（该玩家已死亡）' : '';
+  const ok = await showConfirm(`确定提名 ${target.seat+1}号 ${target.name}${deadHint} 吗？`, { title: '提名确认' });
   if (ok) {
     socket.emit('day:nominates', { targetId });
   }
@@ -2167,8 +2198,31 @@ function showVoteResult(data) {
   // renderCenter处理
 }
 
+// 处决动画：仅在真正有人被处决时播放（平安日 / 平票 / 被拯救 / 免死均不播放）
+let executionEffectTimer = null;
 function showExecutionResult(data) {
-  // renderCenter处理
+  if (!data || !data.executedId) return;
+  playExecutionEffect(data);
+}
+
+function playExecutionEffect(data) {
+  const overlay = $('executionEffect');
+  if (!overlay) return;
+  const nameEl = $('executionEffectName');
+  if (nameEl) {
+    const seat = Number.isInteger(data.seat) ? `${data.seat + 1}号 ` : '';
+    nameEl.textContent = `${seat}${data.name || ''} 被处决`;
+  }
+  // 重置后再添加，确保连续处决时动画能重新播放
+  overlay.classList.remove('active', 'hiding');
+  void overlay.offsetWidth;
+  overlay.classList.add('active');
+  if (executionEffectTimer) clearTimeout(executionEffectTimer);
+  executionEffectTimer = setTimeout(() => {
+    executionEffectTimer = null;
+    overlay.classList.add('hiding');
+    setTimeout(() => overlay.classList.remove('active', 'hiding'), 480);
+  }, 2600);
 }
 
 function confirmPhase() {
@@ -3434,8 +3488,8 @@ function renderGodView() {
   // 游戏状态
   const phaseNames = {
     'LOBBY': '大厅', 'FIRST_NIGHT': '首夜', 'NIGHT_WAKE': '夜晚唤醒',
-    'NIGHT': '夜晚', 'DAY_DAWN': '天亮', 'DAY_DISCUSSION': '白天讨论',
-    'NOMINATION_PHASE': '提名阶段', 'DEFENSE': '辩护', 'VOTING': '投票',
+    'NIGHT': '夜晚', 'DAY_DAWN': '天亮', 'DAY_DISCUSSION': '白天（讨论/提名）',
+    'NOMINATION_PHASE': '白天（讨论/提名）', 'DEFENSE': '辩护', 'VOTING': '投票',
     'EXECUTION': '处决', 'GAME_OVER': '游戏结束'
   };
   const phaseName = phaseNames[gs.phase] || gs.phase;

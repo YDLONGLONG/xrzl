@@ -132,8 +132,9 @@ function decrementDrunkPlayers(room) {
 }
 
 // 判断玩家是否「实际已死 / 被当作死亡」。
-// 僵怖首次死亡后 isAlive 仍为 true，但 isDead 为 true（被当作死亡）；
-// 提名与投票资格等场景必须把它视作死亡，否则它可以被反复提名处决。
+// 僵怖首次死亡后 isAlive 仍为 true，但 isDead 为 true（被当作死亡）。
+// 用于投票资格、死后投票标记、bot 行动等；提名已不再使用此判定，
+// 因为死亡玩家同样可以被提名（处决时才区分是否真正死亡）。
 function isEffectivelyDead(player) {
   if (!player) return true;
   return player.isAlive !== true || player.isDead === true;

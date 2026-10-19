@@ -203,13 +203,13 @@ class BotManager {
       }
     }
 
-    // 提名阶段 - 只有bot有概率提名，断线真实玩家不提名
-    if (gs.phase === 'NOMINATION_PHASE' && bot.isBot && !isEffectivelyDead(bot) && !bot.hasNominated && !bot._botNominated) {
+    // 白天（讨论与提名已合并）—— bot 有概率提名，断线真实玩家不提名
+    if (gs.phase === 'DAY_DISCUSSION' && bot.isBot && !isEffectivelyDead(bot) && !bot.hasNominated && !bot._botNominated) {
       if (bot._botTimer) return;
       if (Math.random() < this.engine.prob('bot_nominate')) {
         bot._botNominated = true;
         this._scheduleBot(botId, 1500 + Math.random() * 2500, (b) => {
-          if (room.gameState.phase !== 'NOMINATION_PHASE') return;
+          if (room.gameState.phase !== 'DAY_DISCUSSION') return;
           if (b.hasNominated || !b.isAlive) return;
           this._doBotNominate(b);
         });
@@ -219,8 +219,8 @@ class BotManager {
       }
     }
 
-    // 确认阶段 - 自动确认（天亮/讨论/提名/处决）—— 仅bot自动确认，断线真人不计入需要确认人数，不应自动确认
-    if (['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'EXECUTION'].includes(gs.phase)) {
+    // 确认阶段 - 自动确认（讨论/提名）—— 天亮已改为自动推进，不再需要确认
+    if (['DAY_DISCUSSION'].includes(gs.phase)) {
       if (bot.isBot && !room.confirmations.has(botId) && !bot._botConfirmed) {
         if (bot._botTimer) return;
         bot._botConfirmed = true;
@@ -276,14 +276,32 @@ class BotManager {
     const alive = Array.from(this.engine.room.players.values()).filter(p => p.isAlive && p.seat !== -1);
 
     const role = bot.role;
-    const selectType = role ? (role.selectType || 'player') : 'player';
-    const canSkip = role ? !!role.canSkip : false;
-    let selectCount = 1;
-    if (role && role.selectCount) selectCount = role.selectCount;
+    if (!role) return;
+
+    // 本夜的唤醒信息以角色自身为准（可选人数 / 是否只能选死者 / 是否允许跳过），
+    // 否则 bot 会按默认规则乱选，被服务端拒绝后整夜卡在「等待其他玩家行动」。
+    let wakeInfo = null;
+    try {
+      wakeInfo = typeof role.getNightWakeInfo === 'function'
+        ? role.getNightWakeInfo(gs, bot, this.engine, gs.nightCount === 0)
+        : null;
+    } catch (e) {
+      wakeInfo = null;
+    }
+
+    const selectType = (wakeInfo && wakeInfo.selectType) || role.selectType || 'player';
+    const canSkip = (wakeInfo && wakeInfo.canSkip !== undefined)
+      ? !!wakeInfo.canSkip
+      : !!role.canSkip;
+    const selectCount = (wakeInfo && typeof wakeInfo.canSelectCount === 'number')
+      ? wakeInfo.canSelectCount
+      : (role.selectCount || 0);
 
     // ========== 跳过逻辑（canSkip=true时，侍臣等技能有概率今晚不使用） ==========
-    if (canSkip && Math.random() < 0.25) {
-      this.engine.processNightAction(bot.id, { skip: true });
+    // 小恶魔的「空刀」虽合法，但 bot 不随机空刀（会明显削弱邪恶方），保持每晚杀人
+    const isImpBot = role.id === 'imp';
+    if (canSkip && !isImpBot && Math.random() < 0.25) {
+      this._sendBotNightAction(bot, { skip: true });
       return;
     }
 
@@ -293,7 +311,7 @@ class BotManager {
       const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
       const roleIds = scriptConfig.allRoles;
       if (!roleIds || roleIds.length === 0) {
-        this.engine.processNightAction(bot.id, { skip: true });
+        this._fallbackBotNightAction(bot, { message: '没有可选角色' });
         return;
       }
       // 侍臣作为善良阵营：优先选择邪恶阵营角色（恶魔/爪牙）概率高些
@@ -307,7 +325,8 @@ class BotManager {
       } else {
         roleId = roleIds[Math.floor(Math.random() * roleIds.length)];
       }
-      this.engine.processNightAction(bot.id, { roleId });
+      const result = this._sendBotNightAction(bot, { roleId });
+      if (!result.success) this._fallbackBotNightAction(bot, result);
       return;
     }
 
@@ -316,11 +335,6 @@ class BotManager {
       const { getScriptConfig } = require('../config/game-config');
       const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
       const roleIds = scriptConfig.allRoles;
-      // 选目标玩家
-      let candidates = alive.filter(p => p.id !== bot.id);
-      if (role && role.team === 'EVIL') {
-        // 赌徒是好人，倾向选疑似坏人，但bot不太准，选个随机的（允许选自己）
-      }
       // 赌徒允许选自己，所以从所有存活里选（包括自己）
       const allAliveSelectable = alive.slice();
       const target = allAliveSelectable[Math.floor(Math.random() * allAliveSelectable.length)];
@@ -328,36 +342,92 @@ class BotManager {
         ? roleIds[Math.floor(Math.random() * roleIds.length)]
         : null;
       if (!target || !guessRoleId) {
-        this.engine.processNightAction(bot.id, { skip: true });
+        this._fallbackBotNightAction(bot, { message: '没有可选目标' });
         return;
       }
-      this.engine.processNightAction(bot.id, { targets: [target.id], roleId: guessRoleId });
+      const result = this._sendBotNightAction(bot, { targets: [target.id], roleId: guessRoleId });
+      if (!result.success) this._fallbackBotNightAction(bot, result);
       return;
     }
 
     // ========== 默认：选择玩家 ==========
-    let candidates = alive.filter(p => p.id !== bot.id);
+    // 被拒绝时换一批目标重试，全部失败才走跳过兜底，避免夜晚永久卡住
+    let lastResult = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const targets = this._pickBotNightTargets(bot, wakeInfo, selectCount);
+      lastResult = this._sendBotNightAction(bot, { targets });
+      if (lastResult.success) return;
+      if (this.engine.room.gameState.currentWakePlayerId !== bot.id) return; // 已不再等待该玩家
+    }
+    this._fallbackBotNightAction(bot, lastResult);
+  }
 
-    if (role && role.category === 'DEMON') {
-      // 恶魔优先杀好人
+  // 依据唤醒信息为 bot 挑选合法目标
+  _pickBotNightTargets(bot, wakeInfo, selectCount) {
+    const room = this.engine.room;
+    const all = Array.from(room.players.values()).filter(p => p.seat !== -1);
+    const selectDead = !!(wakeInfo && wakeInfo.selectDead);
+    const pool = all.filter(p => (selectDead ? !p.isAlive : p.isAlive));
+
+    let candidates = pool.filter(p => p.id !== bot.id);
+
+    // 驱魔人 / 魔鬼代言人：不能与上一夜选择相同，否则行动会被拒绝
+    const lastTargetId = bot.abilityState && bot.abilityState.lastTargetId;
+    if (lastTargetId && (bot.role.id === 'exorcist' || bot.role.id === 'devilsadvocate')) {
+      const filtered = candidates.filter(p => p.id !== lastTargetId);
+      if (filtered.length > 0) candidates = filtered;
+    }
+
+    // 恶魔优先杀好人（目标不足时退化为全部候选）
+    if (!selectDead && bot.role.category === 'DEMON') {
       const goodTargets = candidates.filter(p => p.role && p.role.team !== 'EVIL');
-      if (goodTargets.length > 0) candidates = goodTargets;
+      if (goodTargets.length >= selectCount) candidates = goodTargets;
+    }
+
+    candidates = candidates.slice();
+    // 可选目标不足时允许包含自己（如旅店老板只剩一名其他玩家可选）
+    if (candidates.length < selectCount && pool.some(p => p.id === bot.id)) {
+      candidates.push(bot);
     }
 
     const targets = [];
-    for (let i = 0; i < selectCount; i++) {
-      if (candidates.length === 0) break;
+    const limit = Math.min(selectCount, candidates.length);
+    for (let i = 0; i < limit; i++) {
       const idx = Math.floor(Math.random() * candidates.length);
       targets.push(candidates[idx].id);
-      if (selectCount > 1) candidates.splice(idx, 1);
+      candidates.splice(idx, 1);
+    }
+    return targets;
+  }
+
+  // 提交一次 bot 夜间行动（不做兜底，便于调用方重试）
+  _sendBotNightAction(bot, action) {
+    return this.engine.processNightAction(bot.id, action) || { success: false, message: '行动未生效' };
+  }
+
+  // 行动被拒绝后的兜底：能跳过就跳过，否则强制跳过本次唤醒
+  _fallbackBotNightAction(bot, result) {
+    const gs = this.engine.room.gameState;
+    if (gs.currentWakePlayerId !== bot.id) return true; // 已经不再等待该玩家
+
+    const role = bot.role;
+    const canSkip = !!role.canSkip || !!(bot.fakeRole && bot.fakeRole.canSkip === true);
+    if (canSkip) {
+      const skipped = this.engine.processNightAction(bot.id, { skip: true });
+      if (skipped && skipped.success) return true;
     }
 
-    this.engine.processNightAction(bot.id, { targets });
+    // 兜底：跳过本次唤醒并继续下一位，避免整局停在「等待其他玩家行动」
+    this.engine.logAction('NIGHT_WAKE', `${bot.seat + 1}号 ${bot.name}（${role.name}）无法给出合法行动，自动跳过（${(result && result.message) || '无可用目标'}）`, {
+      playerId: bot.id, autoSkipped: true
+    });
+    this.engine.nightResolver.forceSkipCurrentWake(bot.id);
+    return false;
   }
 
   _doBotNominate(bot) {
     const gs = this.engine.room.gameState;
-    if (gs.phase !== 'NOMINATION_PHASE') return;
+    if (gs.phase !== 'DAY_DISCUSSION') return;
     if (bot.hasNominated || isEffectivelyDead(bot)) return;
 
     const others = Array.from(this.engine.room.players.values())

@@ -8,9 +8,9 @@ class VoteManager {
     this.engine = engine;
   }
 
+  // 开启今日提名：讨论与提名合并为同一阶段（DAY_DISCUSSION），这里只重置今日提名记录
   openNominations() {
     const gs = this.engine.room.gameState;
-    gs.phase = PHASES.NOMINATION_PHASE;
     gs.nominations = [];
     gs.currentNominationIndex = -1;
     this.engine.broadcastState();
@@ -25,13 +25,10 @@ class VoteManager {
       return { success: false, message: '玩家不存在' };
     }
 
-    // 僵怖首次死亡后 isAlive 仍为 true 但被当作死亡，必须按死亡处理
-    const nominatorDead = isEffectivelyDead(nominator);
-    if (nominatorDead) {
-      if (nominator.voteToken <= 0) {
-        return { success: false, message: '你已使用死后投票标记' };
-      }
-      nominator.voteToken--;
+    // 死亡玩家不能发起提名（僵怖被当作死亡时同样算死亡）。
+    // 死者的「余1票」只用于参与投票，不再消耗在提名上。
+    if (isEffectivelyDead(nominator)) {
+      return { success: false, message: '死亡玩家不能发起提名' };
     }
 
     if (nominator.hasNominated) {
@@ -42,10 +39,9 @@ class VoteManager {
       return { success: false, message: '该玩家今天已被提名过' };
     }
 
-    if (isEffectivelyDead(nominee)) {
-      return { success: false, message: '不能提名死亡玩家' };
-    }
-
+    // 允许提名已死亡玩家：僵怖首次死亡后 isDead=true 但仍 isAlive=true，
+    // 若不放开此项它将永远无法被再次提名处决；同时避免"死者不可被提名"
+    // 反向暴露僵怖的真实存活状态。真正已死的玩家被处决时不产生任何效果。
     nominator.hasNominated = true;
     nominee.wasNominatedToday = true;
 
@@ -268,8 +264,8 @@ class VoteManager {
       passed: nomination.passed
     });
 
-    // 回到提名阶段，重置确认状态
-    gs.phase = PHASES.NOMINATION_PHASE;
+    // 回到自由讨论（讨论与提名同阶段），重置确认状态；全员确认后直接结算处决
+    gs.phase = PHASES.DAY_DISCUSSION;
     this.engine.waitForConfirmation();
   }
 
@@ -294,8 +290,8 @@ class VoteManager {
       if (gs.mastermindExtraRound) {
         gs.mastermindExtraRound = false;
       }
-      this.engine.waitForConfirmation();
-      this.engine.broadcastState();
+      // 平安日没有处决动画，短暂停留后直接进入夜晚
+      this.engine.scheduleExecutionEnd(1200);
       return;
     }
 
@@ -313,12 +309,34 @@ class VoteManager {
       if (gs.mastermindExtraRound) {
         gs.mastermindExtraRound = false;
       }
-      this.engine.waitForConfirmation();
-      this.engine.broadcastState();
+      this.engine.scheduleExecutionEnd(1200);
       return;
     }
 
     const toExecute = this.engine.room.players.get(tied[0].nomineeId);
+
+    // 被提名者已是真正的死者（isAlive=false）：处决无效，不记录死亡、不播放处决动画。
+    // 僵怖首次死亡后 isAlive 仍为 true，会继续走正常处决流程，从而可以被真正处决。
+    if (toExecute && toExecute.isAlive !== true) {
+      // 与平安日一致：无人真正死亡，主谋额外回合标记需清除，避免夜晚流程卡死
+      if (gs.mastermindExtraRound) {
+        gs.mastermindExtraRound = false;
+      }
+      gs.todaysDeaths.push({ cause: 'DEAD_TARGET' });
+      this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 已是死亡玩家，本次处决无效`, {
+        playerId: toExecute.id, deadTarget: true
+      });
+      this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
+        executedId: null,
+        seat: toExecute.seat,
+        name: toExecute.name,
+        votes: maxVotes,
+        message: `${toExecute.seat+1}号(${toExecute.name})已是死亡玩家，不会再次死亡`
+      });
+      this.engine.scheduleExecutionEnd(1200);
+      return;
+    }
+
     if (toExecute) {
       // 检查和平主义者拯救（处决前判断，拯救则不执行处决）
       let pacifistSaved = false;
@@ -357,8 +375,7 @@ class VoteManager {
             votes: maxVotes,
             message: `${toExecute.seat+1}号(${toExecute.name})的处决被阻止，未死亡`
           });
-          this.engine.waitForConfirmation();
-          this.engine.broadcastState();
+          this.engine.scheduleExecutionEnd(1200);
           return;
         }
 
@@ -404,8 +421,8 @@ class VoteManager {
       }
     }
 
-    this.engine.waitForConfirmation();
-    this.engine.broadcastState();
+    // 处决阶段自动结束：留出动画时间后自动进入夜晚，无需全员确认
+    this.engine.scheduleExecutionEnd();
   }
 }
 

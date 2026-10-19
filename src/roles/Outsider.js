@@ -134,6 +134,8 @@ class Drunk extends Role {
       fakeMsg = `${targetNames}中，${helpGood ? '有恶魔' : '没有恶魔'}`;
     } else if (fake.id === 'monk' && targets.length === 1) {
       fakeMsg = `你守护了 ${targetNames || '某玩家'}`;
+    } else if (fake.id === 'imp' && action.skip === true) {
+      fakeMsg = '你选择了空刀，本夜不杀人';
     } else {
       fakeMsg = `你选择了 ${targetNames || '无目标'}`;
     }

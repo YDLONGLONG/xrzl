@@ -14,7 +14,8 @@ class Imp extends Role {
     this.firstNightOrder = 2;
     this.otherNightOrder = 3;
     this.selectCount = 1;
-    this.abilityDesc = '每个夜晚（除首夜），选择一名玩家将其杀害。首夜得知爪牙和3个不在场身份。';
+    this.canSkip = true; // 「空刀」：每晚仍须选择目标，但允许主动选择本夜不杀人
+    this.abilityDesc = '每个夜晚（除首夜），选择一名玩家将其杀害，或选择「空刀」。首夜得知爪牙和3个不在场身份。';
   }
 
   onFirstNight(gameState, player, engine) {
@@ -27,11 +28,22 @@ class Imp extends Role {
     }
     return {
       canSelectCount: 1,
-      message: '选择一名玩家杀害'
+      canSkip: true,
+      skipLabel: '空刀',
+      message: '选择一名玩家杀害；也可以选择「空刀」，本夜不杀人'
     };
   }
 
   onNightAction(gameState, player, action, engine) {
+    // 空刀：合法选择，本夜不产生死亡（不写入击杀记录）
+    if (action.skip === true) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'imp',
+        message: '你选择了空刀，本夜不杀人'
+      });
+      return { success: true, skipped: true };
+    }
+
     const targetId = action.targets && action.targets[0];
     if (!targetId) {
       return { success: false, message: '请选择一名玩家' };
