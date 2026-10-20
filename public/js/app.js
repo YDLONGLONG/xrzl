@@ -24,9 +24,136 @@ let gossipPending = false;      // 造谣者声明等待裁判判定中（期间
 let gossipPendingTimer = null;  // 等待兜底定时器（服务端长时间无响应时恢复可点击）
 let gossipRetryStatement = '';  // 判定服务异常导致失败的声明原文，重新发动时自动回填
 
+// ========== 请求按钮 loading（防止请求未完成时重复点击） ==========
+// 所有网络请求都经 socket.emit 发出。这里统一拦截 emit：
+// 发起请求的按钮立即进入 loading 态并被禁用，收到对应的服务端响应后恢复，
+// 服务端无响应时由兜底定时器恢复，避免按钮永久卡死。
+const REQUEST_RELEASE_MAP = {
+  'room:create': ['room:created', 'room:stateUpdate', 'room:error'],
+  'room:join': ['room:joined', 'room:reconnected', 'room:error'],
+  'room:leave': ['room:stateUpdate'],
+  'room:seat': ['room:stateUpdate', 'room:error'],
+  'room:toggleReady': ['room:stateUpdate', 'room:error'],
+  'room:addBot': ['room:stateUpdate', 'room:error'],
+  'room:setScript': ['room:stateUpdate', 'room:error'],
+  'room:kick': ['room:stateUpdate', 'room:error'],
+  'game:start': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'game:confirm': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'night:action': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'day:nominates': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'day:endDefense': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'day:vote': ['game:stateUpdate', 'game:voteUpdate', 'room:error'],
+  'day:revokeVote': ['game:stateUpdate', 'game:voteUpdate', 'room:error'],
+  'day:endVoting': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
+  'day:useAbility': ['game:stateUpdate', 'gossip:result', 'room:stateUpdate', 'room:error'],
+  'chat:send': ['chat:message', 'room:error'],
+  'chat:announce': ['chat:message', 'room:error'],
+  'chat:recall': ['chat:recall', 'room:error'],
+  'chat:danmaku': ['chat:danmaku', 'room:error'],
+  'ai:chat': ['ai:start', 'ai:error', 'room:error'],
+  'god:login': ['god:loginResult', 'room:error'],
+  'god:logout': ['god:logoutResult'],
+  'room:getProbConfig': ['room:probConfig', 'room:error'],
+  'room:setProbConfig': ['room:probConfigSaved', 'room:stateUpdate', 'room:error'],
+  'room:resetProbConfig': ['room:probConfigSaved', 'room:stateUpdate', 'room:error'],
+};
+const LOADING_MIN_MS = 320;    // loading 最短展示时长，避免闪烁
+const LOADING_MAX_MS = 8000;   // 兜底时长：服务端无响应时自动恢复按钮
+let _loadingClickEl = null;    // 本次点击的按钮
+let _loadingEmitOverride = null; // 异步流程中显式指定的按钮
+let _loadingSeq = 0;
+const _pendingLoadings = new Map();
+
+// 记录点击来源元件：仅在同一次点击的同步流程中有效，避免误绑后续的自动请求
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest
+    ? e.target.closest('button, .game-seat, .script-card')
+    : null;
+  _loadingClickEl = el;
+  setTimeout(() => { if (_loadingClickEl === el) _loadingClickEl = null; }, 0);
+}, true);
+
+// 异步流程（如确认弹窗）中需在函数入口先记下按钮，再于 emit 时显式传入
+function getLoadingClickTarget() {
+  return _loadingEmitOverride || _loadingClickEl;
+}
+
+function startButtonLoading(el, requestEvent) {
+  if (!el || !el.classList || !el.isConnected) return;
+  if (el.dataset.loading === '1' || el.dataset.noLoading === '1') return;
+  const record = {
+    id: ++_loadingSeq,
+    el,
+    request: requestEvent,
+    prevDisabled: el.tagName === 'BUTTON' ? !!el.disabled : null,
+    releaseAt: Date.now() + LOADING_MIN_MS,
+    timer: null,
+    releaseTimer: null,
+  };
+  el.dataset.loading = '1';
+  el.setAttribute('aria-busy', 'true');
+  el.classList.add('is-loading');
+  if (el.tagName === 'BUTTON') el.disabled = true;
+  record.timer = setTimeout(() => finishButtonLoading(record), LOADING_MAX_MS);
+  _pendingLoadings.set(record.id, record);
+}
+
+function releaseButtonLoading(record) {
+  if (!_pendingLoadings.has(record.id) || record.releaseTimer) return;
+  const wait = Math.max(0, record.releaseAt - Date.now());
+  record.releaseTimer = setTimeout(() => finishButtonLoading(record), wait);
+}
+
+function finishButtonLoading(record) {
+  if (!_pendingLoadings.has(record.id)) return;
+  _pendingLoadings.delete(record.id);
+  clearTimeout(record.timer);
+  clearTimeout(record.releaseTimer);
+  const el = record.el;
+  if (!el || !el.classList) return;
+  el.classList.remove('is-loading');
+  el.removeAttribute('aria-busy');
+  delete el.dataset.loading;
+  if (el.tagName === 'BUTTON' && record.prevDisabled !== null) el.disabled = record.prevDisabled;
+}
+
+function releaseAllButtonLoading() {
+  Array.from(_pendingLoadings.values()).forEach(finishButtonLoading);
+}
+
+// 发送请求（可显式指定 loading 按钮）
+function emitRequest(requestEvent, payload, el) {
+  _loadingEmitOverride = el || null;
+  try {
+    return payload === undefined ? socket.emit(requestEvent) : socket.emit(requestEvent, payload);
+  } finally {
+    _loadingEmitOverride = null;
+  }
+}
+
+function installRequestLoadingGuard() {
+  const rawEmit = socket.emit.bind(socket);
+  socket.emit = function (requestEvent, ...args) {
+    const el = getLoadingClickTarget();
+    if (el && REQUEST_RELEASE_MAP[requestEvent]) startButtonLoading(el, requestEvent);
+    return rawEmit(requestEvent, ...args);
+  };
+  // 收到服务端响应 → 结束对应请求的 loading
+  socket.onAny((incoming) => {
+    if (_pendingLoadings.size === 0) return;
+    Array.from(_pendingLoadings.values()).forEach((record) => {
+      const releases = REQUEST_RELEASE_MAP[record.request];
+      if (releases && releases.indexOf(incoming) !== -1) releaseButtonLoading(record);
+    });
+  });
+  socket.on('disconnect', releaseAllButtonLoading);
+  socket.on('connect_error', releaseAllButtonLoading);
+}
+
 // ========== 初始化 ==========
 window.addEventListener('DOMContentLoaded', () => {
   socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: 30 });
+  installRequestLoadingGuard();
   initSocketEvents();
   // 初始化语音模块
   VoiceManager.init(socket);
@@ -909,6 +1036,7 @@ function abandonReconnect() {
 }
 
 function createRoom() {
+  const originEl = getLoadingClickTarget();
   const name = getLoginName() || myName || '';
   if (!name) {
     showLoginModal();
@@ -918,22 +1046,23 @@ function createRoom() {
   if (hasPendingReconnect()) {
     showWxConfirm(
       '你还有一个可以重新连接的游戏房间，创建新房间将放弃该对局。确定继续吗？',
-      () => doCreateRoom(name),
+      () => doCreateRoom(name, originEl),
       '放弃并创建'
     );
     return;
   }
-  doCreateRoom(name);
+  doCreateRoom(name, originEl);
 }
 
-function doCreateRoom(name) {
+function doCreateRoom(name, originEl) {
   abandonReconnect();
   hasLeftRoom = false;
   myName = name;
-  socket.emit('room:create', { playerName: name });
+  emitRequest('room:create', { playerName: name }, originEl);
 }
 
 function joinRoom() {
+  const originEl = getLoadingClickTarget();
   const roomId = $('joinRoomId').value.trim().toUpperCase();
   const name = getLoginName() || myName || '';
   if (!roomId || roomId.length !== 4) {
@@ -947,20 +1076,20 @@ function joinRoom() {
   if (hasPendingReconnect()) {
     showWxConfirm(
       '你还有一个可以重新连接的游戏房间，加入其他房间将放弃该对局。确定继续吗？',
-      () => doJoinRoom(roomId, name),
+      () => doJoinRoom(roomId, name, originEl),
       '放弃并加入'
     );
     return;
   }
-  doJoinRoom(roomId, name);
+  doJoinRoom(roomId, name, originEl);
 }
 
-function doJoinRoom(roomId, name) {
+function doJoinRoom(roomId, name, originEl) {
   abandonReconnect();
   hasLeftRoom = false;
   pendingManualJoin = true;
   myName = name;
-  socket.emit('room:join', { roomId, playerName: name });
+  emitRequest('room:join', { roomId, playerName: name }, originEl);
 }
 
 async function leaveRoom() {
@@ -1017,12 +1146,13 @@ function setScript(scriptId) {
 }
 
 async function kickPlayer(pid) {
+  const originEl = getLoadingClickTarget();
   const p = currentState && currentState.players ? currentState.players.find(x => x.id === pid) : null;
   if (!p) return;
   const name = p.name + (p.isBot ? '(机器人)' : '');
   const ok = await showConfirm(`确定要将 ${name} 踢出房间吗？`, { type: 'warning', title: '踢出玩家' });
   if (!ok) return;
-  socket.emit('room:kick', { targetId: pid });
+  emitRequest('room:kick', { targetId: pid }, originEl);
 }
 
 // 角色数量配置（人数 → 村民/外来者/爪牙/恶魔）
@@ -2155,6 +2285,7 @@ function handleNightOverlay(state) {
 
 // ========== 白天交互 ==========
 async function nominatePlayer(targetId) {
+  const originEl = getLoadingClickTarget();
   const phase = currentState.phase;
   if (phase !== 'DAY_DISCUSSION' && phase !== 'NOMINATION_PHASE') {
     showToast('现在不是提名时间');
@@ -2175,7 +2306,7 @@ async function nominatePlayer(targetId) {
   const deadHint = target.isDead ? '（该玩家已死亡）' : '';
   const ok = await showConfirm(`确定提名 ${target.seat+1}号 ${target.name}${deadHint} 吗？`, { title: '提名确认' });
   if (ok) {
-    socket.emit('day:nominates', { targetId });
+    emitRequest('day:nominates', { targetId }, originEl);
   }
 }
 
@@ -2330,6 +2461,7 @@ function confirmPhase() {
 }
 
 async function useSlayerAbility() {
+  const originEl = getLoadingClickTarget();
   const players = currentState.players.filter(p => p.isAlive && p.seat !== -1 && p.id !== myId);
   const selectedId = await showPlayerSelect('杀手技能：选择要击杀的玩家', players, { type: 'warning', confirmText: '选择' });
   if (selectedId) {
@@ -2337,7 +2469,7 @@ async function useSlayerAbility() {
     if (target) {
       const ok = await showConfirm(`确定对 ${target.seat+1}号 ${target.name} 使用杀手技能吗？每局只能使用一次。`, { type: 'warning', title: '杀手技能', confirmText: '确认击杀' });
       if (ok) {
-        socket.emit('day:useAbility', { abilityName: 'slayer', targetId: selectedId });
+        emitRequest('day:useAbility', { abilityName: 'slayer', targetId: selectedId }, originEl);
       }
     }
   }
@@ -2345,6 +2477,7 @@ async function useSlayerAbility() {
 
 async function useGossipAbility() {
   if (gossipPending) return; // 等待裁判判定结果期间不可重复发动
+  const originEl = getLoadingClickTarget();
   const retryStatement = gossipRetryStatement;
   const statement = await showTextInput('造谣者：发表公开声明', {
     placeholder: '输入你的声明（2-200字）...',
@@ -2361,7 +2494,7 @@ async function useGossipAbility() {
   });
   if (statement) {
     startGossipPending();
-    socket.emit('day:useAbility', { abilityName: 'gossip', statement: statement });
+    emitRequest('day:useAbility', { abilityName: 'gossip', statement: statement }, originEl);
   }
 }
 
@@ -2387,6 +2520,7 @@ function clearGossipPending() {
 }
 
 async function useMoonchildAbility() {
+  const originEl = getLoadingClickTarget();
   const players = currentState.players.filter(p => p.isAlive && p.seat !== -1);
   const selectedId = await showPlayerSelect('月之子：公开选择一名玩家', players, { type: 'info', confirmText: '公开选择' });
   if (selectedId) {
@@ -2394,7 +2528,7 @@ async function useMoonchildAbility() {
     if (target) {
       const ok = await showConfirm(`确定选择 ${target.seat+1}号 ${target.name} 吗？所有人都会看到你的选择。如果TA是善良的，今晚TA会死亡。`, { type: 'info', title: '月之子选择', confirmText: '确认选择' });
       if (ok) {
-        socket.emit('day:useAbility', { abilityName: 'moonchild', targetId: selectedId });
+        emitRequest('day:useAbility', { abilityName: 'moonchild', targetId: selectedId }, originEl);
       }
     }
   }
@@ -5618,6 +5752,7 @@ function saveProbConfig() {
 }
 
 async function resetProbConfig() {
+  const originEl = getLoadingClickTarget();
   if (currentState && currentState.gameStarted) {
     showToast('游戏已开始，无法重置设置');
     return;
@@ -5627,7 +5762,7 @@ async function resetProbConfig() {
   _probMode = 'standard';
   _probBackupAdvanced = null;
   _updateModeButtons();
-  socket.emit('room:resetProbConfig');
+  emitRequest('room:resetProbConfig', undefined, originEl);
 }
 
 // ========== 历史记录功能 ==========
@@ -5687,9 +5822,12 @@ function historyPlayerTag(p) {
     + `</span>`;
 }
 
+let _historyListLoading = false;
 async function loadHistoryList() {
   const container = $('historyListContent');
   if (!container) return;
+  if (_historyListLoading) return; // 未完成时不重复请求
+  _historyListLoading = true;
   container.innerHTML = '<div class="hist-empty">加载中…</div>';
 
   try {
@@ -5745,12 +5883,17 @@ async function loadHistoryList() {
     container.innerHTML = html;
   } catch (e) {
     container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(e.message)}</div>`;
+  } finally {
+    _historyListLoading = false;
   }
 }
 
+let _historyDetailLoading = false;
 async function viewHistoryDetail(historyId) {
   const container = $('historyDetailContent');
   if (!container) return;
+  if (_historyDetailLoading) return; // 未完成时不重复请求
+  _historyDetailLoading = true;
   container.innerHTML = '<div class="hist-empty">加载中…</div>';
   $('historyList').style.display = 'none';
   $('historyDetail').style.display = 'block';
@@ -5820,6 +5963,8 @@ async function viewHistoryDetail(historyId) {
     renderGodLogInto($('historyActionLog'), h.actionLog || [], h.players || []);
   } catch (e) {
     container.innerHTML = `<div class="hist-empty"><span class="hist-empty-icon">⚠️</span>加载失败：${escapeHtml(e.message)}</div>`;
+  } finally {
+    _historyDetailLoading = false;
   }
 }
 

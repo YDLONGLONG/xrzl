@@ -189,7 +189,8 @@
       <!-- 身份技能（杀手 / 造谣者 / 月之子） -->
       <div class="wx-role-abilities" id="roleAbilityBar" style="display:none;">
         <button class="btn btn-sm btn-danger" id="slayerBtn" style="display:none;" onclick="useSlayerAbility()">杀手：击杀恶魔</button>
-        <button class="btn btn-sm btn-warning" id="gossipBtn" style="display:none;" onclick="useGossipAbility()">造谣者：发表声明</button>
+        <!-- 该按钮自带「判定中」loading UI，交由 renderGameState 控制，故关闭通用 loading -->
+        <button class="btn btn-sm btn-warning" id="gossipBtn" data-no-loading="1" style="display:none;" onclick="useGossipAbility()">造谣者：发表声明</button>
         <button class="btn btn-sm btn-info" id="moonchildBtn" style="display:none;" onclick="useMoonchildAbility()">月之子：选择目标</button>
       </div>
     </div>

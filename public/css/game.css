@@ -4843,3 +4843,49 @@ body.resizing-active * {
   .hist-team-row { flex-direction: column; gap: 4px; }
   .hist-log { max-height: 420px; }
 }
+
+/* ================= 通用按钮 loading 态（请求未完成时禁用，防止重复请求） ================= */
+/* 文字/图标隐藏但保留尺寸，避免按钮宽高跳动；右下角旋转圈表示请求进行中 */
+.is-loading {
+  position: relative !important;
+  pointer-events: none !important;
+  cursor: progress !important;
+  color: transparent !important;
+}
+.is-loading > * {
+  visibility: hidden !important;
+}
+/* 双类名提高优先级，覆盖座位/剧本卡片自带的 ::after 装饰 */
+.is-loading.is-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  box-sizing: border-box;
+  border: 2px solid rgba(0, 0, 0, 0.16);
+  border-top-color: #07C160;
+  border-radius: 50%;
+  animation: btnLoadingSpin 0.7s linear infinite;
+  z-index: 4;
+}
+/* 深色底按钮改用白色旋转圈，保证对比度 */
+.btn-primary.is-loading.is-loading::after,
+.btn-success.is-loading.is-loading::after,
+.btn-danger.is-loading.is-loading::after,
+.btn-warning.is-loading.is-loading::after,
+.btn-info.is-loading.is-loading::after,
+.vote-btn.is-loading.is-loading::after,
+.voice-join-btn.is-loading.is-loading::after,
+.wx-rail-btn.is-loading.is-loading::after {
+  border-color: rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+}
+@keyframes btnLoadingSpin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-loading.is-loading::after { animation-duration: 1.6s; }
+}
