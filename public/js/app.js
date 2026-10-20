@@ -9,6 +9,7 @@ let nightCanSelectCount = 0;
 let nightSelectType = 'player';
 let nightCanSkip = false;
 let nightSelectedRoleId = null;
+let nightPeeked = false;        // 夜间行动时是否临时收起遮罩查看局势
 let currentChatChannel = 'public';
 let selectedNominateTarget = null;
 let whisperTargetId = null; // 当前私聊对象ID
@@ -18,8 +19,6 @@ let isReconnecting = false;
 let reconnectAttempts = 0;
 let pendingManualJoin = false; // 是否由用户手动点击“加入房间”触发
 let hasLeftRoom = false;
-let _nightDebugClicks = 0;
-let _nightDebugTimer = null;
 let gossipPending = false;      // 造谣者声明等待裁判判定中（期间禁止重复发动）
 let gossipPendingTimer = null;  // 等待兜底定时器（服务端长时间无响应时恢复可点击）
 let gossipRetryStatement = '';  // 判定服务异常导致失败的声明原文，重新发动时自动回填
@@ -187,42 +186,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // 初始化拖拽分隔条
   initResizers();
-
-  // 夜晚遮罩调试：连续点击10次强制打开上帝视角
-  const nightOverlay = $('nightOverlay');
-  if (nightOverlay) {
-    nightOverlay.addEventListener('click', (e) => {
-      // 不在夜晚阶段（active状态）就忽略，点的是内部按钮也忽略
-      if (!nightOverlay.classList.contains('active')) return;
-      if (e.target.closest('button')) return;
-      if (!currentState) return;
-      const phase = currentState.phase;
-      const isNightPhase = phase === 'FIRST_NIGHT' || phase === 'NIGHT' || phase === 'NIGHT_WAKE';
-      if (!isNightPhase) return;
-
-      _nightDebugClicks++;
-      if (_nightDebugTimer) clearTimeout(_nightDebugTimer);
-      _nightDebugTimer = setTimeout(() => { _nightDebugClicks = 0; }, 2000);
-
-      const remain = 10 - _nightDebugClicks;
-      if (remain > 0 && remain <= 3) {
-        showToast(`再点${remain}下打开上帝视角调试`, 800);
-      }
-
-      if (_nightDebugClicks >= 10) {
-        _nightDebugClicks = 0;
-        if (_nightDebugTimer) clearTimeout(_nightDebugTimer);
-        showToast('🔧 夜晚调试模式', 1000);
-        // 强制打开上帝视角登录（不检查gameStarted和其他限制）
-        $('godPanel').style.display = 'block';
-        $('godLoginForm').style.display = 'block';
-        $('godContent').style.display = 'none';
-        $('godLoginError').style.display = 'none';
-        $('godPassword').value = '';
-        setTimeout(() => $('godPassword').focus(), 100);
-      }
-    });
-  }
 });
 
 // 尝试自动重连（从sessionStorage恢复）
@@ -789,6 +752,8 @@ function backToHome() {
   hasLeftRoom = true;
   clearGossipPending();
   gossipRetryStatement = '';
+  // 夜晚遮罩（含「查看局势」收起态）一并复位，避免残留浮动按钮
+  hideNightOverlay();
 
   // 离开语音频道
   if (VoiceManager.isJoined) {
@@ -1933,6 +1898,10 @@ function showNightWake(data) {
   const skipBtn = $('nightSkipBtn');
 
   overlay.classList.add('active', 'wake');
+  // 轮到自己行动：总是先展开行动面板，并显示「查看局势」入口
+  setNightPeek(false);
+  const peekBtn = $('nightPeekBtn');
+  if (peekBtn) peekBtn.style.display = 'flex';
   text.textContent = `你的回合：${data.role}`;
   subtext.innerHTML = (data.message || '').replace(/\n/g, '<br>');
   
@@ -2246,6 +2215,27 @@ function skipNightAction() {
 
 function hideNightOverlay() {
   $('nightOverlay').classList.remove('active', 'wake');
+  setNightPeek(false);
+}
+
+// 夜间行动时临时收起遮罩，便于查看当前局势（角色信息 / 聊天 / 座位等）
+function setNightPeek(peek) {
+  const overlay = $('nightOverlay');
+  const fab = $('nightPeekFab');
+  nightPeeked = !!peek;
+  if (overlay) overlay.classList.toggle('peeked', nightPeeked);
+  if (fab) fab.style.display = nightPeeked ? 'flex' : 'none';
+}
+
+function toggleNightPeek() {
+  const overlay = $('nightOverlay');
+  if (!overlay) return;
+  // 收起后再次点击（浮动按钮）恢复行动面板
+  if (!nightPeeked && !overlay.classList.contains('active')) return;
+  setNightPeek(!nightPeeked);
+  if (nightPeeked) {
+    showToast('已收起夜晚遮罩，查看完毕后点「返回行动」继续', 1800);
+  }
 }
 
 function showWaitingNight() {
@@ -2258,6 +2248,10 @@ function showWaitingNight() {
 
   overlay.classList.add('active');
   overlay.classList.remove('wake');
+  // 查看局势只在自己的行动回合可用，等待阶段恢复整屏遮罩
+  setNightPeek(false);
+  const peekBtn = $('nightPeekBtn');
+  if (peekBtn) peekBtn.style.display = 'none';
   text.textContent = '夜幕降临';
   subtext.classList.remove('info-list');
   subtext.textContent = '等待其他玩家行动...';

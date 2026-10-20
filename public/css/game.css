@@ -2330,8 +2330,47 @@ body.resizing-active * {
   flex-direction: column;
 }
 .night-overlay.active { display: flex; }
+/* 临时收起遮罩查看局势：行动面板状态保留在 DOM 中，点浮动按钮即可恢复 */
+.night-overlay.active.peeked { display: none; }
 .night-overlay.wake {
   background: radial-gradient(ellipse at center, rgba(44, 40, 66, 0.96) 0%, rgba(16, 16, 22, 0.98) 100%);
+}
+/* 「查看局势 / 返回行动」共用同一个底部居中位置（两者互斥，不会同时出现） */
+.night-peek-btn,
+.night-peek-fab {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+  transform: translateX(-50%);
+  z-index: 101; /* 高于夜晚遮罩(100)，低于结算/胜利动画 */
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 22px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: linear-gradient(135deg, #9B59B6, #6C3FA0);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 8px 22px rgba(108, 63, 160, 0.45);
+  cursor: pointer;
+  white-space: nowrap;
+  animation: nightPeekBtnIn 0.22s ease-out;
+}
+.night-peek-btn:hover,
+.night-peek-fab:hover { filter: brightness(1.08); }
+.night-peek-btn:active,
+.night-peek-fab:active { transform: translateX(-50%) scale(0.97); }
+@keyframes nightPeekBtnIn {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .night-peek-btn,
+  .night-peek-fab { animation: none; }
 }
 .night-text {
   font-size: 1.4em;

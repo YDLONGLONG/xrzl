@@ -31,6 +31,8 @@
 
     <!-- 夜晚遮罩 -->
     <div class="night-overlay" id="nightOverlay">
+      <!-- 行动前可临时收起遮罩查看局势，再返回行动面板 -->
+      <button class="night-peek-btn" id="nightPeekBtn" style="display:none;" onclick="toggleNightPeek()" title="收起遮罩查看局势，行动面板会保留">👀 查看局势</button>
       <div class="night-text" id="nightText">夜幕降临...</div>
       <div class="night-subtext" id="nightSubtext">等待其他玩家行动</div>
       <div class="night-select-area" id="nightSelectArea"></div>
@@ -39,6 +41,9 @@
         <button class="btn btn-primary night-confirm-btn" id="nightConfirmBtn" style="display:none;" onclick="submitNightAction()">确认行动</button>
       </div>
     </div>
+
+    <!-- 收起夜晚遮罩后的浮动返回入口 -->
+    <button class="night-peek-fab" id="nightPeekFab" style="display:none;" onclick="toggleNightPeek()">↩ 返回行动</button>
 
     <!-- 头部信息 -->
     <div class="game-header">
