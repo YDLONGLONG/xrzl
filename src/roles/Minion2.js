@@ -189,6 +189,7 @@ class Assassin extends Role {
     this.firstNightOrder = -1; // 首夜不行动
     this.otherNightOrder = 3;
     this.selectCount = 1; // 一次性能力
+    this.canSkip = true;  // 一次性能力，非强制：可以放弃今晚，留到之后的夜晚使用
     this.abilityDesc = '在夜晚时，选择一名玩家杀死（一次性能力），无论什么情况选择的玩家都会死亡。';
   }
 
@@ -201,13 +202,23 @@ class Assassin extends Role {
     }
     return {
       canSelectCount: 1,
-      message: '选择一名玩家杀死（一次性能力，无视守护，无论什么情况都会死亡）'
+      canSkip: true,
+      skipLabel: '今晚不刺杀',
+      message: '选择一名玩家杀死（一次性能力，无视守护，无论什么情况都会死亡）。也可以跳过，能力保留到之后的夜晚。'
     };
   }
 
   onNightAction(gameState, player, action, engine) {
     if (player.abilityState.used) {
       return { success: false, message: '能力已使用过' };
+    }
+    // 今晚不使用：不消耗一次性能力，之后的夜晚仍会被唤醒
+    if (action && action.skip === true) {
+      engine.setPlayerPrivateInfo(player, {
+        type: 'assassin',
+        message: '你今晚没有使用刺杀能力，能力保留到之后的夜晚'
+      });
+      return { success: true };
     }
     const targetId = action.targets && action.targets[0];
     if (!targetId) {
