@@ -3543,12 +3543,13 @@ function showGameOver(data) {
 //   saint_executed     圣徒被处决（{roleName} = 提名圣徒者的角色名）
 //   mastermind_good    主谋额外白天·善良胜
 //   mastermind_evil    主谋额外白天·邪恶胜
+// hiddenTitle：动画顶部的「隐藏结局：xx」说明，未登记则顶部不显示
 const VICTORY_EFFECTS = {
-  slayer_demon_kill: { message: '恶魔，你逃不掉的！' },
-  mayor_three_alive: { message: '山穷水复临崖近，三人成虎破终局' },
-  saint_executed: { message: '我名{roleName}，请求你的原谅' },
-  mastermind_good: { message: '你选择了正义' },
-  mastermind_evil: { message: '你又下了一层地狱' }
+  slayer_demon_kill: { hiddenTitle: '恶魔被杀手公开击杀', message: '恶魔，你逃不掉的！' },
+  mayor_three_alive: { hiddenTitle: '市长三人局', message: '山穷水复临崖近，三人成虎破终局' },
+  saint_executed: { hiddenTitle: '圣徒被处决', message: '我名{roleName}，请求你的原谅' },
+  mastermind_good: { hiddenTitle: '主谋额外白天', message: '你选择了正义' },
+  mastermind_evil: { hiddenTitle: '主谋额外白天', message: '你又下了一层地狱' }
 };
 
 // 用 winEffect.params 填充文案里的 {占位符}；缺少对应值时保留占位符原样
@@ -3579,6 +3580,13 @@ function playVictoryEffect(effect) {
     effect.message || preset.message || (currentState && currentState.winReason) || '游戏结束',
     effect.params
   );
+
+  // 顶部说明：隐藏结局：xx（仅登记了 hiddenTitle 的特殊结局显示）
+  const subtitle = $('victoryEffectSubtitle');
+  if (subtitle) {
+    const hiddenTitle = preset.hiddenTitle ? renderVictoryText(preset.hiddenTitle, effect.params) : '';
+    subtitle.textContent = hiddenTitle ? `隐藏结局：${hiddenTitle}` : '';
+  }
 
   // 配色随胜方：GOOD 绿色，EVIL 红色（无胜方信息时按红色处理）
   const winner = effect.winner || (currentState && currentState.winner) || null;
