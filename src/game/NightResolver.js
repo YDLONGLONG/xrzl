@@ -28,6 +28,8 @@ class NightResolver {
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
     this.extraBarberSwapNight = null;
+    gs.pithagOutcome = null;
+    gs.pithagNoDemonKill = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
@@ -60,6 +62,8 @@ class NightResolver {
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
     this.extraBarberSwapNight = null;
+    gs.pithagOutcome = null;
+    gs.pithagNoDemonKill = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
@@ -591,7 +595,15 @@ class NightResolver {
     const isFirstNight = gs.nightCount === 0;
 
     if (!isFirstNight) {
-      this.resolveDemonKills(gs);
+      // SNV 坑巫：先按「变身速查表」结算恶魔格局，再决定本夜恶魔是否杀人
+      this.resolvePithagOutcome(gs);
+      if (gs.pithagNoDemonKill === gs.nightCount) {
+        this.engine.logAction('ABILITY', '坑巫改变了恶魔格局：本夜不结算恶魔击杀（死亡按坑巫速查表裁定）', {
+          event: 'pithag_demon_kill_skipped'
+        });
+      } else {
+        this.resolveDemonKills(gs);
+      }
       this.resolveMinionKills(gs);
     }
 
@@ -663,6 +675,56 @@ class NightResolver {
     this.engine.io.to(demon.id).emit('night:wake', gs.currentWakeInfo);
     this.engine.broadcastState();
     return true;
+  }
+
+  // SNV 坑巫：按「坑巫变身速查表」第二步结算恶魔格局变化
+  //  - 邪恶恶魔 → 不在场恶魔：恶魔类型改变，当晚不杀人
+  //  - 普通玩家 → 不在场恶魔（邪恶阵营）：新的邪恶恶魔，旧恶魔当晚死亡
+  //  - 普通玩家 → 不在场恶魔（善良阵营）：善良恶魔，本夜不额外杀人；终夜杀死邪恶恶魔
+  //  - 邪恶恶魔 → 不在场非恶魔：只换身份，不触发随机死亡
+  resolvePithagOutcome(gs) {
+    const outcome = gs.pithagOutcome;
+    if (!outcome || outcome.night !== gs.nightCount) return;
+
+    if (outcome.case === 'demon_swapped') {
+      gs.pithagNoDemonKill = gs.nightCount;
+      this.engine.logAction('ABILITY', '坑巫把恶魔换成了另一种恶魔：当晚不再额外杀人，让好人有机会察觉恶魔被替换', {
+        outcome: outcome.case
+      });
+      return;
+    }
+
+    if (outcome.case === 'new_evil_demon') {
+      gs.pithagNoDemonKill = gs.nightCount;
+      const oldDemon = outcome.oldDemonId ? this.engine.room.players.get(outcome.oldDemonId) : null;
+      if (oldDemon && oldDemon.isAlive) {
+        this.engine.deathManager.killPlayer(oldDemon.id, 'PITHAG', gs.nightCount, -1);
+        this.engine.logAction('ABILITY', `坑巫制造了新的邪恶恶魔：旧恶魔 ${oldDemon.seat + 1}号 ${oldDemon.name} 当晚死亡`, {
+          playerId: oldDemon.id, cause: 'PITHAG', outcome: outcome.case
+        });
+      }
+      return;
+    }
+
+    if (outcome.case === 'new_good_demon') {
+      gs.pithagNoDemonKill = gs.nightCount;
+      const alive = getAlivePlayers(this.engine.room);
+      // 「终夜」按存活人数近似判定：场上≤4人时本夜即为终局前的最后一夜
+      if (alive.length > 4) {
+        this.engine.logAction('ABILITY', '坑巫制造了善良阵营的恶魔：本夜不额外杀人', {
+          outcome: outcome.case
+        });
+        return;
+      }
+      const evilDemon = alive.find(p => p.id !== outcome.targetId && p.role
+        && p.role.category === 'DEMON' && getPlayerEffectiveTeam(p) === 'EVIL');
+      if (evilDemon) {
+        this.engine.deathManager.killPlayer(evilDemon.id, 'PITHAG', gs.nightCount, -1);
+        this.engine.logAction('ABILITY', `终夜出现善良恶魔：坑巫杀死邪恶恶魔 ${evilDemon.seat + 1}号 ${evilDemon.name}，终日前仅一名恶魔存活`, {
+          playerId: evilDemon.id, cause: 'PITHAG', outcome: outcome.case
+        });
+      }
+    }
   }
 
   // 处理恶魔杀人

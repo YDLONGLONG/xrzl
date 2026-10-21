@@ -235,8 +235,21 @@ class PitHag extends Role {
     const targetId = action.targetId || (action.targets && action.targets[0]);
     const roleId = action.roleId;
     if (!targetId || !roleId) return { success: false, message: '请选择玩家与角色' };
+
+    // 速查表：坑巫首夜不发动（首夜选择使用也按「不发动，无事发生」处理）
+    if (gameState.nightCount === 0) {
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（坑巫）首夜不发动技能`, {
+        playerId: player.id, disabled: true
+      });
+      return { success: true };
+    }
+
     const target = engine.room.players.get(targetId);
     if (!target || !target.role) return { success: false, message: '选择的玩家无效' };
+    // 速查表：被选中玩家已死亡时无法被唤醒执行变身
+    if (!target.isAlive) {
+      return { success: false, message: '该玩家已死亡，无法被变身' };
+    }
     if (target.role.id === roleId) return { success: false, message: '该玩家已经是该角色' };
 
     const newRole = engine.roleAllocator.createRoleInstance(roleId);
@@ -253,18 +266,19 @@ class PitHag extends Role {
       return { success: true };
     }
 
-    const oldRoleId = target.role.id;
-    const oldRoleName = target.role.name;
+    const oldRole = target.role;
+    const oldRoleId = oldRole.id;
+    const oldRoleName = oldRole.name;
+    // 阵营跟随玩家，不跟随角色：变成恶魔也不会改变阵营
     const oldTeam = getPlayerEffectiveTeam(target);
+
+    const wasDemon = oldRole.category === 'DEMON';
+    const isDemon = newRole.category === 'DEMON';
+
     target.role = newRole;
     target.abilityState = target.abilityState || {};
-
-    // 官方：变形后阵营不变；只有「变成恶魔」才会转为邪恶
-    if (newRole.category === 'DEMON') {
-      delete newRole.snvAlignment;
-    } else if (oldTeam && oldTeam !== newRole.team) {
-      newRole.snvAlignment = oldTeam;
-    }
+    if (oldTeam && oldTeam !== newRole.team) newRole.snvAlignment = oldTeam;
+    else delete newRole.snvAlignment;
 
     // 重新计算在场/不在场角色
     const players = seatedPlayers(engine);
@@ -272,20 +286,52 @@ class PitHag extends Role {
     const sc = getScriptConfig(engine.room.script || 'tb');
     gameState.rolesNotInPlay = sc.allRoles.filter(r => !gameState.rolesInPlay.includes(r));
 
-    const becameDemon = newRole.category === 'DEMON';
+    // 速查表「第二步：变身成功后是否制造恶魔」
+    let outcomeCase = null;
+    let oldDemonId = null;
+    let note = '';
+    if (wasDemon && isDemon) {
+      // 邪恶恶魔 → 不在场恶魔：恶魔类型改变，当晚通常不杀人（给好人线索）
+      outcomeCase = 'demon_swapped';
+      note = '。恶魔类型已改变，本夜通常不杀人，好人才有机会察觉恶魔被替换';
+    } else if (!wasDemon && isDemon) {
+      const otherDemon = players.find(p =>
+        p.id !== targetId && p.isAlive && p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon);
+      oldDemonId = otherDemon ? otherDemon.id : null;
+      if (oldTeam === 'EVIL') {
+        // 制造出新的邪恶恶魔：旧恶魔仍存活时让其当晚死亡，避免场上有多个邪恶恶魔
+        outcomeCase = 'new_evil_demon';
+        note = '。场上出现了新的邪恶恶魔，旧恶魔当晚将死亡';
+      } else {
+        // 善良玩家 → 不在场恶魔：制造善良恶魔，本夜不再额外杀人
+        outcomeCase = 'new_good_demon';
+        note = '。出现了善良阵营的恶魔，本夜不再额外杀人';
+      }
+    } else if (wasDemon && !isDemon) {
+      // 邪恶恶魔 → 不在场非恶魔：未制造恶魔，只换身份，不触发随机死亡
+      note = '。旧恶魔已不再是恶魔，本夜不触发随机死亡';
+    }
+
+    gameState.pithagOutcome = outcomeCase ? {
+      night: gameState.nightCount,
+      case: outcomeCase,
+      targetId,
+      oldDemonId,
+      oldRoleId,
+      roleId
+    } : null;
+
     engine.setPlayerPrivateInfo(player, {
       type: 'pithag',
       targetId,
       roleId,
-      message: `你把 ${target.seat + 1}号 ${target.name}（${oldRoleName}）变成了【${newRole.name}】${becameDemon ? '。本局因此出现了新的恶魔，今晚的死亡由说书人随机决定。' : ''}`
+      message: `你把 ${target.seat + 1}号 ${target.name}（${oldRoleName}）变成了【${newRole.name}】${note}`
     });
-    engine.setPlayerPrivateInfo(target, {
-      type: 'pithag_changed',
-      roleId,
-      message: `坑巫把你从【${oldRoleName}】变成了【${newRole.name}】！`
-    });
-    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（坑巫）把 ${target.seat + 1}号 ${target.name} 从【${oldRoleName}】变成【${newRole.name}】${becameDemon ? '（场上出现新恶魔，本夜死亡由说书人随机决定）' : ''}`, {
-      playerId: player.id, targetId, roleId, oldRoleId, becameDemon
+    // 官方：被变身的玩家不会被告知，只能从之后的能力/信息自行发现；
+    // 变化仅在上帝视角日志与身份面板中体现，不额外推送私信。
+    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（坑巫）把 ${target.seat + 1}号 ${target.name} 从【${oldRoleName}】变成【${newRole.name}】${note}`, {
+      playerId: player.id, targetId, roleId, oldRoleId,
+      becameDemon: isDemon, oldWasDemon: wasDemon, outcomeCase
     });
 
     return { success: true };
