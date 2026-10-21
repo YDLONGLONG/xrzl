@@ -284,6 +284,10 @@ class RoleAllocator {
       const realDelta = newOutsider - composition.outsider;
       composition.outsider = newOutsider;
       composition.townsfolk -= realDelta;
+      if (realDelta) {
+        composition.setupDelta = realDelta;
+        composition.setupSource = 'demon';
+      }
     }
 
     const counts = {
@@ -332,6 +336,39 @@ class RoleAllocator {
       });
     }
 
+    // SNV：恶魔的设置修正优先于房主手选——手动数量与修正后的配比冲突时，
+    // 多出的一方改为缺少的一方（方古：村民→外来者；亡灵法师：外来者→村民）
+    if (customDemonDelta) {
+      const swapCategory = (fromCat, toPool, label) => {
+        const fromPlayers = seatedPlayers.filter(p => p.role && p.role.category === fromCat);
+        const targetCount = fromCat === 'TOWNSFOLK' ? composition.townsfolk : composition.outsider;
+        const overflow = fromPlayers.length - targetCount;
+        if (overflow <= 0) return;
+        const pool = shuffle(toPool.filter(r => !assignedRoleIds.includes(r)));
+        const isManual = (p) => Object.values(customRoles).includes(p.role.id);
+        const targets = [...fromPlayers]
+          .sort((a, b) => (isManual(a) ? 1 : 0) - (isManual(b) ? 1 : 0))
+          .slice(0, Math.min(overflow, pool.length));
+        targets.forEach((p, i) => {
+          const newId = pool[i];
+          const idx = assignedRoleIds.indexOf(p.role.id);
+          if (idx !== -1) assignedRoleIds.splice(idx, 1);
+          const oldName = p.role.name;
+          p.role = this.createRoleInstance(newId);
+          assignedRoleIds.push(newId);
+          this.engine.logAction('GAME_START',
+            `${p.seat + 1}号 ${p.name} 因恶魔设置修正（${label}）由【${oldName}】改为【${p.role.name}】`,
+            { playerId: p.id, newRole: newId, reason: 'demon_setup_delta' });
+        });
+      };
+
+      if (customDemonDelta > 0) {
+        swapCategory('TOWNSFOLK', sc.outsiderRoles, '外来者+1');
+      } else {
+        swapCategory('OUTSIDER', sc.townsfolkRoles, '外来者-1');
+      }
+    }
+
     // 假身份处理
     const assignedTownsfolk = assignedRoleIds.filter(r => sc.townsfolkRoles.includes(r));
     const assignedDemons = assignedRoleIds.filter(r => sc.demonRoles.includes(r));
@@ -354,10 +391,16 @@ class RoleAllocator {
       return `${Number(seat)+1}号→${role ? role.name : rid}`;
     }).join(', ');
     const appliedDelta = composition.setupDelta;
-    const deltaText = (appliedDelta === 1) ? '（外来者+1, 村民-1）'
-      : (appliedDelta === -1) ? '（外来者-1, 村民+1）'
-      : '（外来者±1 不生效：基准外来者为 0）';
-    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；${setupCharId}=${hasSetupChar ? '是' : '否'}${hasSetupChar && setupType === 'godfather' ? deltaText : ''}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
+    const isDemonSetup = composition.setupSource === 'demon';
+    const deltaText = isDemonSetup
+      ? (appliedDelta > 0 ? '（恶魔设置修正：外来者+1, 村民-1）' : '（恶魔设置修正：外来者-1, 村民+1）')
+      : (appliedDelta === 1) ? '（外来者+1, 村民-1）'
+        : (appliedDelta === -1) ? '（外来者-1, 村民+1）'
+          : '（外来者±1 不生效：基准外来者为 0）';
+    const deltaSuffix = isDemonSetup
+      ? deltaText
+      : (hasSetupChar && setupType === 'godfather' ? deltaText : '');
+    this.engine.logAction('CUSTOM_ASSIGN', `[自定义] ${customAssigned || '无手动指定'}；${setupCharId}=${hasSetupChar ? '是' : '否'}${deltaSuffix}；配比: 村民${composition.townsfolk}/外来者${composition.outsider}/爪牙${composition.minion}/恶魔${composition.demon}`);
   }
 
   // 设置邪恶阵营信息

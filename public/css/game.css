@@ -936,6 +936,107 @@ body.resizing-active * {
   line-height: 1.8;
   font-size: 13px;
 }
+
+/* ---------- 上帝视角：游戏状态（结构化 / 通俗化展示） ---------- */
+.god-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.god-ov {
+  background: #fff;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.god-ov-label { font-size: 11px; color: #999; }
+.god-ov-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.god-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.god-dot.good { background: #07C160; }
+.god-dot.evil { background: #FA5151; }
+.god-now {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid #07C160;
+  background: #F5FBF7;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: #4A4A4A;
+  line-height: 1.7;
+}
+.god-section { margin-top: 10px; }
+.god-sec-title { font-size: 13px; font-weight: 700; color: #333; margin-bottom: 6px; }
+.god-line { font-size: 13px; color: #4A4A4A; line-height: 1.9; }
+.god-list { margin: 0; padding-left: 18px; }
+.god-list li { font-size: 13px; color: #4A4A4A; line-height: 1.9; }
+.god-act-role { display: inline-block; min-width: 60px; color: #6C3FA0; font-weight: 600; }
+.god-muted { color: #999; font-size: 12px; }
+.god-nom {
+  padding: 8px 10px;
+  border: 1px solid #EFEFEF;
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.god-nom-head {
+  font-size: 13px;
+  color: #333;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.god-nom-detail { margin-top: 4px; font-size: 12px; color: #666; line-height: 1.8; }
+.god-yes { color: #06AD56; font-weight: 600; }
+.god-no { color: #E64340; font-weight: 600; }
+.god-divider { color: #DDD; margin: 0 2px; }
+.god-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+.god-tag.pass { color: #06AD56; background: #E8F8EE; }
+.god-tag.fail { color: #E64340; background: #FCEBEB; }
+.god-tag.pending { color: #C77700; background: #FDF1DF; }
+.god-result { margin-top: 12px; padding: 10px 12px; border-radius: 8px; text-align: center; }
+.god-result.good { background: #E8F8EE; color: #06AD56; }
+.god-result.evil { background: #FCEBEB; color: #E64340; }
+.god-result-title { font-size: 16px; font-weight: 700; }
+.god-result-reason { margin-top: 4px; font-size: 12px; opacity: 0.85; }
+.god-debug {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: rgba(250, 81, 81, 0.06);
+  border: 1px solid rgba(250, 81, 81, 0.2);
+  border-radius: 6px;
+}
+.god-debug summary { cursor: pointer; font-size: 12px; color: #E64340; font-weight: 600; }
+.god-debug-body { margin-top: 6px; font-size: 12px; color: #666; }
+.god-queue {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 4px;
+}
+.god-queue-item { line-height: 1.7; font-size: 12px; }
+.god-queue-item.done { color: #999; }
+.god-queue-item.current { color: #C77700; font-weight: 700; }
+.god-queue-item.todo { color: #666; }
+@media (max-width: 700px) {
+  .god-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .wx-god-table-wrap { overflow-x: auto; }
 .wx-god-table-wrap table {
   width: 100%;

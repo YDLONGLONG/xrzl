@@ -1138,8 +1138,11 @@ const ROLE_COMPOSITION_MAP = {};
   ROLE_COMPOSITION_MAP[n] = { townsfolk: t, outsider: o, minion: m, demon: d };
 });
 
-function getCompHTML(playerCount) {
-  const comp = ROLE_COMPOSITION_MAP[playerCount];
+// actualComp：开局后服务端下发的真实配比（含方古/亡灵法师等设置修正），优先使用
+function getCompHTML(playerCount, actualComp) {
+  const comp = (actualComp && typeof actualComp.outsider === 'number')
+    ? actualComp
+    : ROLE_COMPOSITION_MAP[playerCount];
   if (!comp) return '';
   const badges = [];
   if (comp.townsfolk > 0) badges.push(`<span class="comp-badge comp-townsfolk">👤${comp.townsfolk}村民</span>`);
@@ -1172,7 +1175,7 @@ function updateHeader(state) {
   // 显示角色数量配置
   const playerCount = state.players ? state.players.filter(p => p.seat !== -1).length : 0;
   const compEl = $('headerRoomComp');
-  const compHTML = getCompHTML(playerCount);
+  const compHTML = getCompHTML(playerCount, state.composition);
   const compPlayers = state.players ? state.players.length : 0;
   compEl.innerHTML = compHTML ? `<span class="comp-players">${compPlayers}人</span>${compHTML}` : '';
   
@@ -3929,127 +3932,205 @@ function renderGodView() {
   if (!godState) return;
 
   const gs = godState;
-  const players = gs.players || [];
 
   updateGodPlayers();
 
-  // 游戏状态
-  const phaseNames = {
-    'LOBBY': '大厅', 'FIRST_NIGHT': '首夜', 'NIGHT_WAKE': '夜晚唤醒',
-    'NIGHT': '夜晚', 'DAY_DAWN': '天亮', 'DAY_DISCUSSION': '白天（讨论/提名）',
-    'NOMINATION_PHASE': '白天（讨论/提名）', 'DEFENSE': '辩护', 'VOTING': '投票',
-    'EXECUTION': '处决', 'GAME_OVER': '游戏结束'
-  };
-  const phaseName = phaseNames[gs.phase] || gs.phase;
-  // 只显示当前阶段的时间：夜晚显示夜数、白天显示天数，不再同时显示两者
-  let phaseTimeText = '';
-  if (gs.phase === 'NIGHT' || gs.phase === 'NIGHT_WAKE') {
-    phaseTimeText = `第${gs.nightCount}夜`;
-  } else if (gs.phase !== 'FIRST_NIGHT' && gs.phase !== 'LOBBY' && gs.phase !== 'GAME_OVER') {
-    phaseTimeText = `第${gs.dayCount > 0 ? gs.dayCount : 1}天`;
-  }
-  let statusHtml = `<div><strong>阶段：</strong>${phaseName}${phaseTimeText ? `（${phaseTimeText}）` : ''}</div>`;
-  
-  if (gs.currentWakePlayerId) {
-    const wp = players.find(p => p.id === gs.currentWakePlayerId);
-    if (wp) {
-      statusHtml += `<div style="color:#9b59b6;"><strong>当前行动：</strong>${wp.seat+1}号 ${wp.name}（${wp.roleName}）</div>`;
-    }
-  }
-  if (gs.currentDefensePlayerId) {
-    const dp = players.find(p => p.id === gs.currentDefensePlayerId);
-    if (dp) {
-      statusHtml += `<div style="color:#FF9500;"><strong>辩护中：</strong>${dp.seat+1}号 ${dp.name}</div>`;
-    }
-  }
-  if (gs.nightActions && Object.keys(gs.nightActions).length > 0) {
-    let nightInfo = '<div style="margin-top:8px; color:#7f7f7f;"><strong>夜晚行动记录：</strong><ul style="margin:5px 0 0 20px;">';
-    for (const [role, action] of Object.entries(gs.nightActions)) {
-      if (action.targetId) {
-        const t = players.find(p => p.id === action.targetId);
-        nightInfo += `<li>${role} → ${t ? t.seat+1+'号'+t.name : action.targetId}</li>`;
-      }
-    }
-    nightInfo += '</ul></div>';
-    statusHtml += nightInfo;
-  }
-  if (gs.nominations && gs.nominations.length > 0) {
-    let nomInfo = '<div style="margin-top:8px; color:#7f7f7f;"><strong>今日提名：</strong><ul style="margin:5px 0 0 20px;">';
-    gs.nominations.forEach(n => {
-      const nomPlayer = players.find(p => p.id === n.nominatorId);
-      const nmPlayer = players.find(p => p.id === n.nomineeId);
-      const nomSeat = nomPlayer ? nomPlayer.seat+1 : '?';
-      const nmSeat = nmPlayer ? nmPlayer.seat+1 : '?';
-      const nmName = nmPlayer ? escapeHtml(nmPlayer.name) : '';
-      if (n.resolved) {
-        const yesList = [], noList = [], abstainList = [];
-        const cv = n.currentVotes || {};
-        players.forEach(p => {
-          if (p.seat < 0) return;
-          if (cv[p.id] === true) yesList.push(p.seat+1+'号');
-          else if (cv[p.id] === false) noList.push(p.seat+1+'号');
-          else abstainList.push(p.seat+1+'号');
-        });
-        const passTag = n.passed
-          ? `<span style="color:#07C160;">✅通过(${n.voteCount}票)</span>`
-          : `<span style="color:#FA5151;">❌未通过(${n.voteCount}票)</span>`;
-        nomInfo += `<li>${nomSeat}号提名${nmSeat}号${nmName} - ${passTag}
-          <div style="font-size:0.9em; margin-top:2px; color:#4f4f4f;">
-            赞成: ${yesList.join(' ') || '—'} | 反对: ${noList.join(' ') || '—'}${abstainList.length > 0 ? ' | 未投: '+abstainList.join(' ') : ''}
-          </div>
-        </li>`;
-      } else {
-        nomInfo += `<li>${nomSeat}号提名${nmSeat}号${nmName} - <span style="color:#FF9500;">⏳进行中</span></li>`;
-      }
-    });
-    nomInfo += '</ul></div>';
-    statusHtml += nomInfo;
-  }
-  if (gs.winner) {
-    statusHtml += `<div style="margin-top:10px; font-size:1.2em; color:${gs.winner==='GOOD'?'#07C160':'#FA5151'};"><strong>${gs.winner==='GOOD'?'🎉善良阵营获胜！':'💀邪恶阵营获胜！'}</strong></div>`;
-    statusHtml += `<div style="color:#7f7f7f;">${gs.winReason||''}</div>`;
-  }
-  $('godStatus').innerHTML = statusHtml;
-
-  // 夜晚队列调试信息（判断流程卡住用）
-  if (gs.nightQueue && gs.nightQueue.length > 0) {
-    const queue = gs.nightQueue;
-    const idx = gs.currentNightIndex ?? -1;
-    let debugHtml = '<div style="margin-top:12px; padding:10px; background:rgba(250,81,81,0.08); border:1px solid rgba(250,81,81,0.25); border-radius:6px;">';
-    debugHtml += `<div style="color:#FA5151; font-weight:bold; margin-bottom:6px;">🔍 夜晚流程调试</div>`;
-    debugHtml += `<div><strong>队列进度：</strong>${idx >= 0 ? idx + 1 : 0} / ${queue.length} （索引：${idx}）</div>`;
-    if (idx >= 0 && idx < queue.length) {
-      const current = queue[idx];
-      const cp = players.find(p => p.id === current.playerId);
-      debugHtml += `<div style="color:#FF9500; margin-top:4px;"><strong>当前等待：</strong>${current.roleId}${current.isDrunk?'(酒鬼假身份)':''}${current.isFakeDemon?'(假恶魔)':''} → ${cp?cp.seat+1+'号 '+cp.name:'未知玩家'}</div>`;
-      if (cp && cp.isBot !== undefined) {
-        debugHtml += `<div style="color:#7f7f7f; font-size:0.9em;">玩家状态：${cp.isAlive?'存活':'💀死亡'} | ${cp.isBot?'🤖机器人':'👤真人'} | ${cp.isConnected?'✅在线':'❌断线'}</div>`;
-      }
-    } else if (idx >= queue.length) {
-      debugHtml += `<div style="color:#07C160; margin-top:4px;"><strong>状态：</strong>夜晚队列已全部执行完毕，等待进入天亮/结算</div>`;
-    }
-    if (gs.pendingRavenkeeper) {
-      const rp = players.find(p => p.id === gs.pendingRavenkeeper);
-      debugHtml += `<div style="color:#9b59b6; margin-top:4px;"><strong>待处理守鸦人：</strong>${rp?rp.seat+1+'号 '+rp.name:gs.pendingRavenkeeper}</div>`;
-    }
-    // 完整队列列表
-    debugHtml += `<div style="margin-top:8px;"><strong>完整队列：</strong><div style="margin-top:4px; font-size:0.9em; max-height:180px; overflow-y:auto; padding:6px; background:rgba(0,0,0,0.035); border-radius:4px;">`;
-    queue.forEach((item, i) => {
-      const p = players.find(pp => pp.id === item.playerId);
-      const doneTag = i < idx ? '✅ ' : (i === idx ? '👉 ' : '⏳ ');
-      const statusColor = i < idx ? 'color:#8c8c8c;' : (i === idx ? 'color:#FFB800; font-weight:bold;' : '');
-      const extraTags = [];
-      if (item.isDrunk) extraTags.push('酒鬼');
-      if (item.isFakeDemon) extraTags.push('假恶魔');
-      const extra = extraTags.length > 0 ? ` <span style="color:#F5822B;">(${extraTags.join('/')})</span>` : '';
-      debugHtml += `<div style="${statusColor} line-height:1.6;">${doneTag}[${i}] ${item.roleId}${extra} → ${p?p.seat+1+'号 '+p.name:'?'}</div>`;
-    });
-    debugHtml += `</div></div></div>`;
-    $('godStatus').innerHTML += debugHtml;
-  }
+  // 游戏状态（通俗化的结构化展示，详见 buildGodStatusHtml）
+  $('godStatus').innerHTML = buildGodStatusHtml(gs);
 
   // 渲染行动日志（内部会合并同类事件并保留滚动位置）
   renderGodLog();
+}
+
+// ========== 上帝视角：游戏状态（通俗化展示） ==========
+// 阶段名 + 一句白话说明，替代原来只显示阶段代码的做法
+const GOD_PHASE_INFO = {
+  LOBBY: ['大厅', '等待房主开始游戏'],
+  FIRST_NIGHT: ['首夜', '所有人依次使用首夜技能'],
+  NIGHT: ['夜晚', '角色轮流使用夜间技能'],
+  NIGHT_WAKE: ['夜晚', '角色轮流使用夜间技能'],
+  DAY_DAWN: ['天亮', '公布昨夜的死亡情况'],
+  DAY_DISCUSSION: ['白天讨论', '玩家自由发言，可以发起提名'],
+  NOMINATION_PHASE: ['白天提名', '玩家可以提名要处决的人'],
+  DEFENSE: ['辩护', '被提名的人正在为自己辩解'],
+  VOTING: ['投票', '所有人投票决定是否处决'],
+  EXECUTION: ['处决', '正在结算处决结果'],
+  GAME_OVER: ['游戏结束', '本局已分出胜负']
+};
+
+// 「3号 小明」这类座位+昵称，最直观的玩家指代方式
+function godSeatName(p) {
+  return p ? `${p.seat + 1}号 ${escapeHtml(p.name)}` : '未知玩家';
+}
+
+// 角色 id → 中文角色名（服务端下发映射，避免显示 imp / fortuneteller 这类内部名）
+function godRoleLabel(gs, roleId) {
+  if (!roleId) return '';
+  const map = (gs && gs.roleNames) || {};
+  if (map[roleId]) return map[roleId];
+  const p = ((gs && gs.players) || []).find(x => x.roleId === roleId);
+  return p && p.roleName ? p.roleName : roleId;
+}
+
+function buildGodStatusHtml(gs) {
+  const players = (gs.players || []).slice().sort((a, b) => a.seat - b.seat);
+  const seated = players.filter(p => p.seat >= 0);
+  const alive = seated.filter(p => p.isAlive);
+  const dead = seated.filter(p => !p.isAlive);
+  const goodAlive = alive.filter(p => p.team === 'GOOD').length;
+  const evilAlive = alive.filter(p => p.team === 'EVIL').length;
+
+  const [phaseName, phaseDesc] = GOD_PHASE_INFO[gs.phase] || [gs.phase || '—', ''];
+  let timeText = '';
+  if (gs.phase === 'FIRST_NIGHT') timeText = '第 1 夜';
+  else if (gs.phase === 'NIGHT' || gs.phase === 'NIGHT_WAKE') timeText = `第 ${gs.nightCount} 夜`;
+  else if (gs.phase !== 'LOBBY' && gs.phase !== 'GAME_OVER') timeText = `第 ${Math.max(gs.dayCount || 0, 1)} 天`;
+
+  let html = `<div class="god-overview">
+    <div class="god-ov"><span class="god-ov-label">当前阶段</span><span class="god-ov-value">${phaseName}${timeText ? ' · ' + timeText : ''}</span></div>
+    <div class="god-ov"><span class="god-ov-label">存活人数</span><span class="god-ov-value">${alive.length} / ${seated.length}</span></div>
+    <div class="god-ov"><span class="god-ov-label">阵营存活</span><span class="god-ov-value"><i class="god-dot good"></i>善良 ${goodAlive}<i class="god-dot evil"></i>邪恶 ${evilAlive}</span></div>
+  </div>`;
+  if (phaseDesc) html += `<div class="god-now">${phaseName}：${phaseDesc}</div>`;
+
+  // 正在进行：谁在做什么
+  const nowList = [];
+  if (gs.currentWakePlayerId) {
+    const wp = players.find(p => p.id === gs.currentWakePlayerId);
+    if (wp) nowList.push(`🌙 轮到 <b>${godSeatName(wp)}</b> 行动（身份：${escapeHtml(wp.roleName)}）`);
+  }
+  if (gs.currentDefensePlayerId) {
+    const dp = players.find(p => p.id === gs.currentDefensePlayerId);
+    if (dp) nowList.push(`🗣 <b>${godSeatName(dp)}</b> 正在辩护`);
+  }
+  const activeNom = (gs.nominations || []).find(n => !n.resolved);
+  if (activeNom) {
+    const nomP = players.find(p => p.id === activeNom.nominatorId);
+    const nmP = players.find(p => p.id === activeNom.nomineeId);
+    nowList.push(`🗳 <b>${godSeatName(nomP)}</b> 提名了 <b>${godSeatName(nmP)}</b>，正在投票`);
+  }
+  if (gs.pendingRavenkeeper) {
+    const rp = players.find(p => p.id === gs.pendingRavenkeeper);
+    if (rp) nowList.push(`🐦 守鸦人 <b>${godSeatName(rp)}</b> 死亡后正在选择要查验的玩家`);
+  }
+  if (nowList.length) {
+    html += `<div class="god-section"><div class="god-sec-title">⏳ 正在进行</div>${nowList.map(t => `<div class="god-line">${t}</div>`).join('')}</div>`;
+  }
+
+  // 今晚已完成的行动
+  const nightActs = Object.entries(gs.nightActions || {});
+  if (nightActs.length) {
+    html += `<div class="god-section"><div class="god-sec-title">🌙 今晚已完成的行动</div><ul class="god-list">`;
+    nightActs.forEach(([roleId, a]) => {
+      const roleLabel = escapeHtml(godRoleLabel(gs, roleId));
+      const ids = [];
+      const push = id => { if (id && ids.indexOf(id) === -1) ids.push(id); };
+      if (a) {
+        push(a.targetId);
+        ['targets', 'targetIds'].forEach(k => { if (Array.isArray(a[k])) a[k].forEach(push); });
+      }
+      const targets = ids.map(id => players.find(p => p.id === id)).filter(Boolean).map(godSeatName);
+      const skipped = !!(a && a.skip === true) || targets.length === 0;
+      const detail = skipped
+        ? '<span class="god-muted">➜ 今晚没有选择目标（跳过）</span>'
+        : `➜ 选择了 <b>${targets.join('、')}</b>`;
+      html += `<li><span class="god-act-role">${roleLabel}</span>${detail}</li>`;
+    });
+    html += `</ul></div>`;
+  }
+
+  // 今日提名与投票
+  const noms = gs.nominations || [];
+  if (noms.length) {
+    html += `<div class="god-section"><div class="god-sec-title">🗳 今日提名与投票</div>`;
+    noms.forEach(n => {
+      const nomP = players.find(p => p.id === n.nominatorId);
+      const nmP = players.find(p => p.id === n.nomineeId);
+      let pill = '<span class="god-tag pending">投票中</span>';
+      if (n.resolved) {
+        pill = n.passed
+          ? `<span class="god-tag pass">通过 · ${n.voteCount} 票</span>`
+          : `<span class="god-tag fail">未通过 · ${n.voteCount} 票</span>`;
+      }
+      const cv = n.currentVotes || {};
+      const yes = [], no = [], abstain = [];
+      players.forEach(p => {
+        if (p.seat < 0) return;
+        if (!p.isAlive && !(p.voteToken > 0)) return; // 已出局且没有余票的人不参与
+        if (cv[p.id] === true) yes.push(p.seat + 1);
+        else if (cv[p.id] === false) no.push(p.seat + 1);
+        else abstain.push(p.seat + 1);
+      });
+      const seatText = arr => (arr.length ? arr.map(s => `${s}号`).join(' ') : '—');
+      html += `<div class="god-nom">
+        <div class="god-nom-head">${godSeatName(nomP)} 提名 ${godSeatName(nmP)} ${pill}</div>
+        <div class="god-nom-detail">
+          <span class="god-yes">赞成 ${yes.length}：</span>${seatText(yes)}
+          <span class="god-divider">｜</span>
+          <span class="god-no">反对 ${no.length}：</span>${seatText(no)}
+          ${abstain.length ? `<span class="god-divider">｜</span><span class="god-muted">未投 ${abstain.length}：</span>${seatText(abstain)}` : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // 已出局玩家及其身份
+  if (dead.length) {
+    html += `<div class="god-section"><div class="god-sec-title">💀 已出局（${dead.length} 人）</div><div class="god-line">${
+      dead.map(p => `${godSeatName(p)}（${escapeHtml(p.roleName)} · ${p.team === 'GOOD' ? '善良' : '邪恶'}）`).join('、')
+    }</div></div>`;
+  }
+
+  // 胜负结果
+  if (gs.winner) {
+    const isGood = gs.winner === 'GOOD';
+    html += `<div class="god-result ${isGood ? 'good' : 'evil'}">
+      <div class="god-result-title">${isGood ? '🎉 善良阵营获胜' : '💀 邪恶阵营获胜'}</div>
+      ${gs.winReason ? `<div class="god-result-reason">${escapeHtml(gs.winReason)}</div>` : ''}
+    </div>`;
+  }
+
+  // 技术信息（默认折叠，给排查流程用）
+  if (gs.nightQueue && gs.nightQueue.length > 0) html += buildGodNightQueueHtml(gs, players);
+  return html;
+}
+
+// 夜晚执行队列：默认折叠，角色 id 一律翻成中文
+function buildGodNightQueueHtml(gs, players) {
+  const queue = gs.nightQueue || [];
+  const idx = gs.currentNightIndex ?? -1;
+  const doneCount = Math.max(0, Math.min(idx, queue.length));
+  let html = `<details class="god-debug"><summary>🔧 技术信息：夜晚执行队列（已完成 ${doneCount} / ${queue.length}）</summary><div class="god-debug-body">`;
+  if (idx >= 0 && idx < queue.length) {
+    const cur = queue[idx];
+    const cp = players.find(p => p.id === cur.playerId);
+    const tags = [];
+    if (cur.isDrunk) tags.push('酒鬼假身份');
+    if (cur.isFakeDemon) tags.push('假恶魔');
+    html += `<div class="god-line">👉 当前等待：<b>${godSeatName(cp)}</b> · ${escapeHtml(godRoleLabel(gs, cur.roleId))}${tags.length ? `（${tags.join(' / ')}）` : ''}</div>`;
+    if (cp) {
+      html += `<div class="god-muted">${cp.isAlive ? '存活' : '已死亡'} · ${cp.isBot ? '机器人' : '真人'} · ${cp.isConnected === false ? '断线' : '在线'}</div>`;
+    }
+  } else if (idx >= queue.length) {
+    html += `<div class="god-line">✅ 本夜队列已全部执行完毕，等待进入天亮结算</div>`;
+  }
+  if (gs.pendingRavenkeeper) {
+    const rp = players.find(p => p.id === gs.pendingRavenkeeper);
+    html += `<div class="god-line">🐦 待处理守鸦人：<b>${godSeatName(rp)}</b></div>`;
+  }
+  html += `<div class="god-queue">`;
+  queue.forEach((item, i) => {
+    const p = players.find(pp => pp.id === item.playerId);
+    const mark = i < idx ? '✅' : (i === idx ? '👉' : '⏳');
+    const cls = i < idx ? 'done' : (i === idx ? 'current' : 'todo');
+    const tags = [];
+    if (item.isDrunk) tags.push('酒鬼');
+    if (item.isFakeDemon) tags.push('假恶魔');
+    html += `<div class="god-queue-item ${cls}">${mark} ${godSeatName(p)} · ${escapeHtml(godRoleLabel(gs, item.roleId))}${tags.length ? `（${tags.join('/')}）` : ''}</div>`;
+  });
+  html += `</div></div></details>`;
+  return html;
 }
 
 function updateGodPlayers() {
@@ -4237,11 +4318,34 @@ function godLogPlayers() {
   return godLogPlayersOverride || (godState && godState.players) || [];
 }
 
+// 当前渲染行对应的历史快照（日志写入时的角色/存活状态）。
+// 日志是历史数据：早期行必须显示当时的角色与生死，而不是对局结束后的最终状态。
+let godLogRowStates = null;
+
+// 取玩家信息：历史快照优先，缺失字段回退到当前玩家列表（兼容旧存档）
+function godLogPlayerInfo(playerId) {
+  const snap = godLogRowStates && godLogRowStates[playerId];
+  const p = godLogPlayers().find(x => x.id === playerId);
+  if (!snap && !p) return null;
+  const pick = (snapKey, curKey) => {
+    if (snap && snap[snapKey] !== undefined) return snap[snapKey];
+    return p ? p[curKey] : undefined;
+  };
+  return {
+    id: playerId,
+    seat: pick('seat', 'seat'),
+    name: pick('name', 'name'),
+    roleName: pick('roleName', 'roleName'),
+    team: pick('team', 'team'),
+    category: pick('category', 'category'),
+    isAlive: snap && snap.alive !== undefined ? snap.alive : (p ? p.isAlive : undefined)
+  };
+}
+
 // 玩家徽标：座位号 + 昵称 + 角色，按阵营着色，死亡者置灰
 function godLogPlayerChip(playerId) {
-  const players = godLogPlayers();
-  const p = players.find(x => x.id === playerId);
-  if (!p || p.seat < 0) return '';
+  const p = godLogPlayerInfo(playerId);
+  if (!p || p.seat < 0 || p.seat === undefined) return '';
   const teamCls = p.team === 'EVIL' ? 'evil' : (p.team === 'GOOD' ? 'good' : '');
   const deadCls = p.isAlive === false ? ' dead' : '';
   const roleText = p.roleName ? `<i>${escapeHtml(p.roleName)}</i>` : '';
@@ -4257,8 +4361,10 @@ const GOD_LOG_ACTOR_KEYS = ['playerId', 'nominatorId', 'acterId', 'pacifistId', 
 function godLogFlowHtml(entry) {
   const data = entry.data || {};
   const players = godLogPlayers();
-  if (players.length === 0) return '';
+  if (players.length === 0 && !godLogRowStates) return '';
+  // 历史快照里的玩家 id 也要认作有效玩家（玩家列表可能已不含他们）
   const known = new Set(players.map(p => p.id));
+  if (godLogRowStates) Object.keys(godLogRowStates).forEach(id => known.add(id));
   const ids = [];
   const addId = (v) => {
     if (typeof v === 'string' && known.has(v) && !ids.includes(v)) ids.push(v);
@@ -4310,7 +4416,7 @@ function godLogActorStatusHtml(row) {
 
 // 投票面板里的玩家小标签（座位 + 昵称，不重复角色名以免过于拥挤）
 function godLogVoterChip(playerId) {
-  const p = godLogPlayers().find(x => x.id === playerId);
+  const p = godLogPlayerInfo(playerId);
   if (!p) return '';
   return `<span class="gl-voter" title="${escapeHtml((p.seat + 1) + '号 ' + p.name)}"><b>${p.seat + 1}</b>${escapeHtml(p.name)}</span>`;
 }
@@ -4371,9 +4477,9 @@ function highlightGodLogMessage(message) {
 const GOD_LOG_INFO_MERGE_TYPES = new Set(['NIGHT_ACTION', 'NIGHT_WAKE', 'ABILITY', 'EXECUTION', 'DEATH']);
 
 // 该玩家是否是恶魔（用于把恶魔的击杀行动并入夜晚死亡日志）
+// 按日志当时快照的身份判断：中途可能发生恶魔转移（舞蛇人交换等）
 function godLogIsDemon(playerId) {
-  const players = godLogPlayers();
-  const p = players.find(x => x.id === playerId);
+  const p = godLogPlayerInfo(playerId);
   return !!(p && p.category === 'DEMON');
 }
 
@@ -4385,6 +4491,8 @@ function buildGodLogRows(entries) {
 
   entries.forEach(entry => {
     if (!entry) return;
+    // 该条日志的玩家状态快照，供 godLogIsDemon 等判定使用（按当时身份/生死）
+    godLogRowStates = entry.playerStates || null;
     // 开局配置（身份分配 / 开局提示）不再展示，身份可在玩家列表查看
     const type = entry.type || '';
     if (type === 'ROLE_ASSIGN' || type === 'CUSTOM_ASSIGN' || type === 'GAME_START') return;
@@ -4442,6 +4550,8 @@ function buildGodLogRows(entries) {
 
   // 收尾：把「夜末 + 死亡」折叠成一条死亡行，并去掉被合并掉的「死亡玩家：…」冗余文案
   const out = rows.map(row => {
+    // 每行渲染时切换到该行自己的历史状态快照
+    godLogRowStates = row.playerStates || null;
     // 行动行追加同一玩家收到的信息（去掉重复的「X号 Y（角色）收到信息：」前缀）
     if (row.mergedInfos && row.mergedInfos.length > 0) {
       const base = row.mergeMessage !== undefined ? row.mergeMessage : row.message;
@@ -4465,6 +4575,13 @@ function buildGodLogRows(entries) {
       return row;
     }
     row.type = 'DEATH';
+    // 死亡行的状态以「死亡那一刻」为准：合并各条死亡记录的快照
+    row.playerStates = Object.assign(
+      {},
+      row.playerStates || {},
+      ...(row.deathRows || []).map(d => d.playerStates || {})
+    );
+    godLogRowStates = row.playerStates;
     // 恶魔击杀成功时，把恶魔的行动并进这条死亡日志（原行动行不再单独显示）
     // 顺序按因果排列：先「杀害」再「死亡」
     const demonRow = row.demonRow;
@@ -4489,6 +4606,7 @@ function buildGodLogRows(entries) {
     return row;
   });
 
+  godLogRowStates = null;
   return out.filter(r => !r.__drop);
 }
 
@@ -4514,6 +4632,8 @@ function godLogMessageHtml(message) {
 function appendGodLogRow(row, logContainer) {
   logContainer = logContainer || $('godActionLog');
   if (!logContainer) return;
+  // 该行的角色/生死状态使用日志写入时的快照
+  godLogRowStates = row.playerStates || null;
 
   // 分组表头（滚动时吸顶）
   const group = godLogGroupOf(row);
@@ -4569,6 +4689,7 @@ function appendGodLogRow(row, logContainer) {
     ${probHtml}
   `;
   logContainer.appendChild(el);
+  godLogRowStates = null;
 }
 
 // 把一份行动日志渲染进指定容器：
@@ -4585,6 +4706,7 @@ function renderGodLogInto(container, entries, players) {
     buildGodLogRows(entries || []).forEach(row => appendGodLogRow(row, container));
   } finally {
     godLogPlayersOverride = prevOverride;
+    godLogRowStates = null;
   }
 }
 
@@ -5158,8 +5280,13 @@ const ROLE_COMPOSITION_TABLE = [
   [13, 9, 0, 3, 1], [14, 9, 1, 3, 1], [15, 9, 2, 3, 1]
 ];
 
+// SNV 恶魔自带的配比修正（与后端 SNV_DEMON_SETUP_DELTA 保持一致）
+const SNV_DEMON_SETUP_DELTA = { fanggu: 1, vigormortis: -1 };
+const SNV_DEMON_SETUP_NAME = { fanggu: '方古', vigormortis: '亡灵法师' };
+
 // gfDelta：教父「外来者±1」方向（1 / -1），默认取自定义面板当前选择
-function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
+// demonId：已选恶魔（紫罗兰教派：方古 外来者+1、亡灵法师 外来者-1）
+function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta, demonId = null) {
   const entry = ROLE_COMPOSITION_TABLE.find(c => c[0] === playerCount);
   if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
   let t = entry[1], o = entry[2];
@@ -5177,6 +5304,16 @@ function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
       effectiveDelta = delta;
     }
   }
+
+  // 紫罗兰教派：恶魔的设置修正（与后端逻辑一致，基准外来者为 0 时不生效）
+  let demonDelta = 0;
+  if (scriptId === 'snv' && demonId && SNV_DEMON_SETUP_DELTA[demonId]) {
+    demonDelta = SNV_DEMON_SETUP_DELTA[demonId];
+    if (o + demonDelta < 0) demonDelta = 0;
+    o += demonDelta;
+    t -= demonDelta;
+  }
+
   return {
     townsfolk: t,
     outsider: o,
@@ -5185,7 +5322,9 @@ function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
     setupType,
     baseOutsider: entry[2],   // 基准外来者数：为 0 时无法 -1
     godfatherDelta: (hasSetupChar && setupType === 'godfather') ? ((gfDelta === -1) ? -1 : 1) : null,
-    effectiveDelta             // 实际生效的 ±1 方向（0 = 不变化）
+    effectiveDelta,            // 实际生效的 ±1 方向（0 = 不变化）
+    demonId: demonId || null,
+    demonDelta                 // SNV 恶魔设置修正（0 = 不变化）
   };
 }
 
@@ -5209,7 +5348,9 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = cus
 
   // 2. 确定是否有 setup 角色（TB:男爵 / BMR:教父）
   const hasSetupChar = assigned.includes(setupCharId);
-  const comp = getComp(playerCount, hasSetupChar, script, gfDelta);
+  // 紫罗兰教派：按已选恶魔实时套用设置修正（方古 外来者+1 / 亡灵法师 外来者-1）
+  const selectedDemonId = assigned.find(r => ROLE_CATEGORY[r] === 'demon') || null;
+  const comp = getComp(playerCount, hasSetupChar, script, gfDelta, selectedDemonId);
 
   // 3. 按类别统计已指定角色
   const counts = { townsfolk: 0, outsider: 0, minion: 0, demon: 0 };
@@ -5223,6 +5364,11 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = cus
   const gfTag = (hasSetupChar && comp.setupType === 'godfather' && comp.effectiveDelta !== 0)
     ? `${setupCharName}外来者${comp.effectiveDelta > 0 ? '+1' : '-1'}`
     : '';
+  // 方古/亡灵法师的设置修正提示（与后端一致）
+  const demonTag = comp.demonDelta
+    ? `${SNV_DEMON_SETUP_NAME[comp.demonId] || '恶魔'}外来者${comp.demonDelta > 0 ? '+1' : '-1'}`
+    : '';
+  const setupTag = [gfTag, demonTag].filter(Boolean).join('；');
 
   if (counts.demon > comp.demon) {
     errors.push(`恶魔最多 ${comp.demon} 名，已指定 ${counts.demon} 名`);
@@ -5232,10 +5378,10 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = cus
     errors.push(`爪牙最多 ${comp.minion} 名${setupTag}，已指定 ${counts.minion} 名`);
   }
   if (counts.outsider > comp.outsider) {
-    errors.push(`外来者最多 ${comp.outsider} 名${gfTag ? `（含${gfTag}）` : ''}，已指定 ${counts.outsider} 名`);
+    errors.push(`外来者最多 ${comp.outsider} 名${setupTag ? `（含${setupTag}）` : ''}，已指定 ${counts.outsider} 名`);
   }
   if (counts.townsfolk > comp.townsfolk) {
-    errors.push(`村民最多 ${comp.townsfolk} 名${gfTag ? `（含${gfTag}）` : ''}，已指定 ${counts.townsfolk} 名`);
+    errors.push(`村民最多 ${comp.townsfolk} 名${setupTag ? `（含${setupTag}）` : ''}，已指定 ${counts.townsfolk} 名`);
   }
 
   // 5. 检查剩余空位是否足够填充必选角色

@@ -34,6 +34,8 @@ class GameEngine {
       deathsToAnnounce: [],
       rolesInPlay: [],
       rolesNotInPlay: [],
+      // 本局实际配比（含方古/亡灵法师等设置修正），公开信息
+      composition: null,
       winner: null,
       winReason: '',
       winEffect: null, // 专属胜利特效（如杀手公开击杀恶魔），游戏结束时由 VictoryChecker 写入
@@ -83,6 +85,10 @@ class GameEngine {
       message,
       data: actorStatus ? { ...data, actorStatus } : data
     };
+    // 玩家状态快照：日志是历史数据，显示时应使用当时的角色与生死状态，
+    // 不能用对局结束后的最终状态（否则早期日志里会出现「已死亡」或换过的角色）。
+    const playerStates = this.snapshotPlayerStates(entry.data);
+    if (playerStates) entry.playerStates = playerStates;
     gs.actionLog.push(entry);
     // 只保留最近200条
     if (gs.actionLog.length > 200) {
@@ -92,6 +98,46 @@ class GameEngine {
     for (const pid of this.godViewPlayers) {
       this.io.to(pid).emit('god:actionLog', entry);
     }
+  }
+
+  // 收集日志 data 中引用到的玩家，并快照其「当时」的座位/昵称/角色/阵营/存活状态
+  snapshotPlayerStates(data) {
+    const players = this.room.players;
+    if (!players || players.size === 0 || !data || typeof data !== 'object') return null;
+    const ids = new Set();
+    const visit = (v, depth) => {
+      if (v == null || depth > 4) return;
+      if (typeof v === 'string') {
+        if (players.has(v)) ids.add(v);
+        return;
+      }
+      if (Array.isArray(v)) {
+        v.forEach(x => visit(x, depth + 1));
+        return;
+      }
+      if (typeof v === 'object') {
+        Object.keys(v).forEach(k => visit(v[k], depth + 1));
+      }
+    };
+    visit(data, 0);
+    ['playerId', 'nominatorId', 'acterId', 'nomineeId'].forEach(k => {
+      if (typeof data[k] === 'string' && players.has(data[k])) ids.add(data[k]);
+    });
+    if (ids.size === 0) return null;
+    const states = {};
+    ids.forEach(id => {
+      const p = players.get(id);
+      if (!p) return;
+      states[id] = {
+        seat: p.seat,
+        name: p.name,
+        roleName: p.role ? p.role.name : '',
+        team: p.role ? p.role.team : null,
+        category: p.role ? p.role.category : null,
+        alive: p.isAlive === true
+      };
+    });
+    return Object.keys(states).length > 0 ? states : null;
   }
 
   // 启用/禁用上帝视角
@@ -210,11 +256,36 @@ class GameEngine {
       deathsToAnnounce: gs.deathsToAnnounce,
       todaysDeaths: gs.todaysDeaths,
       players: allPlayers,
+      composition: gs.composition || null,
       rolesNotInPlay: gs.rolesNotInPlay.slice(0, 3),
       winner: gs.winner,
       winReason: gs.winReason,
-      actionLog: gs.actionLog
+      actionLog: gs.actionLog,
+      // 角色 id → 中文名（上帝视角把 nightActions / 夜晚队列里的 id 翻成人话）
+      roleNames: this.getRoleNameMap()
     };
+  }
+
+  // 全部角色的中文名映射（缓存，跨剧本合并）
+  getRoleNameMap() {
+    if (!this._roleNameMap) {
+      const map = {};
+      try {
+        const { SCRIPTS } = require('../config/game-config');
+        Object.keys(SCRIPTS).forEach(sid => {
+          ((SCRIPTS[sid] && SCRIPTS[sid].allRoles) || []).forEach(id => {
+            if (!map[id]) {
+              const role = this.roleAllocator.createRoleInstance(id);
+              if (role && role.name) map[id] = role.name;
+            }
+          });
+        });
+      } catch (e) {
+        // 取名字失败不影响上帝视角其它内容
+      }
+      this._roleNameMap = map;
+    }
+    return this._roleNameMap;
   }
 
   // 设置玩家私密信息（自动记录真假信息和上帝视角日志）
@@ -293,6 +364,14 @@ class GameEngine {
       // 随机分配身份
       this.roleAllocator.allocate(seatedPlayers);
     }
+
+    // 记录本局实际配比（含方古/亡灵法师的设置修正），供前端展示
+    this.room.gameState.composition = {
+      townsfolk: seatedPlayers.filter(p => p.role && p.role.category === 'TOWNSFOLK').length,
+      outsider: seatedPlayers.filter(p => p.role && p.role.category === 'OUTSIDER').length,
+      minion: seatedPlayers.filter(p => p.role && p.role.category === 'MINION').length,
+      demon: seatedPlayers.filter(p => p.role && p.role.category === 'DEMON').length
+    };
 
     // 先记录角色分配日志
     for (const p of seatedPlayers) {
@@ -740,6 +819,8 @@ class GameEngine {
       dayCount: gs.dayCount,
       nightCount: gs.nightCount,
       script: room.script || 'tb',
+      // 实际配比（含设置修正），公开信息
+      composition: gs.composition || null,
       isNight: gs.phase === PHASES.FIRST_NIGHT || gs.phase === PHASES.NIGHT || gs.phase === PHASES.NIGHT_WAKE,
       currentWakePlayerId: gs.currentWakePlayerId,
       currentDefensePlayerId: gs.currentDefensePlayerId,
