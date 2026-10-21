@@ -1226,7 +1226,10 @@ io.on('connection', (socket) => {
           } else if (abilityName === 'cerenovus_claim') {
             content = `【洗脑宣告】我是${res.roleName}`;
           } else if (abilityName === 'juggler') {
-            content = `【杂耍艺人猜测】${res.targetSeat + 1}号 ${res.targetName} 是${res.roleName}`;
+            // 一次性公开整批猜测，格式与「公开公告」伪装完全一致
+            const guessText = res.summary
+              || (res.items || []).map(i => `${i.seat + 1}号 ${i.name} 是${i.roleName}`).join('、');
+            content = `【杂耍艺人猜测】${guessText}`;
           } else if (abilityName === 'klutz') {
             content = `【傻瓜声明】我选择 ${res.targetSeat + 1}号 ${res.targetName}`;
           }
@@ -1535,7 +1538,7 @@ ${playerInfo}
     // 紫罗兰教派：公开宣称类技能（宣告格式与真实技能完全一致）
     mutant: { prefix: '【变种人声明】我是外来者', maxLen: 40, script: 'snv' },
     cerenovus: { prefix: '【洗脑宣告】我是', maxLen: 40, script: 'snv' },
-    juggler: { prefix: '【杂耍艺人猜测】', maxLen: 60, script: 'snv' },
+    juggler: { prefix: '【杂耍艺人猜测】', maxLen: 120, script: 'snv' },
     klutz: { prefix: '【傻瓜声明】我选择 ', maxLen: 60, script: 'snv' }
   };
   socket.on('chat:announce', ({ roleId, text, channel }) => {

@@ -1929,18 +1929,21 @@ function renderRoleCard(state) {
     }
   }
 
-  // 杂耍艺人：仅首个白天可公开猜测
+  // 杂耍艺人：仅首个白天可公开猜测（一次性选完，提交后禁用）
   const jugglerBtn = $('jugglerBtn');
   if (jugglerBtn) {
-    const guessesUsed = myAbility.jugglerGuesses || 0;
-    if (role.id === 'juggler' && me.isAlive && state.dayCount === 1 && isDayActionPhase
-      && guessesUsed < 5) {
+    const jugglerDone = !!myAbility.jugglerDone;
+    if (role.id === 'juggler' && me.isAlive && state.dayCount === 1 && isDayActionPhase) {
       jugglerBtn.style.display = 'block';
-      jugglerBtn.textContent = guessesUsed > 0
-        ? `杂耍艺人：继续猜（${guessesUsed}/5）`
+      jugglerBtn.textContent = jugglerDone
+        ? '杂耍艺人：已公开猜测'
         : '杂耍艺人：猜角色（最多5个）';
+      jugglerBtn.disabled = jugglerDone;
+      jugglerBtn.classList.toggle('disabled', jugglerDone);
     } else {
       jugglerBtn.style.display = 'none';
+      jugglerBtn.disabled = false;
+      jugglerBtn.classList.remove('disabled');
       jugglerBtn.textContent = '杂耍艺人：猜角色';
     }
   }
@@ -2763,20 +2766,122 @@ async function useSavantAbility() {
 
 async function useJugglerAbility() {
   const originEl = getLoadingClickTarget();
-  const guessed = (currentState.myAbilityState && currentState.myAbilityState.jugglerGuesses) || 0;
-  if (guessed >= 5) {
-    showToast('杂耍艺人最多只能公开猜测 5 名玩家');
+  if (currentState && currentState.myAbilityState && currentState.myAbilityState.jugglerDone) {
+    showToast('你本局已经公开猜测过了');
     return;
   }
-  const players = currentState.players.filter(p => p.isAlive && p.seat !== -1);
-  const targetId = await showPlayerSelect('杂耍艺人：选择要猜测的玩家', players, { type: 'info' });
-  if (!targetId) return;
+  const guesses = await showJugglerGuessesDialog('杂耍艺人：公开猜测', {
+    description: '一次性选完要公开猜测的玩家与角色（最多5名），提交后整批猜测会一起公布给你看到的所有人。'
+  });
+  if (!guesses || guesses.length === 0) return;
+  emitRequest('day:useAbility', {
+    abilityName: 'juggler',
+    extra: { guesses: guesses.map(g => ({ targetId: g.targetId, roleId: g.roleId })) }
+  }, originEl);
+}
+
+// 杂耍艺人：一次性选择整批「玩家 + 角色」猜测（真实技能与公开公告伪装共用同一套选择方式）
+function showJugglerGuessesDialog(title, options = {}) {
+  const MAX = 5;
+  const players = ((currentState && currentState.players) || [])
+    .filter(p => p.seat !== -1 && p.isAlive)
+    .sort((a, b) => a.seat - b.seat);
   const scriptId = (currentState && currentState.script) || 'tb';
   const roles = ALL_ROLE_INFO.filter(r => r.script === scriptId)
     .map(r => ({ id: r.id, name: r.name, team: r.team }));
-  const roleId = await showRoleSelect('杂耍艺人：猜测他的角色', roles);
-  if (!roleId) return;
-  emitRequest('day:useAbility', { abilityName: 'juggler', targetId, extra: { roleId } }, originEl);
+
+  return new Promise((resolve) => {
+    if (players.length === 0 || roles.length === 0) { resolve(null); return; }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-info" style="min-width:380px;max-width:540px;">
+        <div class="confirm-title">${title}</div>
+        ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#7f7f7f;">${escapeHtml(options.description)}</div>` : ''}
+        <div class="jg-rows" style="max-height:46vh;overflow-y:auto;"></div>
+        <button class="confirm-btn jg-add" style="width:100%;margin-bottom:10px;">+ 添加一条猜测</button>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">取消</button>
+          <button class="confirm-btn confirm-ok">确定</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const rowsWrap = overlay.querySelector('.jg-rows');
+    const addBtn = overlay.querySelector('.jg-add');
+    const selStyle = 'flex:1;min-width:0;padding:6px;border-radius:6px;border:1px solid rgba(0,0,0,0.12);background:#fff;color:#191919;font-size:13px;font-family:inherit;';
+
+    const buildRow = () => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px;';
+      const playerSel = document.createElement('select');
+      playerSel.className = 'jg-player';
+      playerSel.style.cssText = selStyle;
+      playerSel.innerHTML = players
+        .map(p => `<option value="${p.id}">${p.seat + 1}号 ${escapeHtml(p.name)}</option>`).join('');
+      const roleSel = document.createElement('select');
+      roleSel.className = 'jg-role';
+      roleSel.style.cssText = selStyle;
+      roleSel.innerHTML = roles
+        .map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+      const delBtn = document.createElement('button');
+      delBtn.className = 'confirm-btn';
+      delBtn.textContent = '✕';
+      delBtn.style.cssText = 'padding:4px 8px;';
+      delBtn.addEventListener('click', () => { row.remove(); syncAdd(); });
+      row.append(playerSel, roleSel, delBtn);
+      return row;
+    };
+    const syncAdd = () => { addBtn.style.display = rowsWrap.children.length >= MAX ? 'none' : ''; };
+
+    rowsWrap.appendChild(buildRow());
+    syncAdd();
+    addBtn.addEventListener('click', () => {
+      if (rowsWrap.children.length >= MAX) return;
+      rowsWrap.appendChild(buildRow());
+      syncAdd();
+    });
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => { overlay.remove(); resolve(result); }, 200);
+    };
+
+    overlay.querySelector('.confirm-cancel').addEventListener('click', () => close(null));
+    overlay.querySelector('.confirm-ok').addEventListener('click', () => {
+      const picked = [];
+      const seen = new Set();
+      for (const row of Array.from(rowsWrap.children)) {
+        const pid = row.querySelector('.jg-player').value;
+        const rid = row.querySelector('.jg-role').value;
+        if (!pid || !rid) { showToast('每条猜测都要选择玩家与角色'); return; }
+        if (seen.has(pid)) { showToast('同一名玩家只能猜一次'); return; }
+        seen.add(pid);
+        const p = players.find(x => x.id === pid);
+        const r = roles.find(x => x.id === rid);
+        if (!p || !r) { showToast('选择无效'); return; }
+        picked.push({ targetId: p.id, roleId: r.id, seat: p.seat, name: p.name, roleName: r.name });
+      }
+      if (picked.length === 0) { showToast('请至少选择一条猜测'); return; }
+      picked.sort((a, b) => a.seat - b.seat);
+      close(picked);
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } };
+    document.addEventListener('keydown', onKey);
+    const origRemove = overlay.remove.bind(overlay);
+    overlay.remove = function () { document.removeEventListener('keydown', onKey); origRemove(); };
+
+    requestAnimationFrame(() => overlay.classList.add('confirm-show'));
+  });
+}
+
+// 杂耍艺人猜测文案：真实公开公告与伪装公告逐字一致
+function formatJugglerGuesses(list) {
+  return (list || []).map(g => `${g.seat + 1}号 ${g.name} 是${g.roleName}`).join('、');
 }
 
 async function useMutantAbility() {
@@ -5015,7 +5120,8 @@ const ANNOUNCE_ROLE_PRESETS = [
   // 紫罗兰教派（宣称类技能，真伪公告格式一致）
   { id: 'mutant', name: '变种人', script: 'snv', inputType: 'text', prefix: '【变种人声明】我是外来者', placeholder: '变种人声明（内容固定）', maxLen: 40 },
   { id: 'cerenovus_claim', name: '洗脑宣告', script: 'snv', inputType: 'text', prefix: '【洗脑宣告】我是', placeholder: '例如：僧侣', maxLen: 40 },
-  { id: 'juggler', name: '杂耍艺人', script: 'snv', inputType: 'text', prefix: '【杂耍艺人猜测】', placeholder: '例如：3号 是僧侣', maxLen: 60 },
+  // 杂耍艺人：伪装时与真实技能一致，一次性选择玩家与角色（最多5条）
+  { id: 'juggler', name: '杂耍艺人', script: 'snv', inputType: 'juggler', prefix: '【杂耍艺人猜测】', placeholder: '点击「发送公告」后一次性选择玩家与角色（最多5条）', maxLen: 120 },
   { id: 'klutz', name: '傻瓜', script: 'snv', inputType: 'player', prefix: '【傻瓜声明】我选择 ', maxLen: 60 }
 ];
 
@@ -5107,9 +5213,11 @@ function updateAnnouncePreview() {
   const textField = $('annTextField');
   const playerField = $('annPlayerField');
   const isPlayer = preset.inputType === 'player';
+  // 杂耍艺人：与真实技能一致，用「玩家 + 角色」的一次性批量选择，不需要自由文本
+  const isJuggler = preset.inputType === 'juggler';
 
-  // 按角色切换输入方式：造谣者=自由文本，杀手 / 月之子=选择存活玩家
-  if (textField) textField.style.display = isPlayer ? 'none' : '';
+  // 按角色切换输入方式：造谣者=自由文本，杀手 / 月之子=选择存活玩家，杂耍艺人=批量选择
+  if (textField) textField.style.display = (isPlayer || isJuggler) ? 'none' : '';
   if (playerField) playerField.style.display = isPlayer ? '' : 'none';
 
   if (ta) {
@@ -5118,19 +5226,37 @@ function updateAnnouncePreview() {
     if (cnt) cnt.textContent = `${ta.value.length}/${preset.maxLen}`;
   }
 
+  if (isJuggler) {
+    if (prev) prev.textContent = `${preset.prefix}（发送时一次性选择玩家与角色，最多5条）`;
+    return;
+  }
+
   const body = getAnnounceTargetText();
   if (prev) prev.textContent = `${preset.prefix}${body || '……'}`;
 }
 
-function sendAnnouncement() {
+async function sendAnnouncement() {
   const preset = getAnnouncePreset();
-  const text = getAnnounceTargetText();
   // 公开公告仅能在主房间（公聊）发起（服务端同样校验）
   if (currentChatChannel !== 'public') {
     showToast('只有主房间内才能发起公开公告');
     closeAnnouncePanel();
     return;
   }
+
+  // 杂耍艺人：与真实技能相同的批量选择，生成与真实公告逐字一致的文案
+  if (preset.inputType === 'juggler') {
+    const guesses = await showJugglerGuessesDialog('公开公告：杂耍艺人猜测', {
+      description: '选择要冒充公布的猜测（与真实技能相同的选择方式，最多5条）。'
+    });
+    if (!guesses || guesses.length === 0) return;
+    const text = formatJugglerGuesses(guesses);
+    socket.emit('chat:announce', { roleId: preset.id, text, channel: currentChatChannel });
+    closeAnnouncePanel();
+    return;
+  }
+
+  const text = getAnnounceTargetText();
   if (!text) {
     showToast(preset.inputType === 'player' ? '请选择一名存活玩家' : '请输入公告内容');
     return;

@@ -804,34 +804,50 @@ class Juggler extends Role {
     if (gameState.dayCount !== 1) {
       return { success: false, message: '只能在首个白天进行猜测' };
     }
-    const targetId = payload && payload.targetId;
-    const roleId = payload && payload.roleId;
-    if (!targetId || !roleId) return { success: false, message: '请选择玩家与角色' };
-
-    const target = engine.room.players.get(targetId);
-    if (!target || !target.isAlive || !target.role) {
-      return { success: false, message: '选择的玩家无效' };
+    // 必须一次性选完再公开，提交后不再允许追加
+    if (player.abilityState.jugglerSubmitted) {
+      return { success: false, message: '你本局已经公开猜测过了' };
     }
-    const inst = engine.roleAllocator.createRoleInstance(roleId);
-    if (!inst) return { success: false, message: '角色不存在' };
-
-    const guesses = player.abilityState.jugglerGuesses || [];
+    const list = payload && Array.isArray(payload.guesses) ? payload.guesses : null;
+    if (!list || list.length === 0) {
+      return { success: false, message: '请至少选择一条猜测' };
+    }
     // 官方：首个白天最多公开猜测 5 名玩家
-    if (guesses.length >= Juggler.MAX_GUESSES) {
+    if (list.length > Juggler.MAX_GUESSES) {
       return { success: false, message: `最多只能猜测 ${Juggler.MAX_GUESSES} 名玩家` };
     }
-    if (guesses.some(g => g.targetId === targetId)) {
-      return { success: false, message: '已经猜过这名玩家了' };
+
+    const items = [];
+    const seen = new Set();
+    for (const g of list) {
+      const targetId = g && g.targetId;
+      const roleId = g && g.roleId;
+      if (!targetId || !roleId) {
+        return { success: false, message: '每条猜测都要选择玩家与角色' };
+      }
+      if (seen.has(targetId)) {
+        return { success: false, message: '同一名玩家只能猜一次' };
+      }
+      const target = engine.room.players.get(targetId);
+      if (!target || !target.isAlive || !target.role) {
+        return { success: false, message: '选择的玩家无效' };
+      }
+      const inst = engine.roleAllocator.createRoleInstance(roleId);
+      if (!inst) return { success: false, message: '角色不存在' };
+      seen.add(targetId);
+      items.push({ targetId, roleId, seat: target.seat, name: target.name, roleName: inst.name });
     }
-    guesses.push({ targetId, roleId });
-    player.abilityState.jugglerGuesses = guesses;
+
+    // 整批一次保存，当晚结算猜对数；排序按座位号，保证公开文案稳定
+    items.sort((a, b) => a.seat - b.seat);
+    player.abilityState.jugglerGuesses = items.map(i => ({ targetId: i.targetId, roleId: i.roleId }));
+    player.abilityState.jugglerSubmitted = true;
 
     return {
       success: true,
-      targetId,
-      targetSeat: target.seat,
-      targetName: target.name,
-      roleName: inst.name
+      items,
+      // 与「公开公告」伪装的文案格式完全一致
+      summary: items.map(i => `${i.seat + 1}号 ${i.name} 是${i.roleName}`).join('、')
     };
   }
 

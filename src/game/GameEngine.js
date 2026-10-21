@@ -740,10 +740,10 @@ class GameEngine {
     }
     if (player.role && player.role.onDayAbility) {
       let payload = targetId;
-      if (abilityName === 'artist' || abilityName === 'savant' || abilityName === 'mutant') {
+      if (abilityName === 'artist' || abilityName === 'savant' || abilityName === 'mutant'
+        || abilityName === 'juggler') {
+        // 杂耍艺人：一次提交整批猜测 { guesses: [{ targetId, roleId }] }
         payload = extra;
-      } else if (abilityName === 'juggler') {
-        payload = { targetId, roleId: extra && extra.roleId };
       }
       return player.role.onDayAbility(this.room.gameState, player, payload, this, extra);
     }
@@ -957,7 +957,8 @@ class GameEngine {
           && viewer.abilityState.savantLastAttemptDay === gs.dayCount)
           ? viewer.abilityState.savantLastAttempt.slice(0, 2)
           : null,
-        jugglerGuesses: (viewer.abilityState && viewer.abilityState.jugglerGuesses || []).length,
+        // 杂耍艺人：本局是否已一次性公开猜测（提交后按钮禁用）
+        jugglerDone: !!(viewer.abilityState && viewer.abilityState.jugglerSubmitted),
         // 管家：主人未投赞成时为 true，前端据此禁用「赞成」按钮
         butlerYesBlocked
       }
