@@ -425,6 +425,10 @@ class Savant extends Role {
     if (player.abilityState.savantDay === gameState.dayCount) {
       return { success: false, message: '你今天已经问过问题了' };
     }
+    // 正在等待说书人回答时不允许重复提交
+    if (Array.isArray(player.abilityState.savantPending) && player.abilityState.savantPending.length === 2) {
+      return { success: false, message: '正在等待说书人回答，请稍候' };
+    }
     const questions = Array.isArray(payload) ? payload : (payload && payload.questions);
     if (!Array.isArray(questions) || questions.length !== 2) {
       return { success: false, message: '请提出两个问题' };
@@ -435,7 +439,8 @@ class Savant extends Role {
       if (q.length > 120) return { success: false, message: '问题不能超过120字' };
     }
 
-    player.abilityState.savantDay = gameState.dayCount;
+    // 注意：这里不占用当日次数，等 AI 回答成功（applyAnswers）后再计次，
+    // 否则裁判服务失败时会被误判为「今日已提问」
     player.abilityState.savantPending = cleaned;
     return { success: true, questions: cleaned };
   }
@@ -446,16 +451,26 @@ class Savant extends Role {
     player.abilityState.savantPending = null;
     if (questions.length !== 2 || !Array.isArray(answers) || answers.length !== 2) return;
 
+    // 成功拿到答案才占用当日次数（前端据此禁用按钮）
+    player.abilityState.savantDay = gameState.dayCount;
+    // 成功后清掉失败重试用的回填内容，避免之后还带出旧问题
+    player.abilityState.savantLastAttempt = null;
+    player.abilityState.savantLastAttemptDay = null;
+
     const normalized = answers.map(a => a === true || a === 'true');
     const vortox = isVortoxActive(engine);
     let finalAnswers;
+    let falseIndex = null;
     if (vortox) {
       // 混沌：好人信息必须为假 → 两个答案都反转
       finalAnswers = normalized.map(a => !a);
     } else {
       const invertIndex = Math.random() < 0.5 ? 0 : 1;
       finalAnswers = normalized.map((a, i) => (i === invertIndex ? !a : a));
+      falseIndex = invertIndex;
     }
+    // 哪一问是假话：混沌在场时两问都是假话
+    const isFalseAt = (i) => (vortox ? true : i === falseIndex);
 
     const lines = questions.map((q, i) => `问：${q}\n答：${finalAnswers[i] ? '是' : '否'}`).join('\n');
     engine.setPlayerPrivateInfo(player, {
@@ -463,14 +478,36 @@ class Savant extends Role {
       day: gameState.dayCount,
       questions,
       answers: finalAnswers,
+      // 玩家自己不知道哪句是真/假，故 message 里不做标注
       message: `你向说书人提出两个问题（其中一个是真话，一个是假话）：\n${lines}`
     });
-    engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（学者）私下提问了两个是非题`, {
-      playerId: player.id, questions, answers: finalAnswers
+
+    // 上帝视角/历史记录专用：记录哪一问是真、哪一问是假（不随玩家状态下发）
+    player.savantLog = player.savantLog || [];
+    player.savantLog.push({
+      day: gameState.dayCount,
+      questions,
+      answers: finalAnswers,
+      falseIndex,
+      vortox
     });
+
+    const detailText = questions.map((q, i) =>
+      `${i === 0 ? '①' : '②'} ${q} → ${finalAnswers[i] ? '是' : '否'}（${isFalseAt(i) ? '假话' : '真话'}）`
+    ).join('；');
+    engine.logAction('ABILITY',
+      `${player.seat + 1}号 ${player.name}（学者）私下提问两个是非题：${detailText}${vortox ? '【混沌在场：两问均为假话】' : ''}`, {
+        playerId: player.id, questions, answers: finalAnswers, falseIndex, vortox
+      });
   }
 
+  // 裁判 AI 失败：回滚当日次数，并记住这次的问题，当天重试时自动回填
   cancelDayAbility(gameState, player) {
+    const pending = player.abilityState.savantPending;
+    if (Array.isArray(pending) && pending.length === 2) {
+      player.abilityState.savantLastAttempt = pending.slice();
+      player.abilityState.savantLastAttemptDay = gameState.dayCount;
+    }
     player.abilityState.savantDay = null;
     player.abilityState.savantPending = null;
   }

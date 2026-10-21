@@ -114,6 +114,12 @@ function finishButtonLoading(record) {
   el.removeAttribute('aria-busy');
   delete el.dataset.loading;
   if (el.tagName === 'BUTTON' && record.prevDisabled !== null) el.disabled = record.prevDisabled;
+  // 白天技能按钮（学者/艺术家等）的「已使用」状态会在请求返回后变化，
+  // loading 结束时按最新状态重算，避免把已经用掉的按钮恢复成可点击
+  if (el.id && /(artist|savant|juggler|mutant|cerenovus|klutz)Btn$/.test(el.id)
+      && typeof currentState !== 'undefined' && currentState) {
+    try { renderRoleCard(currentState); } catch (e) { /* 页面未就绪时忽略 */ }
+  }
 }
 
 function releaseAllButtonLoading() {
@@ -1902,11 +1908,15 @@ function renderRoleCard(state) {
   const savantBtn = $('savantBtn');
   if (savantBtn) {
     const savantAsked = !!myAbility.savantAskedToday;
+    const savantPending = !!myAbility.savantPendingAnswer;
+    const savantLocked = savantAsked || savantPending;
     if (role.id === 'savant' && me.isAlive && isDayActionPhase) {
       savantBtn.style.display = 'block';
-      savantBtn.textContent = savantAsked ? '学者：今日已提问' : '学者：提问两个问题';
-      savantBtn.disabled = savantAsked;
-      savantBtn.classList.toggle('disabled', savantAsked);
+      savantBtn.textContent = savantAsked
+        ? '学者：今日已提问'
+        : (savantPending ? '学者：等待说书人回答…' : '学者：提问两个问题');
+      savantBtn.disabled = savantLocked;
+      savantBtn.classList.toggle('disabled', savantLocked);
     } else {
       savantBtn.style.display = 'none';
       savantBtn.disabled = false;
@@ -2725,22 +2735,21 @@ async function useArtistAbility() {
 
 async function useSavantAbility() {
   const originEl = getLoadingClickTarget();
-  const desc = '每天可以私下问两个是非题，你会得到一个真话和一个假话。';
-  const q1 = await showTextInput('学者：第一个问题', {
-    placeholder: '输入第一个是非题',
-    description: desc,
-    maxLength: 120, minLength: 2, multiline: false,
-    type: 'success', confirmText: '下一个问题'
+  // 上次裁判服务失败时，自动回填上次的问题，避免重新输入
+  const last = (currentState && currentState.myAbilityState && currentState.myAbilityState.savantLastQuestions) || null;
+  // 两个问题在同一个弹窗里填写，避免分两步输入
+  const questions = await showDoubleTextInput('学者：向说书人提问', {
+    labels: ['第一个问题', '第二个问题'],
+    placeholders: ['例如：3号是恶魔吗？', '例如：7号是爪牙吗？'],
+    description: last
+      ? '上次提问未能送达说书人（裁判服务不可用），已为你填回上次的问题，可直接重试。'
+      : '每天可以私下问两个是非题，你会得到一个真话和一个假话（你不会知道哪个是真）。',
+    defaultValues: last || ['', ''],
+    maxLength: 120, minLength: 2,
+    type: 'success', confirmText: '提交两个问题'
   });
-  if (!q1) return;
-  const q2 = await showTextInput('学者：第二个问题', {
-    placeholder: '输入第二个是非题',
-    description: desc,
-    maxLength: 120, minLength: 2, multiline: false,
-    type: 'success', confirmText: '提交问题'
-  });
-  if (!q2) return;
-  emitRequest('day:useAbility', { abilityName: 'savant', extra: [q1, q2] }, originEl);
+  if (!questions) return;
+  emitRequest('day:useAbility', { abilityName: 'savant', extra: questions }, originEl);
 }
 
 async function useJugglerAbility() {
@@ -4163,7 +4172,12 @@ function updateGodPlayers() {
       const falseStyle = latest.isFalse ? 'color:#FA5151;' : 'color:#0FA958;';
       // 表格单元格只显示第一行摘要（完整内容用 title 悬浮查看），避免多行信息被挤成一串
       const firstLine = String(latest.message || '').split('\n')[0];
-      infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message)}">${escapeHtml(firstLine).substring(0, 30)}${firstLine.length > 30 ? '...' : ''}</span>
+      // 学者：悬浮提示里带上「哪一问是真/假」
+      const savantNote = (latest.type === 'savant' && Array.isArray(latest.savantTruth))
+        ? '｜' + (latest.questions || []).map((q, i) =>
+          `${i === 0 ? '①' : '②'}${(latest.answers || [])[i] ? '是' : '否'}(${latest.savantTruth[i] ? '真话' : '假话'})`).join(' ')
+        : '';
+      infoCell = `<span style="${falseStyle} font-size:12px;" title="${escapeHtml(latest.message + savantNote)}">${escapeHtml(firstLine).substring(0, 30)}${firstLine.length > 30 ? '...' : ''}</span>
         <span style="color:#8c8c8c; font-size:11px;">(${hist.length}条)</span>`;
     }
     return `<tr style="border-bottom:1px solid rgba(0,0,0,0.03); opacity:${p.isAlive?1:0.5};">
@@ -4202,6 +4216,20 @@ function renderGodPlayer(p, team) {
       const dayLabel = day === 0 ? '第一夜' : `第${day}夜`;
       dayHtml += `<div style="margin-bottom:3px;"><span style="color:#07C160; font-size:11px; opacity:0.7;">${dayLabel}</span></div>`;
       byDay[day].forEach(info => {
+        // 学者：逐条标注哪一问是真话、哪一问是假话（仅上帝视角有 savantTruth）
+        if (info.type === 'savant' && Array.isArray(info.savantTruth)) {
+          const rows = (info.questions || []).map((q, i) => {
+            const ans = (info.answers || [])[i] ? '是' : '否';
+            const isTrueAnswer = !!info.savantTruth[i];
+            const tag = isTrueAnswer
+              ? '<span style="color:#0FA958; font-weight:bold; font-size:11px;">真话</span>'
+              : '<span style="color:#FA5151; font-weight:bold; font-size:11px;">假话</span>';
+            return `<div style="margin-left:14px;">问：${escapeHtml(q)}　答：${ans} ${tag}</div>`;
+          }).join('');
+          dayHtml += `<div style="font-size:11.5px; line-height:1.6; color:#576b95; margin-left:10px; margin-bottom:6px;">
+            · 学者向说书人提问${info.savantVortox ? '（混沌在场：两问均为假话）' : '（一真一假）'}${rows}</div>`;
+          return;
+        }
         const falseMark = info.isFalse 
           ? '<span style="color:#FA5151; font-weight:bold; font-size:11px;"> ⚠️假</span>' 
           : '<span style="color:#07C160; font-size:11px;"> ✓</span>';

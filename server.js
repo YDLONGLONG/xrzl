@@ -1150,7 +1150,7 @@ io.on('connection', (socket) => {
         if (!ai.ok) {
           engine.cancelDayAbility(socket.id);
           socket.emit('room:error', {
-            message: '说书人暂时无法回答（裁判服务不可用），请稍后重试'
+            message: '说书人暂时无法回答（裁判服务不可用），已为你保留这次的问题，稍后可直接重试'
           });
           broadcastRoomState(roomId);
           return;

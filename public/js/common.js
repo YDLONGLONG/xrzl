@@ -266,6 +266,117 @@ function showTextInput(title, options = {}) {
   });
 }
 
+// 双问题输入弹窗（学者）：在同一个弹窗里填写两个问题，一次性提交
+function showDoubleTextInput(title, options = {}) {
+  return new Promise((resolve) => {
+    const maxLength = options.maxLength || 120;
+    const minLength = options.minLength || 1;
+    const labels = options.labels || ['第一个问题', '第二个问题'];
+    const placeholders = options.placeholders || ['', ''];
+    const defaultValues = options.defaultValues || ['', ''];
+    const confirmText = options.confirmText || '提交';
+    const cancelText = options.cancelText || '取消';
+    const type = options.type || 'default';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-${type}" style="min-width:360px;max-width:520px;">
+        <div class="confirm-title">${title}</div>
+        ${options.description ? `<div class="confirm-message" style="margin-bottom:10px;font-size:13px;color:#7f7f7f;line-height:1.5;">${options.description}</div>` : ''}
+        <div class="confirm-input-area">
+          <div style="font-size:12px;color:#666;margin-bottom:4px;">① ${labels[0]}</div>
+          <input type="text" class="confirm-input dbl-input" data-idx="0" placeholder="${placeholders[0]}" maxlength="${maxLength}">
+          <div style="text-align:right;font-size:11px;color:#999;margin:4px 0 10px;">
+            <span class="dbl-count" data-idx="0">0</span>/${maxLength}
+          </div>
+          <div style="font-size:12px;color:#666;margin-bottom:4px;">② ${labels[1]}</div>
+          <input type="text" class="confirm-input dbl-input" data-idx="1" placeholder="${placeholders[1]}" maxlength="${maxLength}">
+          <div style="text-align:right;font-size:11px;color:#999;margin-top:4px;">
+            <span class="dbl-count" data-idx="1">0</span>/${maxLength}
+          </div>
+          <div class="dbl-error" style="display:none;color:#FA5151;font-size:12px;margin-top:8px;"></div>
+        </div>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">${cancelText}</button>
+          <button class="confirm-btn confirm-ok">${confirmText}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const okBtn = overlay.querySelector('.confirm-ok');
+    const cancelBtn = overlay.querySelector('.confirm-cancel');
+    const inputs = Array.from(overlay.querySelectorAll('.dbl-input'));
+    const counts = Array.from(overlay.querySelectorAll('.dbl-count'));
+    const errorEl = overlay.querySelector('.dbl-error');
+
+    const updateCount = (idx) => {
+      if (counts[idx]) counts[idx].textContent = inputs[idx].value.length;
+    };
+    // 用赋值方式回填默认值（如学者 AI 失败后重试时带入上次的问题）
+    inputs.forEach((el, idx) => {
+      if (defaultValues[idx]) el.value = String(defaultValues[idx]);
+      updateCount(idx);
+    });
+    inputs.forEach((el, idx) => {
+      el.addEventListener('input', () => {
+        updateCount(idx);
+        el.style.borderColor = '';
+        errorEl.style.display = 'none';
+      });
+    });
+
+    setTimeout(() => {
+      const focusEl = inputs.find(el => !el.value) || inputs[0];
+      if (focusEl) focusEl.focus();
+    }, 100);
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => {
+        overlay.remove();
+        resolve(result);
+      }, 200);
+    };
+
+    const submit = () => {
+      const values = inputs.map(el => el.value.trim());
+      const badIdx = values.findIndex(v => v.length < minLength);
+      if (badIdx !== -1) {
+        errorEl.textContent = `请填写${badIdx === 0 ? '第一个' : '第二个'}问题（至少 ${minLength} 字）`;
+        errorEl.style.display = 'block';
+        inputs[badIdx].style.borderColor = '#FA5151';
+        inputs[badIdx].focus();
+        return;
+      }
+      close(values);
+    };
+
+    okBtn.addEventListener('click', submit);
+    cancelBtn.addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      else if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    };
+    document.addEventListener('keydown', onKey);
+    const origRemove = overlay.remove.bind(overlay);
+    overlay.remove = function() {
+      document.removeEventListener('keydown', onKey);
+      origRemove();
+    };
+
+    requestAnimationFrame(() => {
+      overlay.classList.add('confirm-show');
+    });
+  });
+}
+
 function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
     return navigator.clipboard.writeText(text);

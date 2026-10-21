@@ -336,8 +336,9 @@ class RoleAllocator {
       });
     }
 
-    // SNV：恶魔的设置修正优先于房主手选——手动数量与修正后的配比冲突时，
-    // 多出的一方改为缺少的一方（方古：村民→外来者；亡灵法师：外来者→村民）
+    // SNV：恶魔的设置修正优先于随机填充——自动填充的角色数量与修正后的配比冲突时，
+    // 多出的一方改为缺少的一方（方古：村民→外来者；亡灵法师：外来者→村民）。
+    // 房主逐座位手动指定的身份不会被改动（自定义模式下以房主明确选择为准）。
     if (customDemonDelta) {
       const swapCategory = (fromCat, toPool, label) => {
         const fromPlayers = seatedPlayers.filter(p => p.role && p.role.category === fromCat);
@@ -346,9 +347,10 @@ class RoleAllocator {
         if (overflow <= 0) return;
         const pool = shuffle(toPool.filter(r => !assignedRoleIds.includes(r)));
         const isManual = (p) => Object.values(customRoles).includes(p.role.id);
-        const targets = [...fromPlayers]
-          .sort((a, b) => (isManual(a) ? 1 : 0) - (isManual(b) ? 1 : 0))
-          .slice(0, Math.min(overflow, pool.length));
+        const autoPlayers = fromPlayers.filter(p => !isManual(p));
+        // 优先改动自动填充的座位；若手选数量本身就超额，则按规则强制修正
+        const candidates = autoPlayers.length > 0 ? autoPlayers : fromPlayers;
+        const targets = shuffle(candidates).slice(0, Math.min(overflow, pool.length));
         targets.forEach((p, i) => {
           const newId = pool[i];
           const idx = assignedRoleIds.indexOf(p.role.id);

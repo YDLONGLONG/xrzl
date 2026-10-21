@@ -1,6 +1,6 @@
 // 游戏引擎 - 状态机核心
 const { PHASES, ROLE_IDS } = require('../config/game-config');
-const { getSeatedPlayers, getAlivePlayers } = require('../utils/helpers');
+const { getSeatedPlayers, getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('../config/prob-config');
 const RoleAllocator = require('./RoleAllocator');
 const NightResolver = require('./NightResolver');
@@ -208,6 +208,24 @@ class GameEngine {
   // 获取上帝视角完整状态
   getGodViewState() {
     const gs = this.room.gameState;
+    // 学者：把「哪一问是真话」注入上帝视角的私信副本（不会随玩家状态下发）
+    const withSavantTruth = (p) => (info) => {
+      if (!info || info.type !== 'savant') return info;
+      const log = p.savantLog || [];
+      if (!Array.isArray(info.questions) || log.length === 0) return info;
+      const answers = info.answers || [];
+      const rec = log.find(r => Array.isArray(r.questions) && Array.isArray(r.answers)
+        && r.questions[0] === info.questions[0] && r.questions[1] === info.questions[1]
+        && r.answers[0] === answers[0] && r.answers[1] === answers[1]);
+      if (!rec) return info;
+      return {
+        ...info,
+        // savantTruth[i] = 第 i 个答案是否为真话
+        savantTruth: rec.answers.map((a, i) => (rec.vortox ? false : i !== rec.falseIndex)),
+        savantVortox: !!rec.vortox
+      };
+    };
+
     const allPlayers = Array.from(this.room.players.values())
       .filter(p => p.seat !== -1)
       .map(p => ({
@@ -223,11 +241,12 @@ class GameEngine {
         isDrunk: p.isDrunk,
         roleId: p.role ? p.role.id : null,
         roleName: p.role ? p.role.name : '未分配',
-        team: p.role ? p.role.team : null,
+        team: p.role ? getPlayerEffectiveTeam(p) : null,
         category: p.role ? p.role.category : null,
         voteToken: p.voteToken,
-        privateInfo: p.privateInfo,
-        privateInfoHistory: p.privateInfoHistory || []
+        savantLog: p.savantLog || null,
+        privateInfo: withSavantTruth(p)(p.privateInfo),
+        privateInfoHistory: (p.privateInfoHistory || []).map(withSavantTruth(p))
       }));
 
     return {
@@ -920,6 +939,16 @@ class GameEngine {
         usedDayAbility: !!viewer.hasUsedDayAbility,
         artistUsed: !!(viewer.abilityState && viewer.abilityState.artistUsed),
         savantAskedToday: !!(viewer.abilityState && viewer.abilityState.savantDay === gs.dayCount),
+        // 学者：正在等待说书人回答（按钮禁用，防止重复提交）
+        savantPendingAnswer: !!(viewer.abilityState && Array.isArray(viewer.abilityState.savantPending)
+          && viewer.abilityState.savantPending.length === 2),
+        // 学者：当天裁判失败时的问题，当天重试自动回填（跨天不保留）
+        savantLastQuestions: (viewer.abilityState
+          && Array.isArray(viewer.abilityState.savantLastAttempt)
+          && viewer.abilityState.savantLastAttempt.length === 2
+          && viewer.abilityState.savantLastAttemptDay === gs.dayCount)
+          ? viewer.abilityState.savantLastAttempt.slice(0, 2)
+          : null,
         jugglerGuesses: (viewer.abilityState && viewer.abilityState.jugglerGuesses || []).length,
         // 管家：主人未投赞成时为 true，前端据此禁用「赞成」按钮
         butlerYesBlocked
