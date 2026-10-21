@@ -168,9 +168,16 @@ function replacePlayerId(room, engine, oldId, newId) {
   // 更新room.players Map
   const player = room.players.get(oldId);
   if (!player) return;
-  room.players.delete(oldId);
   player.id = newId;
-  room.players.set(newId, player);
+  // 保留原有遍历顺序：直接 delete + set 会把重连玩家挪到 Map 末尾，
+  // 导致前端各处按 players 顺序渲染的列表里，该玩家座位号不变但顺序跑到最后
+  if (oldId !== newId) {
+    const orderedEntries = Array.from(room.players.entries());
+    room.players.clear();
+    for (const [id, p] of orderedEntries) {
+      room.players.set(id === oldId ? newId : id, p);
+    }
+  }
 
   // 更新seats数组（引用的是对象本身，id已更新无需改动）
 

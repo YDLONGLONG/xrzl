@@ -3485,13 +3485,15 @@ function addSystemChatMessage(text) {
 function diffRoomDynamics(prev, next) {
   if (!next || !Array.isArray(next.players)) return;
   if (!prev || !Array.isArray(prev.players)) return;
-  const prevIds = new Set(prev.players.map(p => p.id));
-  const nextIds = new Set(next.players.map(p => p.id));
+  // 用昵称作为稳定标识：玩家重连会换 socket id，按 id 对比会误报「离开 + 加入」
+  // （房间内昵称唯一，服务端会拒绝重复昵称）
+  const prevNames = new Set(prev.players.map(p => p.name));
+  const nextNames = new Set(next.players.map(p => p.name));
   next.players.forEach(p => {
-    if (!prevIds.has(p.id) && p.id !== myId) addSystemChatMessage(`${p.name} 加入了房间`);
+    if (!prevNames.has(p.name) && p.id !== myId) addSystemChatMessage(`${p.name} 加入了房间`);
   });
   prev.players.forEach(p => {
-    if (!nextIds.has(p.id) && p.id !== myId) addSystemChatMessage(`${p.name} 离开了房间`);
+    if (!nextNames.has(p.name) && p.id !== myId) addSystemChatMessage(`${p.name} 离开了房间`);
   });
   if (!prev.gameStarted && next.gameStarted) {
     addSystemChatMessage('游戏开始，系统已分配身份');

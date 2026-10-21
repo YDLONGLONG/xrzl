@@ -525,6 +525,123 @@ class BotManager {
     return targets.length > 0 ? targets.join('和') : null;
   }
 
+  // 当前剧本的村民角色名池（邪恶 Bot 用于伪装身份）
+  _getFakeRolePool(scriptId) {
+    const fallback = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','守鸦人','圣女','市长','僧侣','士兵','送葬者'];
+    try {
+      const { getScriptConfig } = require('../config/game-config');
+      const cfg = getScriptConfig(scriptId);
+      const ids = (cfg && cfg.townsfolkRoles) || [];
+      const names = ids
+        .map(id => {
+          const role = this.engine.roleAllocator && this.engine.roleAllocator.createRoleInstance(id);
+          return role ? role.name : null;
+        })
+        .filter(Boolean);
+      return names.length ? names : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  // 邪恶 Bot 的伪装身份：整局固定，避免每个白天声称的角色都不一样
+  _getEvilClaimRole(bot, pool) {
+    if (bot.botClaimRole && pool.indexOf(bot.botClaimRole) !== -1) return bot.botClaimRole;
+    const others = Array.from(this.engine.room.players.values()).filter(p => p !== bot);
+    // 其他邪恶 Bot 已占用的伪装身份不重复
+    const usedByOthers = new Set(others.filter(p => p.botClaimRole).map(p => p.botClaimRole));
+    // 优先挑本局没有真正出场的村民角色，减少与真人身份撞车
+    const inPlayGood = new Set(
+      others.filter(p => p.role && p.role.team === 'GOOD').map(p => p.role.name)
+    );
+    const free = pool.filter(n => !usedByOthers.has(n));
+    const notInPlay = free.filter(n => !inPlayGood.has(n));
+    const candidates = notInPlay.length > 0 ? notInPlay : (free.length > 0 ? free : pool);
+    bot.botClaimRole = candidates[Math.floor(Math.random() * candidates.length)];
+    return bot.botClaimRole;
+  }
+
+  // 从候选文案中随机挑一条，并尽量避开上一次用过的（避免同一个 Bot 每天说一模一样的话）
+  _pickVaried(bot, key, candidates) {
+    if (!candidates || candidates.length === 0) return '';
+    if (!bot.botSpeechMemo) bot.botSpeechMemo = {};
+    const last = bot.botSpeechMemo[key];
+    const pool = candidates.length > 1 ? candidates.filter(c => c !== last) : candidates;
+    const picked = pool[Math.floor(Math.random() * pool.length)];
+    bot.botSpeechMemo[key] = picked;
+    return picked;
+  }
+
+  // 只在首夜拿到一次性信息的角色：伪装身份是这些时，假信息不能每天变
+  _isFirstNightInfoRole(roleName) {
+    return ['洗衣妇', '图书管理员', '调查员', '厨师'].indexOf(roleName) !== -1;
+  }
+
+  // 生成首夜一次性信息（整局只生成一次并缓存）
+  _buildFirstNightInfo(bot, fakeRole, goodPlayers, goodRoleNames) {
+    if ((fakeRole === '洗衣妇' || fakeRole === '图书管理员') && goodPlayers.length >= 2) {
+      // 被“查到”的角色不能是自己声称的身份，否则等于自相矛盾
+      const rnPool = goodRoleNames.filter(n => n !== fakeRole);
+      const rnList = rnPool.length ? rnPool : goodRoleNames;
+      const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
+      const t1 = shuffled[0], t2 = shuffled[1];
+      const rn = rnList[Math.floor(Math.random() * rnList.length)];
+      return `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是${rn}。`;
+    }
+    if (fakeRole === '调查员' && goodPlayers.length >= 2) {
+      const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
+      const t1 = shuffled[0], t2 = shuffled[1];
+      return `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是爪牙，大家注意！`;
+    }
+    if (fakeRole === '厨师') {
+      return Math.random() < 0.5
+        ? `我得到的信息是邪恶阵营没有相邻坐的。`
+        : `我得到的信息是有1对邪恶玩家是邻座。`;
+    }
+    return '';
+  }
+
+  // 非信息位角色每天只有固定台词时会重复，这里给每个角色准备多套说法轮流说
+  _fixedClaimVariants(roleName) {
+    const map = {
+      '圣女': [
+        '如果提名我的玩家会立刻死亡，大家提名需谨慎。',
+        '别提名我，提名我的人会立刻死，好人会亏一张牌。'
+      ],
+      '士兵': [
+        '恶魔杀不死我。',
+        '我是士兵，恶魔昨晚就算选我也是白杀，大家放心。',
+        '昨晚恶魔要是动了我，那它这刀就浪费了。'
+      ],
+      '市长': [
+        '平票时由我决定处决谁，只剩三人无人处决则好人胜利。',
+        '我这张市长牌，后期平票由我拍板，别急着出我。',
+        '如果只剩三个人又没人被处决，好人就直接赢了，所以我要活到最后。'
+      ],
+      '守鸦人': [
+        '我死后可以查看一名玩家的身份。',
+        '我死了之后能验一个人的身份，所以别轻易浪费我。',
+        '留着我，我死后可以帮大家确认一个关键身份。'
+      ],
+      '僧侣': [
+        '每晚可以保护一名玩家不被恶魔杀害。',
+        '我是僧侣，昨晚已经护过人了，暂时没有需要报的信息。',
+        '我会挑关键位置保护，大家不用管我。'
+      ],
+      '圣徒': [
+        '如果我被处决好人直接失败，大家千万别出我！',
+        '我是圣徒，处决我等于是送邪恶胜利，务必相信这一点。',
+        '别把票打在我身上，出了我好人直接输。'
+      ],
+      '隐士': [
+        '我可能会被信息位误登记为邪恶阵营，大家看到关于我的信息注意分辨。',
+        '我是隐士，被查成邪恶很正常，别因为这个就定我。',
+        '关于我的邪恶信息可能是隐士身份造成的，别直接下结论。'
+      ]
+    };
+    return map[roleName] || null;
+  }
+
   _generateBotSpeech(bot) {
     if (!bot.role) return null;
     const role = bot.role;
@@ -534,9 +651,7 @@ class BotManager {
 
     // 邪恶 Bot 的伪装身份池按当前剧本取，避免在紫罗兰教派里声称自己是市长
     const scriptId = this.engine.room.script || 'tb';
-    const goodRoleNames = scriptId === 'snv'
-      ? ['钟表匠','入梦人','舞蛇人','数学家','花艺师','公告员','神谕者','学者','裁缝','哲学家','艺术家','杂耍艺人','贤者']
-      : ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','守鸦人','圣女','市长','僧侣','士兵','送葬者'];
+    const goodRoleNames = this._getFakeRolePool(scriptId);
 
     let roleName = role.name;
     let team = role.team;
@@ -562,7 +677,7 @@ class BotManager {
         `各位好，${seat}号${name}，身份${roleName}，好人。`,
         `${seat}号${name}报到，${roleName}，好人一枚。`
       ];
-      intro = templates[Math.floor(Math.random() * templates.length)];
+      intro = this._pickVaried(bot, 'intro', templates);
 
       if (info && info.message && info.type !== 'role_info') {
         const msg = info.message;
@@ -588,68 +703,65 @@ class BotManager {
           infoMsg = msg;
         } else if (roleName === '守鸦人') {
           infoMsg = msg;
-        } else if (roleName === '圣女') {
-          infoMsg = `如果提名我的玩家会立刻死亡，大家提名需谨慎。`;
-        } else if (roleName === '士兵') {
-          infoMsg = `恶魔杀不死我。`;
-        } else if (roleName === '市长') {
-          infoMsg = `平票时由我决定处决谁，只剩三人无人处决则好人胜利。`;
-        } else if (roleName === '隐士') {
-          infoMsg = `我可能会被信息位误登记为邪恶阵营，大家看到关于我的信息注意分辨。`;
-        } else if (roleName === '圣徒') {
-          infoMsg = `如果我被处决好人直接失败，大家千万别出我！`;
+        } else if (roleName === '圣女' || roleName === '士兵' || roleName === '市长' ||
+                   roleName === '隐士' || roleName === '圣徒') {
+          infoMsg = this._pickVaried(bot, 'info', this._fixedClaimVariants(roleName));
         } else {
           const targetInfo = this._extractTargetInfo(info);
           infoMsg = targetInfo ? `昨晚我选择了${targetInfo}，${msg}` : msg;
         }
       } else if (category === 'TOWNSFOLK') {
-        if (roleName === '圣女') infoMsg = `如果提名我的玩家会立刻死亡，大家提名需谨慎。`;
-        else if (roleName === '士兵') infoMsg = `恶魔杀不死我。`;
-        else if (roleName === '市长') infoMsg = `平票时由我决定处决谁。`;
-        else if (roleName === '守鸦人') infoMsg = `我死后可以查看一名玩家的身份。`;
-        else if (roleName === '僧侣') infoMsg = `每晚可以保护一名玩家不被恶魔杀害。`;
+        const variants = this._fixedClaimVariants(roleName);
+        if (variants) infoMsg = this._pickVaried(bot, 'info', variants);
       }
     } else {
-      const fakeRole = goodRoleNames[Math.floor(Math.random() * goodRoleNames.length)];
+      // 伪装身份整局固定：同一个邪恶 Bot 每个白天声称的角色保持一致
+      const fakeRole = this._getEvilClaimRole(bot, goodRoleNames);
       const evilTemplates = [
         `我是${fakeRole}，${seat}号，铁好人一个，大家可以信任我。`,
         `${seat}号${name}报到，${fakeRole}，好人阵营，绝不撒谎。`,
         `各位好，${seat}号${name}，${fakeRole}，站好人这边。`
       ];
-      intro = evilTemplates[Math.floor(Math.random() * evilTemplates.length)];
+      intro = this._pickVaried(bot, 'intro', evilTemplates);
 
       const alivePlayers = Array.from(this.engine.room.players.values())
         .filter(p => p.isAlive && p.seat !== -1 && p.id !== bot.id);
       const goodPlayers = alivePlayers.filter(p => p.role && p.role.team === 'GOOD');
 
-      if (fakeRole === '洗衣妇' || fakeRole === '图书管理员') {
-        if (goodPlayers.length >= 2) {
-          const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
-          const t1 = shuffled[0], t2 = shuffled[1];
-          const rn = goodRoleNames[Math.floor(Math.random() * 6)];
-          infoMsg = `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是${rn}。`;
+      if (this._isFirstNightInfoRole(fakeRole)) {
+        // 只在首夜获得一次性信息：整局固定，之后每天都报同一段内容，
+        // 每天变反而露馅（真实玩家首夜之后就拿不到新信息了）
+        if (!bot.botFixedInfo || bot.botFixedInfo.claim !== fakeRole || !bot.botFixedInfo.text) {
+          const text = this._buildFirstNightInfo(bot, fakeRole, goodPlayers, goodRoleNames);
+          if (text) bot.botFixedInfo = { claim: fakeRole, text };
+          infoMsg = text;
+        } else {
+          infoMsg = bot.botFixedInfo.text;
         }
-      } else if (fakeRole === '调查员') {
-        if (goodPlayers.length >= 2) {
-          const shuffled = goodPlayers.slice().sort(() => Math.random() - 0.5);
-          const t1 = shuffled[0], t2 = shuffled[1];
-          infoMsg = `我查到${this._seatToName(t1.seat)}和${this._seatToName(t2.seat)}之中有一个是爪牙，大家注意！`;
-        }
-      } else if (fakeRole === '厨师') {
-        const cnt = Math.floor(Math.random() * 2);
-        infoMsg = cnt === 0 ? `我得到的信息是邪恶阵营没有相邻坐的。` : `我得到的信息是有${cnt}对邪恶玩家是邻座。`;
       } else if (fakeRole === '共情者') {
-        const fake = Math.floor(Math.random() * 3);
-        if (fake === 0) infoMsg = `我的邻居都是好人，可以信任。`;
-        else if (fake === 1) infoMsg = `我的邻居里有一个是邪恶的。`;
-        else infoMsg = `我的邻居都是邪恶的，这轮一定要从他们里面出！`;
+        // 每晚都有新数字：每天换一种说法
+        infoMsg = this._pickVaried(bot, 'info', [
+          `我的邻居都是好人，可以信任。`,
+          `我的邻居里有一个是邪恶的。`,
+          `我的邻居都是邪恶的，这轮一定要从他们里面出！`
+        ]);
       } else if (fakeRole === '占卜师' && goodPlayers.length > 0) {
-        const target = goodPlayers[Math.floor(Math.random() * goodPlayers.length)];
-        infoMsg = `我昨晚查了${this._seatToName(target.seat)}，结果显示有恶魔嫌疑，大家重点关注！`;
-      } else if (fakeRole === '僧侣' || fakeRole === '士兵' || fakeRole === '守鸦人' || fakeRole === '圣女' || fakeRole === '市长') {
-        infoMsg = `我这个身份好好发挥，大家听我归票。`;
-      } else if (fakeRole === '送葬者') {
-        infoMsg = `今晚我会关注被处决的人身份。`;
+        // 每晚查验不同目标：每天都要变
+        const cands = [];
+        for (let i = 0; i < 8 && cands.length < 4; i++) {
+          const target = goodPlayers[Math.floor(Math.random() * goodPlayers.length)];
+          const line = `我昨晚查了${this._seatToName(target.seat)}，结果显示有恶魔嫌疑，大家重点关注！`;
+          if (cands.indexOf(line) === -1) cands.push(line);
+        }
+        infoMsg = this._pickVaried(bot, 'info', cands);
+      } else if (this._fixedClaimVariants(fakeRole)) {
+        infoMsg = this._pickVaried(bot, 'info', this._fixedClaimVariants(fakeRole));
+      } else if (fakeRole === '送葬者' || fakeRole === '掘墓人') {
+        infoMsg = this._pickVaried(bot, 'info', [
+          `今晚我会关注被处决的人身份。`,
+          `等有人被处决，我就能知道他是什么身份了。`,
+          `处决之后我的信息会更有价值，大家先留着我。`
+        ]);
       }
     }
 

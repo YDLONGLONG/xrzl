@@ -708,7 +708,10 @@ class GameEngine {
         voteToken: p.voteToken,
         isConnected: p.isConnected,
         isBot: !!p.isBot
-      }));
+      }))
+      // 固定按座位号排序：players 的 Map 顺序会受加入/重连/加机器人时机影响，
+      // 前端多处按此数组顺序渲染（选人、投票、会话列表等），不排序会出现“座位号没变但顺序变了”
+      .sort((a, b) => a.seat - b.seat);
 
     const seatedCount = players.length;
     const neededConfirm = Array.from(room.players.values())
