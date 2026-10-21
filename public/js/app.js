@@ -2233,9 +2233,6 @@ function toggleNightPeek() {
   // 收起后再次点击（浮动按钮）恢复行动面板
   if (!nightPeeked && !overlay.classList.contains('active')) return;
   setNightPeek(!nightPeeked);
-  if (nightPeeked) {
-    showToast('已收起夜晚遮罩，查看完毕后点「返回行动」继续', 1800);
-  }
 }
 
 function showWaitingNight() {
