@@ -284,33 +284,61 @@ class VoteManager {
     this.resolveExecution();
   }
 
+  // 技能造成的处决：与普通处决共用「死亡记录 + 处决动画」，返回被处决的玩家（未死亡返回 null）
+  executeByAbility(player, cause, logMessage, extra = {}) {
+    const gs = this.engine.room.gameState;
+    const killResult = this.engine.deathManager.killPlayer(player.id, cause, -1, gs.dayCount);
+
+    // 免死效果（魔鬼代言人等）阻止时：玩家并未死亡，不播放处决动画
+    const trulyPrevented = killResult && killResult.prevented && killResult.reason !== 'ZOMBUUL';
+    if (trulyPrevented) {
+      this.engine.logAction('EXECUTION', `${player.seat + 1}号 ${player.name} 的处决被免死效果阻止（${killResult.reason}），未死亡`, {
+        playerId: player.id, prevented: true, reason: killResult.reason
+      });
+      return null;
+    }
+
+    // 记录为「处决」：圣徒/主谋判定与混沌「今日是否有处决」都依赖这里
+    gs.todaysDeaths.push({ playerId: player.id, cause: 'EXECUTION' });
+    this.engine.logAction('ABILITY', logMessage, { playerId: player.id, ...extra });
+    this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
+      executedId: player.id,
+      seat: player.seat,
+      name: player.name,
+      votes: 0,
+      message: `${player.seat + 1}号(${player.name})被处决`
+    });
+    return player;
+  }
+
   // SNV 洗脑师：未在白天公开宣告被要求角色的玩家被处决
   resolveCerenovusCurse(gs) {
     const curse = gs.cerenovusCurse;
-    if (!curse || curse.day !== gs.dayCount || curse.claimed) return;
+    if (!curse || curse.day !== gs.dayCount || curse.claimed) return null;
     const player = this.engine.room.players.get(curse.targetId);
-    if (!player || !player.isAlive) return;
+    if (!player || !player.isAlive) return null;
 
-    this.engine.deathManager.killPlayer(player.id, 'CERENOVUS', -1, gs.dayCount);
-    this.engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name} 未按洗脑要求公开声称自己是【${curse.roleName}】，被处决`, {
-      playerId: player.id, roleName: curse.roleName
-    });
+    return this.executeByAbility(player, 'CERENOVUS',
+      `${player.seat + 1}号 ${player.name} 未按洗脑要求公开声称自己是【${curse.roleName}】，被处决`,
+      { roleName: curse.roleName });
   }
 
   // SNV 变种人：当天公开声称过外来者（疯狂）时可能被处决
   resolveMutantMadness(gs) {
     const result = Mutant.checkMadExecution(this.engine, gs);
-    if (!result) return;
+    if (!result) return null;
     const mutant = result.player;
-    this.engine.deathManager.killPlayer(mutant.id, 'MUTANT', -1, gs.dayCount);
-    this.engine.logAction('ABILITY', `${mutant.seat + 1}号 ${mutant.name}（变种人）因公开声称外来者被处决`, {
-      playerId: mutant.id, probInfo: result.probInfo
-    });
+    return this.executeByAbility(mutant, 'MUTANT',
+      `${mutant.seat + 1}号 ${mutant.name}（变种人）因公开声称外来者被处决`,
+      { probInfo: result.probInfo });
   }
 
   // SNV 混沌：今天无人被处决则邪恶获胜
   checkVortoxNoExecution() {
     const gs = this.engine.room.gameState;
+    // 今日已有任何处决（含洗脑师 / 变种人等技能造成的处决）→ 混沌不触发
+    if ((gs.todaysDeaths || []).some(d => d && d.cause === 'EXECUTION')) return false;
+
     const vortox = getAlivePlayers(this.engine.room)
       .find(p => p.role && p.role.id === 'vortox' && !p.isPoisoned && !p.isDrunk);
     if (!vortox) return false;
@@ -326,13 +354,21 @@ class VoteManager {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.EXECUTION;
 
-    // SNV：洗脑师 / 变种人的白天结算先于普通处决
-    this.resolveCerenovusCurse(gs);
-    this.resolveMutantMadness(gs);
+    // SNV：洗脑师 / 变种人造成的处决先结算（同样播放处决动画、计入今日有处决）
+    const abilityExecuted = [
+      this.resolveCerenovusCurse(gs),
+      this.resolveMutantMadness(gs)
+    ].filter(Boolean);
+    const hasAbilityExecution = abilityExecuted.length > 0;
 
     const passed = gs.nominations.filter(n => n.passed);
 
     if (passed.length === 0) {
+      // 技能已经处决了玩家：不属于平安日，混沌也不会因此判邪恶胜
+      if (hasAbilityExecution) {
+        this.engine.scheduleExecutionEnd();
+        return;
+      }
       gs.todaysDeaths.push({ cause: 'NO_EXECUTION' });
       this.engine.logAction('EXECUTION', '今日无人被处决（平安日）', {});
       this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
@@ -354,6 +390,12 @@ class VoteManager {
     const tied = passed.filter(n => n.voteCount === maxVotes);
 
     if (tied.length > 1) {
+      // 技能已经处决了玩家：平票也不影响「今日有处决」，混沌不会触发
+      if (hasAbilityExecution) {
+        this.engine.logAction('EXECUTION', '平票，但今日已有技能造成的处决', {});
+        this.engine.scheduleExecutionEnd();
+        return;
+      }
       gs.todaysDeaths.push({ cause: 'TIE' });
       this.engine.logAction('EXECUTION', '平票，无人被处决（平安日）', {});
       this.engine.io.to(this.engine.room.id).emit('game:executionResult', {
@@ -375,6 +417,14 @@ class VoteManager {
     // 被提名者已是真正的死者（isAlive=false）：处决无效，不记录死亡、不播放处决动画。
     // 僵怖首次死亡后 isAlive 仍为 true，会继续走正常处决流程，从而可以被真正处决。
     if (toExecute && toExecute.isAlive !== true) {
+      // 技能已经处决了玩家：本次提名处决无效，但今日依然算作有处决
+      if (hasAbilityExecution) {
+        this.engine.logAction('EXECUTION', `${toExecute.seat+1}号 ${toExecute.name} 已是死亡玩家，本次处决无效（今日已有技能造成的处决）`, {
+          playerId: toExecute.id, deadTarget: true
+        });
+        this.engine.scheduleExecutionEnd();
+        return;
+      }
       // 与平安日一致：无人真正死亡，主谋额外回合标记需清除，避免夜晚流程卡死
       if (gs.mastermindExtraRound) {
         gs.mastermindExtraRound = false;
