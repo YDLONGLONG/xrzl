@@ -938,6 +938,14 @@ class GameEngine {
         // 白天技能是否已使用（杀手按钮据此显示「已使用」并禁用）
         usedDayAbility: !!viewer.hasUsedDayAbility,
         artistUsed: !!(viewer.abilityState && viewer.abilityState.artistUsed),
+        // 艺术家：正在等待说书人回答（按钮禁用，防止重复提交）
+        artistPendingAnswer: !!(viewer.abilityState && viewer.abilityState.artistPending),
+        // 艺术家：当天裁判失败时的问题，当天重试自动回填（跨天不保留）
+        artistLastQuestion: (viewer.abilityState
+          && typeof viewer.abilityState.artistLastAttempt === 'string'
+          && viewer.abilityState.artistLastAttemptDay === gs.dayCount)
+          ? viewer.abilityState.artistLastAttempt
+          : null,
         savantAskedToday: !!(viewer.abilityState && viewer.abilityState.savantDay === gs.dayCount),
         // 学者：正在等待说书人回答（按钮禁用，防止重复提交）
         savantPendingAnswer: !!(viewer.abilityState && Array.isArray(viewer.abilityState.savantPending)

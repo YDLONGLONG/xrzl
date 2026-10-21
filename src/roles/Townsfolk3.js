@@ -723,10 +723,16 @@ class Artist extends Role {
     if (player.abilityState.artistUsed) {
       return { success: false, message: '你已经使用过艺术家能力了' };
     }
+    // 正在等待说书人回答时不允许重复提交
+    if (player.abilityState.artistPending) {
+      return { success: false, message: '正在等待说书人回答，请稍候' };
+    }
     const q = String(question || '').trim();
     if (q.length < 2) return { success: false, message: '请输入问题（至少2个字）' };
     if (q.length > 120) return { success: false, message: '问题不能超过120字' };
 
+    // 注意：这里不占用本局次数，等 AI 回答成功（applyAnswer）后再置位，
+    // 否则裁判服务失败时会被误判为「已使用」
     player.abilityState.artistPending = q;
     return { success: true, question: q };
   }
@@ -736,9 +742,14 @@ class Artist extends Role {
     player.abilityState.artistPending = null;
     if (!question) return;
 
+    // 成功拿到答案才占用本局次数（前端据此禁用按钮）
+    player.abilityState.artistUsed = true;
+    // 成功后清掉失败重试用的回填内容，避免之后还带出旧问题
+    player.abilityState.artistLastAttempt = null;
+    player.abilityState.artistLastAttemptDay = null;
+
     const vortox = isVortoxActive(engine);
     const finalAnswer = vortox ? !answer : answer;
-    player.abilityState.artistUsed = true;
 
     engine.setPlayerPrivateInfo(player, {
       type: 'artist',
@@ -751,7 +762,13 @@ class Artist extends Role {
     });
   }
 
+  // 裁判 AI 失败：回滚本次提交，并记住这次的问题，当天重试时自动回填
   cancelDayAbility(gameState, player) {
+    const pending = player.abilityState.artistPending;
+    if (pending) {
+      player.abilityState.artistLastAttempt = pending;
+      player.abilityState.artistLastAttemptDay = gameState.dayCount;
+    }
     player.abilityState.artistPending = null;
   }
 }

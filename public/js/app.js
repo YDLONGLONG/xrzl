@@ -1891,11 +1891,15 @@ function renderRoleCard(state) {
   const artistBtn = $('artistBtn');
   if (artistBtn) {
     const artistUsed = !!myAbility.artistUsed;
+    const artistPending = !!myAbility.artistPendingAnswer;
+    const artistLocked = artistUsed || artistPending;
     if (role.id === 'artist' && me.isAlive && isDayActionPhase) {
       artistBtn.style.display = 'block';
-      artistBtn.textContent = artistUsed ? '艺术家：已使用' : '艺术家：向说书人提问';
-      artistBtn.disabled = artistUsed;
-      artistBtn.classList.toggle('disabled', artistUsed);
+      artistBtn.textContent = artistUsed
+        ? '艺术家：已使用'
+        : (artistPending ? '艺术家：等待说书人回答…' : '艺术家：向说书人提问');
+      artistBtn.disabled = artistLocked;
+      artistBtn.classList.toggle('disabled', artistLocked);
     } else {
       artistBtn.style.display = 'none';
       artistBtn.disabled = false;
@@ -2722,9 +2726,14 @@ function showRoleSelect(title, roles, options = {}) {
 // ========== 紫罗兰教派：白天技能 ==========
 async function useArtistAbility() {
   const originEl = getLoadingClickTarget();
+  // 上次裁判服务失败时，自动回填上次的问题，避免重新输入
+  const last = (currentState && currentState.myAbilityState && currentState.myAbilityState.artistLastQuestion) || '';
   const question = await showTextInput('艺术家：向说书人提问', {
     placeholder: '输入一个是非题（例如：3号是恶魔吗？）',
-    description: '每局游戏限一次。说书人会给出真实答案（混沌在场时答案会被反转）。',
+    description: last
+      ? '上次提问未能送达说书人（裁判服务不可用），已为你填回上次的问题，可直接重试。'
+      : '每局游戏限一次。说书人会给出真实答案（混沌在场时答案会被反转）。',
+    defaultValue: last,
     maxLength: 120, minLength: 2, multiline: false,
     type: 'success', confirmText: '向说书人提问'
   });
