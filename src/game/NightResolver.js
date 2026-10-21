@@ -827,12 +827,9 @@ class NightResolver {
         if (!newDemonRole) return;
         target.role = newDemonRole;
 
-        const minions = getAlivePlayers(this.engine.room)
-          .filter(p => p.role && p.role.category === 'MINION');
-        this.engine.setPlayerPrivateInfo(target, {
-          type: 'fanggu_jump',
-          message: `方古杀死你时，你变成了邪恶的【方古】！你的爪牙是：${minions.map(m => `${m.seat + 1}号(${m.name})【${m.role.name}】`).join('、') || '无'}`
-        });
+        // 不向被转化的外来者推送任何提示：其身份面板会变为【方古】，
+        // 但不额外告知「你变成了方古」以及爪牙名单（爪牙信息由玩家自行推理）
+
         this.engine.logAction('ABILITY', `${demon.seat + 1}号 ${demon.name}（方古）杀死外来者 ${target.seat + 1}号 ${target.name}，对方成为新的方古，方古死亡`, {
           playerId: demon.id, targetId: target.id
         });
