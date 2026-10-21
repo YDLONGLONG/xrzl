@@ -671,23 +671,22 @@ class Philosopher extends Role {
     if (holder) {
       applyDrunk(holder, 'philosopher', 999);
       player.abilityState.philosopherDrunkId = holder.id;
-      engine.setPlayerPrivateInfo(player, {
-        type: 'philosopher',
-        roleId,
-        roleName: inst.name,
-        drunkPlayerId: holder.id,
-        message: `你选择了【${inst.name}】。该角色在场（${holder.seat + 1}号 ${holder.name}），TA 将醉酒直到你死亡。你获得了该能力。`
-      });
+    }
+
+    // 官方规则：哲学家不会被告知所选角色是否在场，玩家侧信息与结果无关
+    engine.setPlayerPrivateInfo(player, {
+      type: 'philosopher',
+      roleId,
+      roleName: inst.name,
+      message: `你选择了【${inst.name}】，你获得了该能力。`
+    });
+
+    // 「是否在场 / 谁被醉酒」只写入上帝视角日志
+    if (holder) {
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（哲学家）选择【${inst.name}】，持有者 ${holder.seat + 1}号 ${holder.name} 醉酒`, {
         playerId: player.id, roleId, drunkPlayerId: holder.id
       });
     } else {
-      engine.setPlayerPrivateInfo(player, {
-        type: 'philosopher',
-        roleId,
-        roleName: inst.name,
-        message: `你选择了【${inst.name}】。该角色不在场，你直接获得了该能力。`
-      });
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（哲学家）选择【${inst.name}】（不在场），获得该能力`, {
         playerId: player.id, roleId
       });

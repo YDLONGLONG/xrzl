@@ -729,14 +729,6 @@ class Courtier extends Role {
       return { success: false, message: '请选择一个角色或选择跳过' };
     }
 
-    if (player.isPoisoned) {
-      engine.setPlayerPrivateInfo(player, {
-        type: 'courtier',
-        message: '你中毒了，技能无效'
-      });
-      return { success: true };
-    }
-
     const roleInstance = engine.roleAllocator.createRoleInstance(roleId);
     const drunkRoleName = roleInstance ? roleInstance.name : roleId;
 
@@ -745,28 +737,32 @@ class Courtier extends Role {
     player.abilityState.used = true;
     player.abilityState.drunkRoleId = roleId;
 
-    if (target) {
+    // 中毒时能力不生效，但玩家不应得知自己中毒：玩家侧文案与正常情况完全一致
+    const effective = !!target && !player.isPoisoned;
+    if (effective) {
       player.abilityState.drunkPlayerId = target.id;
       // 醉酒三天三夜：由 helpers 的按来源计时负责递减，此处只需施加
       applyDrunk(target, 'courtier', 3);
+    }
 
-      engine.setPlayerPrivateInfo(player, {
-        type: 'courtier',
-        roleId: roleId,
-        targetId: target.id,
-        roleName: drunkRoleName,
-        message: `你选择了【${drunkRoleName}】（${target.seat + 1}号 ${target.name}），该角色醉酒三天三夜`
-      });
+    // 官方规则：侍臣不会被告知所选角色是否在场，玩家侧信息与结果无关
+    engine.setPlayerPrivateInfo(player, {
+      type: 'courtier',
+      roleId: roleId,
+      roleName: drunkRoleName,
+      message: `你选择了【${drunkRoleName}】，若该角色在场，其持有者从今晚开始醉酒三天三夜`
+    });
+
+    // 「是否在场 / 谁被醉酒 / 是否中毒」只写入上帝视角日志
+    if (effective) {
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）使【${drunkRoleName}】${target.seat + 1}号 ${target.name} 醉酒三天三夜`, {
         playerId: player.id, targetId: target.id, drunkRoleId: roleId
       });
-    } else {
-      engine.setPlayerPrivateInfo(player, {
-        type: 'courtier',
-        roleId: roleId,
-        roleName: drunkRoleName,
-        message: `你选择了【${drunkRoleName}】，该角色不在场，无人醉酒`
+    } else if (target) {
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）选择了【${drunkRoleName}】，但侍臣中毒，技能未生效`, {
+        playerId: player.id, targetId: target.id, drunkRoleId: roleId, disabled: true
       });
+    } else {
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（侍臣）选择了【${drunkRoleName}】，该角色不在场，无人醉酒`, {
         playerId: player.id, drunkRoleId: roleId, notInPlay: true
       });
