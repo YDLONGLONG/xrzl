@@ -9,6 +9,8 @@ class NightResolver {
   constructor(engine) {
     this.engine = engine;
     this.pendingRavenkeeper = null;
+    // 理发师在本夜死亡时追加的「恶魔当晚交换」唤醒（队列结束后触发）
+    this.extraBarberSwapNight = null;
   }
 
   get scriptConfig() {
@@ -25,6 +27,7 @@ class NightResolver {
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
+    this.extraBarberSwapNight = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
@@ -56,6 +59,7 @@ class NightResolver {
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     this.pendingRavenkeeper = null;
+    this.extraBarberSwapNight = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
 
@@ -166,6 +170,8 @@ class NightResolver {
         queue.unshift({ roleId: 'barber_swap', playerId: demon.id, barberSwap: true });
       }
       gs.pendingBarberSwap = false;
+      // 标记本夜已处理过理发师交换，避免夜晚结算时重复触发
+      gs.barberSwapNight = gs.nightCount;
     }
 
     return queue;
@@ -355,8 +361,10 @@ class NightResolver {
     }
 
     // SNV 理发师：恶魔决定是否交换两名玩家的角色
+    // 两种情况：白天死亡 → 队列里的 barber_swap 项；夜晚死亡 → 结算时追加的额外唤醒
     const currentEntry = (gs.nightQueue || [])[gs.currentNightIndex];
-    if (currentEntry && currentEntry.barberSwap) {
+    if ((currentEntry && currentEntry.barberSwap)
+      || (gs.currentWakeInfo && gs.currentWakeInfo.barberSwap)) {
       return this.processBarberSwap(playerId, player, action);
     }
 
@@ -495,6 +503,13 @@ class NightResolver {
       gs.currentWakePlayerId = null;
       this.engine.io.to(playerId).emit('night:actionAck', { success: true });
       gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
+      // 理发师「当晚死亡」追加的额外唤醒：队列已结束，交换完直接继续夜晚收尾
+      if (this.extraBarberSwapNight === gs.nightCount) {
+        this.extraBarberSwapNight = null;
+        gs.currentWakeInfo = null;
+        this.afterNightKills();
+        return { success: true };
+      }
       this.wakeNext();
       return { success: true };
     };
@@ -532,14 +547,8 @@ class NightResolver {
     if (roleB.team !== teamA) roleB.snvAlignment = teamA; else delete roleB.snvAlignment;
     if (roleA.team !== teamB) roleA.snvAlignment = teamB; else delete roleA.snvAlignment;
 
-    this.engine.setPlayerPrivateInfo(a, {
-      type: 'barber_swap',
-      message: `理发师的能力生效：你的角色变成了【${a.role.name}】`
-    });
-    this.engine.setPlayerPrivateInfo(b, {
-      type: 'barber_swap',
-      message: `理发师的能力生效：你的角色变成了【${b.role.name}】`
-    });
+    // 被交换的玩家不会收到任何提示：不主动告知理发师技能生效（角色本身变化
+    // 会在其身份面板中体现，但不再额外推送「理发师的能力生效」文案）
     this.engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（恶魔）通过理发师交换了 ${a.seat + 1}号 ${a.name}（${roleA.name}）与 ${b.seat + 1}号 ${b.name}（${roleB.name}）的角色`, {
       playerId: player.id, aId: a.id, bId: b.id
     });
@@ -589,6 +598,29 @@ class NightResolver {
     // 修补匠可能死亡
     this.resolveTinkerDeath(gs);
 
+    this.afterNightKills();
+  }
+
+  // 击杀结算之后的夜晚流程：理发师（本夜死亡立即触发）→ 守鸦人 → 收尾
+  afterNightKills() {
+    const gs = this.engine.room.gameState;
+    const isFirstNight = gs.nightCount === 0;
+
+    // SNV 理发师：理发师在本夜死亡时，恶魔「当晚」就要选择两名玩家交换角色，
+    // 而不是等到下一夜；同夜只触发一次（白天死亡走队列里的 barber_swap 项）。
+    if (!isFirstNight && gs.barberSwapNight !== gs.nightCount) {
+      const deadBarber = Array.from(this.engine.room.players.values())
+        .find(p => p.seat !== -1 && p.isDead && p.deathNight === gs.nightCount
+          && p.role && p.role.id === 'barber');
+      if (deadBarber) {
+        gs.barberSwapNight = gs.nightCount;
+        gs.pendingBarberSwap = false;
+        const demon = getAlivePlayers(this.engine.room)
+          .find(p => p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon);
+        if (demon && this.wakeBarberSwap(demon)) return;
+      }
+    }
+
     // 检查守鸦人
     const nightDead = Array.from(this.engine.room.players.values())
       .filter(p => p.isDead && p.deathNight === gs.nightCount && p.role && p.role.id === ROLE_IDS.RAVENKEEPER);
@@ -599,6 +631,38 @@ class NightResolver {
     }
 
     this.finalizeNight();
+  }
+
+  // 理发师在夜晚死亡：追加一次恶魔的「交换两名玩家角色」唤醒（队列已结束）
+  wakeBarberSwap(demon) {
+    const gs = this.engine.room.gameState;
+    const allSeated = Array.from(this.engine.room.players.values()).filter(p => p.seat !== -1);
+    const swappable = allSeated.filter(p => p.isAlive && p.role
+      && p.id !== demon.id && p.role.category !== 'DEMON');
+    if (swappable.length < 2) {
+      this.engine.logAction('ABILITY', `理发师死亡触发交换，但可选玩家不足，跳过`, {
+        playerId: demon.id, skipped: true
+      });
+      return false;
+    }
+
+    this.extraBarberSwapNight = gs.nightCount;
+    gs.currentWakePlayerId = demon.id;
+    gs.phase = PHASES.NIGHT_WAKE;
+    gs.currentWakeInfo = {
+      role: '理发师',
+      barberSwap: true,
+      canSelectCount: 2,
+      canSkip: true,
+      skipLabel: '今晚不交换',
+      message: '理发师已死亡：你可以选择两名玩家交换他们的角色（不能选择恶魔）'
+    };
+    this.engine.logAction('NIGHT_WAKE', `唤醒 ${demon.seat + 1}号 ${demon.name}（理发师）行动`, {
+      playerId: demon.id, role: 'barber_swap'
+    });
+    this.engine.io.to(demon.id).emit('night:wake', gs.currentWakeInfo);
+    this.engine.broadcastState();
+    return true;
   }
 
   // 处理恶魔杀人

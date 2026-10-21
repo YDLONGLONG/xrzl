@@ -619,7 +619,9 @@ class GameEngine {
     // SNV 理发师：恶魔被额外唤醒一次，需要选择两名玩家交换角色
     const gsNow = this.room.gameState;
     const currentEntry = (gsNow.nightQueue || [])[gsNow.currentNightIndex] || {};
-    const isBarberSwap = currentEntry.barberSwap === true;
+    // 理发师交换：白天死亡走队列项，夜晚死亡走结算时追加的额外唤醒
+    const isBarberSwap = currentEntry.barberSwap === true
+      || !!(gsNow.currentWakeInfo && gsNow.currentWakeInfo.barberSwap === true);
     // 选角色类技能（哲学家/坑巫/洗脑师等）不按玩家数量校验
     const isRoleSelect = (player.role.selectType || 'player') !== 'player';
     // 唤醒信息可能动态调整可选人数（如哲学家获得三人技能、理发师交换需两人）
