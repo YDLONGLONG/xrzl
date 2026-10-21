@@ -591,29 +591,26 @@ body.resizing-active * {
   overflow-y: auto;
 }
 
-/* 剧本选择（右栏） */
-.wx-script {
-  margin: 10px 12px 0;
+/* 剧本选择（中央面板，大厅阶段） */
+.center-script {
   flex-shrink: 0;
+  padding: 14px 16px 12px;
+  background: #FFFFFF;
+  border-bottom: 1px solid #E7E7E7;
 }
-.wx-script .wx-script-title {
-  font-size: 12px;
-  color: #7F7F7F;
-  margin-bottom: 8px;
+.center-script .script-list {
+  flex-wrap: wrap;
+  max-width: 720px;
+  gap: 10px;
+  margin: 0 auto;
 }
-.wx-script .script-list {
-  flex-direction: column;
-  max-width: 100%;
-  gap: 8px;
-  margin: 0;
-}
-.wx-script .script-card {
-  flex: 0 0 auto;
-  padding: 10px 12px;
+.center-script .script-card {
+  flex: 1 1 0;
+  padding: 12px 14px;
   gap: 6px;
 }
-.wx-script .script-card-desc { padding-left: 0; }
-.wx-script .script-icon {
+.center-script .script-card-desc { padding-left: 0; }
+.center-script .script-icon {
   width: 32px !important;
   height: 32px !important;
   font-size: 1.15em !important;
@@ -1753,6 +1750,28 @@ body.resizing-active * {
   }
   .script-card-name {
     font-size: 14px !important;
+  }
+
+  /* 中央剧本面板：窄屏改为横向滚动，避免纵向堆叠挤占聊天高度 */
+  .center-script {
+    padding: 8px 10px;
+  }
+  .center-script .script-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+    gap: 8px;
+    padding-bottom: 2px;
+  }
+  .center-script .script-card {
+    flex: 0 0 auto;
+    width: 152px;
+    padding: 8px 10px;
+    gap: 4px;
+  }
+  .center-script .script-card-desc {
+    display: none;
   }
 }
 
@@ -3800,7 +3819,7 @@ body.resizing-active * {
 
   /* 成员与语音：纵向排列
      高度必须随内容（flex: 0 0 auto），否则被压缩到 min-height 后
-     座位区会溢出并与下方「选择剧本」面板重叠 */
+     座位区会溢出并与下方语音面板重叠 */
   .wx-member-scroll {
     display: flex;
     flex-direction: column;

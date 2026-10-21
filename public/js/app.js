@@ -1316,7 +1316,7 @@ function renderSeats(state) {
   container.innerHTML = html;
 }
 
-// 右侧剧本选择（仅大厅阶段显示）
+// 中央剧本选择（仅大厅阶段显示）
 function renderScriptPanel(state) {
   const panel = $('scriptPanel');
   if (!panel) return;
@@ -1359,7 +1359,7 @@ function renderScriptPanel(state) {
   }).join('');
 
   panel.style.display = 'block';
-  panel.innerHTML = `<div class="wx-script-title">选择剧本${isHost ? '（房主可切换）' : ''}</div><div class="script-list">${cardsHtml}</div>`;
+  panel.innerHTML = `<div class="script-list">${cardsHtml}</div>`;
 }
 
 // 中央系统信息（游戏状态 / 操作提示）
@@ -1475,7 +1475,7 @@ function renderCenter(state) {
     const me = state.players?.find(p => p.id === myId);
     const seatedCount = (state.players || []).filter(p => p.seat !== -1).length;
     const isHost = state.hostId === myId;
-    // 大厅阶段不在聊天框内显示状态卡片（相关信息由右侧剧本区 / 成员区呈现）
+    // 大厅阶段不在聊天框内显示状态卡片（相关信息由中央剧本区 / 成员区呈现）
     html = '';
 
     showAction = true;

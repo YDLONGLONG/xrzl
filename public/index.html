@@ -125,6 +125,8 @@
       </button>
       <!-- 系统状态 / 我的身份（固定高度，内部滚动；未加入房间时不显示） -->
       <div class="center-message" id="centerMessage" style="display:none;"></div>
+      <!-- 剧本选择（大厅阶段，居中面板） -->
+      <div class="center-script" id="scriptPanel" style="display:none;"></div>
       <div class="chat-messages" id="chatMessages"></div>
       <!-- 弹幕层（输入框 @弹幕 触发，覆盖在聊天消息之上滚动） -->
       <div class="danmaku-layer" id="danmakuLayer"></div>
@@ -145,7 +147,7 @@
     <!-- 右侧拖拽分隔条 -->
     <div class="resizer resizer-right" id="resizerRight" title="拖拽调整宽度"></div>
 
-    <!-- 右侧：游戏操作 + 剧本选择 + 群成员 + 语音 -->
+    <!-- 右侧：群成员 + 语音 + 游戏操作 -->
     <div class="wx-member" id="memberPanel" style="display:none;">
       <!-- 移动端：成员 / 操作区收起 - 展开（桌面端不显示） -->
       <div class="member-collapse-bar" id="memberCollapseBar" onclick="toggleMemberPanel()">
@@ -171,9 +173,6 @@
           </div>
         </div>
       </div>
-
-      <!-- 剧本选择（大厅阶段） -->
-      <div class="wx-script" id="scriptPanel" style="display:none;"></div>
 
       <!-- 游戏操作区（原中央区操作按钮） -->
       <div id="actionPanel" class="action-panel" style="display:none;">
