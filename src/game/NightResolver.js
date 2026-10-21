@@ -156,7 +156,7 @@ class NightResolver {
       fakeDemonsWithThisRole.forEach(fd => {
         queue.push({ roleId, playerId: fd.id, isFakeDemon: true });
       });
-      // SNV 亡灵法师：被其杀害的爪牙死亡后仍保留技能，需要继续被唤醒（且处于中毒）
+      // SNV 亡灵法师：被其杀害的爪牙死亡后仍保留技能，需要继续被唤醒（不中毒）
       this.engine.room && Array.from(this.engine.room.players.values())
         .filter(p => p.seat !== -1 && !p.isAlive && p.abilityState
           && p.abilityState.vigormortisKeepAbility && p.role && p.role.id === roleId)
@@ -847,7 +847,7 @@ class NightResolver {
 
       if (key === 'vigormortis') {
         const victim = this.engine.room.players.get(action.targetId);
-        // 只有真正被杀害的爪牙才会「保留技能但中毒」
+        // 只有真正被杀害的爪牙才会「保留技能」
         if (victim && victim.isDead && victim.role && victim.role.category === 'MINION'
             && !(victim.abilityState && victim.abilityState.vigormortisKeepAbility)) {
           Vigormortis.applyKill(this.engine, victim, gs);

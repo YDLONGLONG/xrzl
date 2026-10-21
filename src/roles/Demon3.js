@@ -69,31 +69,27 @@ class Vigormortis extends SnvDemon {
     this.id = SNV_ROLE_IDS.VIGORMORTIS;
     this.firstNightOrder = -1;
     this.otherNightOrder = 7;
-    this.abilityDesc = '每个夜晚（首夜除外），选择一名玩家杀害。被你杀害的爪牙保留技能但中毒，并使一名相邻村民中毒；当你死亡时，一名爪牙死亡。（设置修正：外来者-1）';
+    this.abilityDesc = '每个夜晚（首夜除外），选择一名玩家杀害。被你杀害的爪牙保留技能，并使一名相邻村民中毒；当你死亡时，一名爪牙死亡。（设置修正：外来者-1）';
   }
 
-  // 被你杀害的爪牙：保留技能（死亡后仍会被唤醒）并中毒；另毒一名相邻村民
+  // 被你杀害的爪牙：保留技能（死亡后仍会被唤醒），不中毒；另使一名相邻村民中毒
   static applyKill(engine, victim, gs) {
     if (!victim || !victim.role || victim.role.category !== 'MINION') return;
     victim.abilityState = victim.abilityState || {};
     victim.abilityState.vigormortisKeepAbility = true;
-    victim.isPoisoned = true;
-    victim.snvPoisonSource = 'vigormortis'; // 永久中毒（不随黎明解除）
-    engine.logAction('ABILITY', `被亡灵法师杀害的爪牙 ${victim.seat + 1}号 ${victim.name} 保留技能但中毒`, {
+    engine.logAction('ABILITY', `被亡灵法师杀害的爪牙 ${victim.seat + 1}号 ${victim.name} 保留技能`, {
       playerId: victim.id, keepAbility: true
     });
 
     // 使一名相邻村民中毒（持续到下一个黎明，来源标记 vigormortis_aura）
     const neighbors = getAliveNeighbors(engine.room, victim)
       .filter(n => n.role && n.role.category === 'TOWNSFOLK' && !isImpaired(n));
-    const target = neighbors[0];
+    const target = pickRandom(neighbors);
     if (!target) return;
     target.isPoisoned = true;
     target.snvPoisonSource = 'vigormortis_aura';
-    engine.setPlayerPrivateInfo(target, {
-      type: 'vigormortis_poison',
-      message: '亡灵法师的能力使你中毒（持续到明天黄昏）'
-    });
+    // 不向被毒到的村民推送任何提示：中毒效果只体现在技能结果上，
+    // 玩家无法直接得知自己中毒，也不会得知亡灵法师在场
     engine.logAction('ABILITY', `${target.seat + 1}号 ${target.name} 因亡灵法师而中毒`, {
       playerId: victim.id, targetId: target.id, poisonSource: 'vigormortis'
     });
