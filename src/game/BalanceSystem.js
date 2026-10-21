@@ -458,6 +458,53 @@ class BalanceSystem {
     };
   }
 
+  // 沙巴洛斯「反刍（复活）」概率（由平衡系统控制）
+  // 反刍对象是沙巴洛斯上一夜亲手杀死且仍死亡的玩家：
+  //  - 目标为善良：复活等于给好人补人，好人弱势时提高概率、邪恶弱势时降低概率
+  //  - 目标为邪恶：复活等于给邪恶补人，方向相反
+  static getShabalothReviveProbability(engine, targetIsGood = true) {
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(engine.room, engine);
+    const base = cfg && cfg.balance && cfg.balance.shabalothReviveBase !== undefined ? cfg.balance.shabalothReviveBase : 0.5;
+    const bonus = cfg && cfg.balance && cfg.balance.shabalothReviveBonus !== undefined ? cfg.balance.shabalothReviveBonus : 0.3;
+    const penalty = cfg && cfg.balance && cfg.balance.shabalothRevivePenalty !== undefined ? cfg.balance.shabalothRevivePenalty : 0.3;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+
+    let scenario = 'balanced';
+    let probability = base;
+    let favorExcess = 0;
+
+    if (score < goodWeakTh) {
+      // 好人弱势：善良目标更容易被反刍（帮好人），邪恶目标更难
+      scenario = 'good_weak';
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = targetIsGood
+        ? Math.min(base + favorExcess * bonus, 1)
+        : Math.max(base - favorExcess * penalty, 0);
+    } else if (score > evilWeakTh) {
+      // 邪恶弱势：善良目标更难被反刍（帮邪恶），邪恶目标更容易
+      scenario = 'evil_weak';
+      favorExcess = this.getFavorExcess(score, evilWeakTh, 'evil_weak');
+      probability = targetIsGood
+        ? Math.max(base - favorExcess * penalty, 0)
+        : Math.min(base + favorExcess * bonus, 1);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      favorExcess,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      targetIsGood,
+      description: '沙巴洛斯反刍（复活）概率'
+    };
+  }
+
   // 变种人因「疯狂」被处决的概率（由平衡系统控制）
   // 变种人是善良外来者，其被处决削弱好人：好人弱势时降低概率，邪恶弱势时提高概率
   static getMutantExecuteProbability(engine) {

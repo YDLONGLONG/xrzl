@@ -785,14 +785,19 @@ class NightResolver {
         const deadLastTargets = lastTargets
           .map(id => this.engine.room.players.get(id))
           .filter(p => p && p.isDead && p.deathNight === gs.nightCount - 1);
-        if (deadLastTargets.length > 0 && Math.random() < 0.5) {
+        if (deadLastTargets.length > 0) {
           // 在上一夜的已死亡目标中随机反刍一名（技能描述为「之一」）
           const revived = randomChoice(deadLastTargets);
-          // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
-          revivePlayer(revived);
-          this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活`, {
-            playerId: revived.id
-          });
+          // 反刍概率由平衡系统按当前局势动态给出（目标阵营不同，偏袒方向相反）
+          const targetIsGood = !(revived.role && revived.role.team === 'EVIL');
+          const probInfo = this.engine.balanceSystem.getShabalothReviveProbability(this.engine, targetIsGood);
+          if (Math.random() < probInfo.probability) {
+            // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
+            revivePlayer(revived);
+            this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活`, {
+              playerId: revived.id, probInfo
+            });
+          }
         }
       }
       // 本夜击杀结算
