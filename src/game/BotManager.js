@@ -289,6 +289,12 @@ class BotManager {
       wakeInfo = null;
     }
 
+    // 当前实际唤醒面板（含理发师交换、哲学家复制能力等动态参数）优先，
+    // 否则 bot 可能按角色默认人数行动而被服务端拒绝
+    if (gs.currentWakePlayerId === bot.id && gs.currentWakeInfo) {
+      wakeInfo = gs.currentWakeInfo;
+    }
+
     const selectType = (wakeInfo && wakeInfo.selectType) || role.selectType || 'player';
     const canSkip = (wakeInfo && wakeInfo.canSkip !== undefined)
       ? !!wakeInfo.canSkip
@@ -308,8 +314,11 @@ class BotManager {
     // ========== 选择角色（侍臣等） ==========
     if (selectType === 'role') {
       const { getScriptConfig } = require('../config/game-config');
-      const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
-      const roleIds = scriptConfig.allRoles;
+      const scriptConfig = getScriptConfig(this.engine.room.script || 'tb');
+      // 优先使用本夜面板给出的可选角色（如哲学家不能选自己）
+      const roleIds = (wakeInfo && Array.isArray(wakeInfo.selectRoles) && wakeInfo.selectRoles.length > 0)
+        ? wakeInfo.selectRoles.map(r => (typeof r === 'string' ? r : r.id))
+        : scriptConfig.allRoles;
       if (!roleIds || roleIds.length === 0) {
         this._fallbackBotNightAction(bot, { message: '没有可选角色' });
         return;
@@ -333,8 +342,11 @@ class BotManager {
     // ========== 选择玩家+角色（赌徒） ==========
     if (selectType === 'playerAndRole') {
       const { getScriptConfig } = require('../config/game-config');
-      const scriptConfig = getScriptConfig(this.engine.room.script || 'bmr');
-      const roleIds = scriptConfig.allRoles;
+      const scriptConfig = getScriptConfig(this.engine.room.script || 'tb');
+      // 面板给出的可选角色优先（洗脑师只能选善良角色、坑巫只能选不在场角色）
+      const roleIds = (wakeInfo && Array.isArray(wakeInfo.selectRoles) && wakeInfo.selectRoles.length > 0)
+        ? wakeInfo.selectRoles.map(r => (typeof r === 'string' ? r : r.id))
+        : scriptConfig.allRoles;
       // 赌徒允许选自己，所以从所有存活里选（包括自己）
       const allAliveSelectable = alive.slice();
       const target = allAliveSelectable[Math.floor(Math.random() * allAliveSelectable.length)];
@@ -520,7 +532,11 @@ class BotManager {
     const seat = bot.seat + 1;
     const name = bot.name;
 
-    const goodRoleNames = ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','守鸦人','圣女','市长','僧侣','士兵','送葬者'];
+    // 邪恶 Bot 的伪装身份池按当前剧本取，避免在紫罗兰教派里声称自己是市长
+    const scriptId = this.engine.room.script || 'tb';
+    const goodRoleNames = scriptId === 'snv'
+      ? ['钟表匠','入梦人','舞蛇人','数学家','花艺师','公告员','神谕者','学者','裁缝','哲学家','艺术家','杂耍艺人','贤者']
+      : ['洗衣妇','图书管理员','调查员','厨师','共情者','占卜师','守鸦人','圣女','市长','僧侣','士兵','送葬者'];
 
     let roleName = role.name;
     let team = role.team;

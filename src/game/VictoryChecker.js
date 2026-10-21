@@ -1,6 +1,7 @@
 // 胜负判定器
 const { getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { PHASES } = require('../config/game-config');
+const { EvilTwin } = require('../roles/Minion3');
 
 // 圣徒能力是否生效：中毒或醉酒时技能失效，被处决不判邪恶获胜。
 // 处决时的即时判定（checkSaintExecution）与 checkVictory 的备份判定共用此口径，
@@ -20,6 +21,19 @@ class VictoryChecker {
     const gs = room.gameState;
     const alive = getAlivePlayers(room);
 
+    // 游戏已结束：避免重复结算
+    if (gs.winner) return null;
+
+    // SNV 邪恶双子：善良双子被处决 → 邪恶胜；邪恶双子被处决 → 善良胜
+    const twinResult = EvilTwin.checkTwinExecution(this.engine, gs);
+    if (twinResult) {
+      const p = twinResult.player;
+      const desc = `${p.seat + 1}号 ${p.name}（${p.role.name}）被处决`;
+      return twinResult.winner === 'GOOD'
+        ? this.endGame('GOOD', `${desc}，邪恶双子死亡，善良阵营获胜！`, 'evil_twin_executed')
+        : this.endGame('EVIL', `善良双子 ${desc}，邪恶阵营获胜！`, 'good_twin_executed');
+    }
+
     // 检查圣徒被处决
     // 这个在VoteManager中处理
 
@@ -35,6 +49,11 @@ class VictoryChecker {
     if (!demon) {
       // 主谋额外回合中：不因恶魔死亡而结束游戏（等待额外白天结束）
       if (gs.mastermindExtraRound) {
+        return null;
+      }
+      // SNV 邪恶双子：只要双子都存活，即使恶魔死亡游戏也不结束（好人不能靠杀恶魔获胜）
+      if (this.areTwinsAlive(room)) {
+        this.engine.logAction('ABILITY', '恶魔已死亡，但邪恶双子均存活，游戏继续', {});
         return null;
       }
       // 检查主谋触发：恶魔死于处决且主谋存活且尚未触发
@@ -96,6 +115,16 @@ class VictoryChecker {
       `主谋额外白天：${executedPlayer.seat+1}号${executedPlayer.name}（${losingTeam === 'GOOD' ? '善良' : '邪恶'}阵营）被处决，其阵营落败！`,
       winningTeam === 'GOOD' ? 'mastermind_good' : 'mastermind_evil'
     );
+  }
+
+  // 邪恶双子与善良双子是否都还存活
+  areTwinsAlive(room) {
+    const players = Array.from(room.players.values()).filter(p => p.seat !== -1);
+    const evilTwin = players.find(p => p.role && p.role.id === 'eviltwin');
+    if (!evilTwin || !evilTwin.isAlive) return false;
+    const twinId = evilTwin.abilityState && evilTwin.abilityState.twinId;
+    const goodTwin = twinId ? room.players.get(twinId) : null;
+    return !!(goodTwin && goodTwin.isAlive);
   }
 
   checkSaintExecution(playerId) {

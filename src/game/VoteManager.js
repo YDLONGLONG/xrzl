@@ -2,6 +2,7 @@
 const { PHASES, ROLE_IDS } = require('../config/game-config');
 const { getAlivePlayers, isEffectivelyDead } = require('../utils/helpers');
 const { Bard } = require('../roles/Townsfolk2');
+const { Mutant } = require('../roles/Outsider3');
 
 class VoteManager {
   constructor(engine) {
@@ -72,6 +73,16 @@ class VoteManager {
     this.engine.logAction('NOMINATION', `${nominator.seat+1}号 ${nominator.name} 提名了 ${nominee.seat+1}号 ${nominee.name}`, {
       nominatorId, nomineeId
     });
+
+    // SNV 女巫：被诅咒的玩家发起提名则死亡
+    const witchCurse = gs.witchCurse;
+    if (witchCurse && witchCurse.targetId === nominatorId && witchCurse.day === gs.dayCount) {
+      gs.witchCurse = null;
+      const killResult = this.engine.deathManager.killPlayer(nominatorId, 'WITCH', -1, gs.dayCount);
+      this.engine.logAction('ABILITY', `${nominator.seat+1}号 ${nominator.name} 被女巫诅咒，发起提名后死亡${killResult && killResult.prevented ? '（被免死效果阻止）' : ''}`, {
+        playerId: nominatorId, cause: 'WITCH', prevented: !!(killResult && killResult.prevented)
+      });
+    }
 
     // 进入辩护阶段
     gs.phase = PHASES.DEFENSE;
@@ -273,9 +284,51 @@ class VoteManager {
     this.resolveExecution();
   }
 
+  // SNV 洗脑师：未在白天公开宣告被要求角色的玩家被处决
+  resolveCerenovusCurse(gs) {
+    const curse = gs.cerenovusCurse;
+    if (!curse || curse.day !== gs.dayCount || curse.claimed) return;
+    const player = this.engine.room.players.get(curse.targetId);
+    if (!player || !player.isAlive) return;
+
+    this.engine.deathManager.killPlayer(player.id, 'CERENOVUS', -1, gs.dayCount);
+    this.engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name} 未按洗脑要求公开声称自己是【${curse.roleName}】，被处决`, {
+      playerId: player.id, roleName: curse.roleName
+    });
+  }
+
+  // SNV 变种人：当天公开声称过外来者（疯狂）时可能被处决
+  resolveMutantMadness(gs) {
+    const result = Mutant.checkMadExecution(this.engine, gs);
+    if (!result) return;
+    const mutant = result.player;
+    this.engine.deathManager.killPlayer(mutant.id, 'MUTANT', -1, gs.dayCount);
+    this.engine.logAction('ABILITY', `${mutant.seat + 1}号 ${mutant.name}（变种人）因公开声称外来者被处决`, {
+      playerId: mutant.id, probInfo: result.probInfo
+    });
+  }
+
+  // SNV 混沌：今天无人被处决则邪恶获胜
+  checkVortoxNoExecution() {
+    const gs = this.engine.room.gameState;
+    const vortox = getAlivePlayers(this.engine.room)
+      .find(p => p.role && p.role.id === 'vortox' && !p.isPoisoned && !p.isDrunk);
+    if (!vortox) return false;
+
+    this.engine.logAction('ABILITY', '混沌：今天无人被处决，邪恶阵营获胜', {
+      playerId: vortox.id
+    });
+    this.engine.victoryChecker.endGame('EVIL', '混沌在场且今天无人被处决，邪恶阵营获胜！', 'vortox_no_execution');
+    return true;
+  }
+
   resolveExecution() {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.EXECUTION;
+
+    // SNV：洗脑师 / 变种人的白天结算先于普通处决
+    this.resolveCerenovusCurse(gs);
+    this.resolveMutantMadness(gs);
 
     const passed = gs.nominations.filter(n => n.passed);
 
@@ -290,6 +343,8 @@ class VoteManager {
       if (gs.mastermindExtraRound) {
         gs.mastermindExtraRound = false;
       }
+      // 混沌：今天无人被处决 → 邪恶获胜
+      if (this.checkVortoxNoExecution()) return;
       // 平安日没有处决动画，短暂停留后直接进入夜晚
       this.engine.scheduleExecutionEnd(1200);
       return;
@@ -309,6 +364,8 @@ class VoteManager {
       if (gs.mastermindExtraRound) {
         gs.mastermindExtraRound = false;
       }
+      // 混沌：今天无人被处决 → 邪恶获胜
+      if (this.checkVortoxNoExecution()) return;
       this.engine.scheduleExecutionEnd(1200);
       return;
     }
@@ -333,6 +390,8 @@ class VoteManager {
         votes: maxVotes,
         message: `${toExecute.seat+1}号(${toExecute.name})已是死亡玩家，不会再次死亡`
       });
+      // 混沌：今天无人被处决 → 邪恶获胜
+      if (this.checkVortoxNoExecution()) return;
       this.engine.scheduleExecutionEnd(1200);
       return;
     }

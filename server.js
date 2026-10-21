@@ -10,7 +10,7 @@ const { SCRIPTS, PHASES } = require('./src/config/game-config');
 // 智谱 GLM API Key：从环境变量读取，切勿硬编码提交到仓库
 const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || '';
 if (!ZHIPU_API_KEY) {
-  console.warn('[警告] 未配置 ZHIPU_API_KEY 环境变量，AI 相关功能（Bot发言/造谣者判定）将不可用');
+  console.warn('[警告] 未配置 ZHIPU_API_KEY 环境变量，AI 相关功能（Bot发言/造谣者判定/艺术家与学者提问）将不可用');
 }
 
 const app = express();
@@ -1135,6 +1135,35 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // 艺术家 / 学者：由说书人（AI）回答是非题
+      if (res.success && (abilityName === 'artist' || abilityName === 'savant')) {
+        const player = room.players.get(socket.id);
+        const questions = abilityName === 'artist' ? [res.question] : res.questions;
+        const ai = await askNarratorQuestions(engine, questions);
+        if (!ai.ok) {
+          engine.cancelDayAbility(socket.id);
+          socket.emit('room:error', {
+            message: '说书人暂时无法回答（裁判服务不可用），请稍后重试'
+          });
+          broadcastRoomState(roomId);
+          return;
+        }
+        if (player && player.role) {
+          if (abilityName === 'artist' && typeof player.role.applyAnswer === 'function') {
+            player.role.applyAnswer(engine.room.gameState, player, ai.answers[0], engine);
+          } else if (abilityName === 'savant' && typeof player.role.applyAnswers === 'function') {
+            player.role.applyAnswers(engine.room.gameState, player, ai.answers, engine);
+          }
+        }
+        socket.emit('game:abilityUsed', {
+          fromId: socket.id,
+          fromName: player ? player.name : '未知',
+          abilityName, result: { success: true }
+        });
+        broadcastRoomState(roomId);
+        return;
+      }
+
       if (!res.success) {
         socket.emit('room:error', { message: res.message });
       } else {
@@ -1179,6 +1208,38 @@ io.on('connection', (socket) => {
           };
           io.to(roomId).emit('chat:message', slayerMsg);
           if (room.gameState.chatLog) room.gameState.chatLog.push(slayerMsg);
+        } else if (abilityName === 'mutant' || abilityName === 'cerenovus_claim'
+                   || abilityName === 'juggler' || abilityName === 'klutz') {
+          // 紫罗兰教派的公开宣称类技能：文案与「公开公告」预设完全一致，
+          // 使真技能与伪装公告无法区分
+          const player = room.players.get(socket.id);
+          let content = '';
+          if (abilityName === 'mutant') {
+            content = '【变种人声明】我是外来者';
+          } else if (abilityName === 'cerenovus_claim') {
+            content = `【洗脑宣告】我是${res.roleName}`;
+          } else if (abilityName === 'juggler') {
+            content = `【杂耍艺人猜测】${res.targetSeat + 1}号 ${res.targetName} 是${res.roleName}`;
+          } else if (abilityName === 'klutz') {
+            content = `【傻瓜声明】我选择 ${res.targetSeat + 1}号 ${res.targetName}`;
+          }
+          const msg = {
+            id: Date.now() + Math.random(),
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            fromSeat: player ? player.seat : -1,
+            isDead: player ? !player.isAlive : false,
+            content,
+            channel: 'public',
+            timestamp: Date.now()
+          };
+          io.to(roomId).emit('chat:message', msg);
+          if (room.gameState.chatLog) room.gameState.chatLog.push(msg);
+          io.to(roomId).emit('game:abilityUsed', {
+            fromId: socket.id,
+            fromName: player ? player.name : '未知',
+            abilityName, targetId, result: res
+          });
         } else {
           io.to(roomId).emit('game:abilityUsed', {
             fromId: socket.id,
@@ -1190,6 +1251,85 @@ io.on('connection', (socket) => {
       }
     }
   });
+
+  // 说书人 AI：根据真实游戏状态回答是非题（艺术家 / 学者）
+  // 返回 { ok: true, answers: [bool...] } 或 { ok: false, reason }
+  async function askNarratorQuestions(engine, questions) {
+    try {
+      const room = engine.room;
+      const gs = room.gameState;
+      const players = Array.from(room.players.values()).filter(p => p.seat !== -1);
+      const playerInfo = players.map(p => {
+        const roleName = p.role ? p.role.name : '未知';
+        const team = p.role ? (p.role.team === 'GOOD' ? '善良' : '邪恶') : '未知';
+        return `${p.seat + 1}号 ${p.name}: ${p.isAlive ? '存活' : '死亡'}, 角色=${roleName}, 阵营=${team}`;
+      }).join('\n');
+
+      const systemPrompt = `你是血染钟楼的说书人，掌握全部真实信息。请依据下面的真实游戏状态回答每个是非题。
+
+【真实游戏状态】
+在场玩家及真实角色：
+${playerInfo}
+当前是第${gs.dayCount}天，${gs.nightCount === 0 ? '首夜' : `第${gs.nightCount}夜`}。
+已死亡玩家：${players.filter(p => !p.isAlive).map(p => `${p.seat + 1}号 ${p.name}`).join('、') || '无'}
+
+【规则】
+1. 只依据上述状态回答；状态中无法确定的内容一律回答「否」。
+2. 问题若涉及不在场角色或不在场玩家，回答「否」。
+
+【输出要求】
+按提问顺序逐行输出，每行格式为「序号: 是」或「序号: 否」，不要输出任何解释。`;
+
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${ZHIPU_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'glm-4.7-flash',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: questions.map((q, i) => `${i + 1}. ${q}`).join('\n') }
+          ],
+          temperature: 0.1,
+          thinking: { type: 'disabled' },
+          max_tokens: 2048,
+          stream: false
+        }),
+        signal: AbortSignal.timeout(20000)
+      });
+
+      if (!response.ok) {
+        console.log('[Narrator AI] API请求失败:', response.status);
+        return { ok: false, reason: `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      const text = String((data.choices?.[0]?.message?.content) || '').trim();
+      if (!text) return { ok: false, reason: '空响应' };
+
+      const found = {};
+      const re = /(\d+)\s*[:：.、]?\s*(是|否|true|false|yes|no)/gi;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const idx = parseInt(m[1], 10);
+        if (idx >= 1 && idx <= questions.length) {
+          found[idx] = /^(是|true|yes)$/i.test(m[2]);
+        }
+      }
+      const answers = questions.map((_, i) => found[i + 1]);
+      if (answers.some(a => typeof a !== 'boolean')) {
+        console.error(`[Narrator AI] 无法解析回答:"${text.slice(0, 60)}"`);
+        return { ok: false, reason: '无法解析回答' };
+      }
+      console.log(`[Narrator AI] 问题:${questions.join(' | ')} => ${answers.map(a => (a ? '是' : '否')).join(' | ')}`);
+      return { ok: true, answers };
+    } catch (err) {
+      console.error('[Narrator AI] 判断错误:', err.message);
+      return { ok: false, reason: err.message };
+    }
+  }
 
   // AI判断造谣者声明真伪
   // 返回 { ok: true, isTrue } 表示判定成功；{ ok: false } 表示请求失败（由调用方回滚声明）
@@ -1384,7 +1524,12 @@ ${playerInfo}
   const ANNOUNCE_ROLE_PRESETS = {
     slayer: { prefix: '【杀手声明】我选择 ', maxLen: 60, script: 'tb' },
     gossip: { prefix: '【造谣者声明】', maxLen: 120, script: 'bmr' },
-    moonchild: { prefix: '【月之子声明】我选择 ', maxLen: 60, script: 'bmr' }
+    moonchild: { prefix: '【月之子声明】我选择 ', maxLen: 60, script: 'bmr' },
+    // 紫罗兰教派：公开宣称类技能（宣告格式与真实技能完全一致）
+    mutant: { prefix: '【变种人声明】我是外来者', maxLen: 40, script: 'snv' },
+    cerenovus: { prefix: '【洗脑宣告】我是', maxLen: 40, script: 'snv' },
+    juggler: { prefix: '【杂耍艺人猜测】', maxLen: 60, script: 'snv' },
+    klutz: { prefix: '【傻瓜声明】我选择 ', maxLen: 60, script: 'snv' }
   };
   socket.on('chat:announce', ({ roleId, text, channel }) => {
     const preset = ANNOUNCE_ROLE_PRESETS[roleId];

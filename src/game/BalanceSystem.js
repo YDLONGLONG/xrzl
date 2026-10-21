@@ -69,8 +69,12 @@ class BalanceSystem {
     score += deadEvil * this.getW(engine, 'deadEvil');
     score += deadGood * this.getW(engine, 'deadGood');
 
-    // 关键角色存活
-    const infoRoles = ['chef', 'empath', 'fortuneteller', 'investigator', 'washerwoman', 'librarian'];
+    // 关键角色存活（含 SNV 信息位）
+    const infoRoles = [
+      'chef', 'empath', 'fortuneteller', 'investigator', 'washerwoman', 'librarian',
+      'clockmaker', 'dreamer', 'oracle', 'flowergirl', 'towncrier', 'mathematician',
+      'savant', 'artist', 'seamstress', 'juggler'
+    ];
     const infoRolesAlive = alive.some(p => infoRoles.includes(p.role.id));
     const monkAlive = alive.some(p => p.role.id === 'monk');
     const slayerAlive = alive.some(p => p.role.id === 'slayer' && !p.hasUsedDayAbility);
@@ -451,6 +455,44 @@ class BalanceSystem {
       baseProbability: base,
       targetIsDemon: true,
       description: '水手醉酒归属概率（目标为恶魔）'
+    };
+  }
+
+  // 变种人因「疯狂」被处决的概率（由平衡系统控制）
+  // 变种人是善良外来者，其被处决削弱好人：好人弱势时降低概率，邪恶弱势时提高概率
+  static getMutantExecuteProbability(engine) {
+    const cfg = this.getConfig(engine);
+    const score = this.calculateBalanceScore(engine.room, engine);
+    const base = cfg && cfg.balance && cfg.balance.mutantExecuteBase !== undefined ? cfg.balance.mutantExecuteBase : 0.5;
+    const bonus = cfg && cfg.balance && cfg.balance.mutantExecuteBonus !== undefined ? cfg.balance.mutantExecuteBonus : 0.3;
+    const penalty = cfg && cfg.balance && cfg.balance.mutantExecutePenalty !== undefined ? cfg.balance.mutantExecutePenalty : 0.3;
+    const goodWeakTh = cfg ? cfg.balance.goodWeakThreshold : -0.2;
+    const evilWeakTh = cfg ? cfg.balance.evilWeakThreshold : 0.3;
+
+    let scenario = 'balanced';
+    let probability = base;
+    let favorExcess = 0;
+
+    if (score < goodWeakTh) {
+      scenario = 'good_weak';
+      favorExcess = this.getFavorExcess(score, goodWeakTh, 'good_weak');
+      probability = Math.max(base - favorExcess * penalty, 0);
+    } else if (score > evilWeakTh) {
+      scenario = 'evil_weak';
+      favorExcess = this.getFavorExcess(score, evilWeakTh, 'evil_weak');
+      probability = Math.min(base + favorExcess * bonus, 1);
+    }
+
+    return {
+      probability,
+      balanceScore: score,
+      threshold: probability,
+      scenario,
+      favorExcess,
+      goodWeakThreshold: goodWeakTh,
+      evilWeakThreshold: evilWeakTh,
+      baseProbability: base,
+      description: '变种人被处决概率'
     };
   }
 

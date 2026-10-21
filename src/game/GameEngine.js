@@ -353,13 +353,20 @@ class GameEngine {
     const gs = this.room.gameState;
     const deaths = gs.deathsToAnnounce;
 
-    // 夜晚死亡的月之子：天亮时激活待选择状态
+    // 夜晚死亡的月之子 / 傻瓜：天亮时激活待选择状态
     for (const [, player] of this.room.players) {
       if (player.role && player.role.id === 'moonchild' && player.abilityState && player.abilityState.pendingSelectNextDay) {
         player.abilityState.pendingSelectNextDay = false;
         player.abilityState.pendingSelect = true;
         this.logAction('ABILITY', `${player.seat+1}号 ${player.name}（月之子）夜晚死亡，今日白天需公开选择目标`, {
           playerId: player.id, role: 'moonchild'
+        });
+      }
+      if (player.role && player.role.id === 'klutz' && player.abilityState && player.abilityState.pendingKlutzSelectNextDay) {
+        player.abilityState.pendingKlutzSelectNextDay = false;
+        player.abilityState.pendingKlutzSelect = true;
+        this.logAction('ABILITY', `${player.seat+1}号 ${player.name}（傻瓜）夜晚死亡，今日白天需公开选择一名玩家`, {
+          playerId: player.id, role: 'klutz'
         });
       }
     }
@@ -511,8 +518,19 @@ class GameEngine {
     // 「跳过行动」由 NightResolver 处理。这里不能再按 selectCount 校验目标数量，
     // 否则像珀这样 selectCount>0 且 canSkip=true 的角色永远无法跳过，
     // 其「上次未选择→今晚选三人」的机制也就无法触发。
-    if (!(action.skip === true && canSkip)) {
-      const effectiveSelectCount = player.role.selectCount || 0;
+    // SNV 理发师：恶魔被额外唤醒一次，需要选择两名玩家交换角色
+    const gsNow = this.room.gameState;
+    const currentEntry = (gsNow.nightQueue || [])[gsNow.currentNightIndex] || {};
+    const isBarberSwap = currentEntry.barberSwap === true;
+    // 选角色类技能（哲学家/坑巫/洗脑师等）不按玩家数量校验
+    const isRoleSelect = (player.role.selectType || 'player') !== 'player';
+    // 唤醒信息可能动态调整可选人数（如哲学家获得三人技能、理发师交换需两人）
+    const wakeCount = gsNow.currentWakeInfo && typeof gsNow.currentWakeInfo.canSelectCount === 'number'
+      ? gsNow.currentWakeInfo.canSelectCount
+      : null;
+
+    if (!(action.skip === true && canSkip) && !isRoleSelect && !isBarberSwap) {
+      const effectiveSelectCount = wakeCount !== null ? wakeCount : (player.role.selectCount || 0);
       if (effectiveSelectCount > 0 && targets.length !== effectiveSelectCount) {
         return { success: false, message: `请选择${effectiveSelectCount}名玩家` };
       }
@@ -522,7 +540,7 @@ class GameEngine {
         const t = this.room.players.get(tid);
         return t ? `${t.seat+1}号${t.name}` : tid;
       }).join('、');
-      const roleName = isDrunk ? player.fakeRole.name : player.role.name;
+      const roleName = isBarberSwap ? '理发师' : (isDrunk ? player.fakeRole.name : player.role.name);
 
       // 描述本次行动实际做了什么：跳过 / 选角色 / 选玩家 / 无目标
       let actionText = '';
@@ -538,6 +556,8 @@ class GameEngine {
           if (picked) pickedName = picked.name;
         } catch (e) { /* 角色 id 无法解析时退化为原始 id */ }
         actionText = `选择了角色【${pickedName}】`;
+      } else if (isBarberSwap && targets.length > 0) {
+        actionText = `通过理发师交换 ${targetNames} 的角色`;
       } else if (targets.length > 0) {
         actionText = `选择了 ${targetNames}`;
       }
@@ -589,9 +609,10 @@ class GameEngine {
     if (!player) {
       return { success: false, message: '玩家不存在' };
     }
-    // 月之子是死亡后触发选择，所以不检查isAlive
+    // 月之子 / 傻瓜是死亡后触发选择，所以不检查isAlive
     const isMoonchild = player.role && player.role.id === 'moonchild';
-    if (!isMoonchild && !player.isAlive) {
+    const isKlutz = player.role && player.role.id === 'klutz';
+    if (!isMoonchild && !isKlutz && !player.isAlive) {
       return { success: false, message: '你已死亡' };
     }
     if (abilityName === 'gossip') {
@@ -603,8 +624,30 @@ class GameEngine {
       }
       return player.role.onDayAbility(this.room.gameState, player, targetId, this);
     }
+    // SNV 洗脑师：被洗脑的玩家公开声称指定角色，避免当天被处决
+    if (abilityName === 'cerenovus_claim') {
+      const gs = this.room.gameState;
+      const curse = gs.cerenovusCurse;
+      if (!curse || curse.targetId !== playerId || curse.day !== gs.dayCount) {
+        return { success: false, message: '你没有需要宣告的角色' };
+      }
+      if (curse.claimed) {
+        return { success: false, message: '你今天已经宣告过了' };
+      }
+      curse.claimed = true;
+      this.logAction('ABILITY', `${player.seat + 1}号 ${player.name} 公开声称自己是【${curse.roleName}】（洗脑宣告）`, {
+        playerId, role: 'cerenovus_claim', claimedRoleId: curse.roleId
+      });
+      return { success: true, roleName: curse.roleName };
+    }
     if (player.role && player.role.onDayAbility) {
-      return player.role.onDayAbility(this.room.gameState, player, targetId, this, extra);
+      let payload = targetId;
+      if (abilityName === 'artist' || abilityName === 'savant' || abilityName === 'mutant') {
+        payload = extra;
+      } else if (abilityName === 'juggler') {
+        payload = { targetId, roleId: extra && extra.roleId };
+      }
+      return player.role.onDayAbility(this.room.gameState, player, payload, this, extra);
     }
     return { success: false, message: '该角色无此技能' };
   }
@@ -782,8 +825,18 @@ class GameEngine {
         })) : null,
       myAbilityState: {
         pendingMoonchildSelect: !!(viewer.abilityState && viewer.abilityState.pendingSelect),
+        pendingKlutzSelect: !!(viewer.abilityState && viewer.abilityState.pendingKlutzSelect),
+        // 洗脑师：今天必须公开宣告的角色名（未宣告时为 null）
+        cerenovusClaimRole: (() => {
+          const c = gs.cerenovusCurse;
+          if (!c || c.targetId !== viewerId || c.day !== gs.dayCount || c.claimed) return null;
+          return c.roleName;
+        })(),
         // 白天技能是否已使用（杀手按钮据此显示「已使用」并禁用）
         usedDayAbility: !!viewer.hasUsedDayAbility,
+        artistUsed: !!(viewer.abilityState && viewer.abilityState.artistUsed),
+        savantAskedToday: !!(viewer.abilityState && viewer.abilityState.savantDay === gs.dayCount),
+        jugglerGuesses: (viewer.abilityState && viewer.abilityState.jugglerGuesses || []).length,
         // 管家：主人未投赞成时为 true，前端据此禁用「赞成」按钮
         butlerYesBlocked
       }

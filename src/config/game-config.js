@@ -177,6 +177,104 @@ const BMR_OTHER_NIGHT_ORDER = [
   BMR_ROLE_IDS.MAID
 ];
 
+// ==================== 紫罗兰教派 (SNV) ====================
+const SNV_ROLE_IDS = {
+  // 村民
+  CLOCKMAKER: 'clockmaker',
+  DREAMER: 'dreamer',
+  SNAKECHARMER: 'snakecharmer',
+  MATHEMATICIAN: 'mathematician',
+  FLOWERGIRL: 'flowergirl',
+  TOWNCRIER: 'towncrier',
+  ORACLE: 'oracle',
+  SAVANT: 'savant',
+  SEAMSTRESS: 'seamstress',
+  PHILOSOPHER: 'philosopher',
+  ARTIST: 'artist',
+  JUGGLER: 'juggler',
+  SAGE: 'sage',
+  // 外来者
+  MUTANT: 'mutant',
+  SWEETHEART: 'sweetheart',
+  BARBER: 'barber',
+  KLUTZ: 'klutz',
+  // 爪牙
+  EVILTWIN: 'eviltwin',
+  WITCH: 'witch',
+  CERENOVUS: 'cerenovus',
+  PITHAG: 'pithag',
+  // 恶魔
+  FANGGU: 'fanggu',
+  VIGORMORTIS: 'vigormortis',
+  NODASHII: 'nodashii',
+  VORTOX: 'vortox'
+};
+
+const SNV_TOWNSFOLK_ROLES = [
+  SNV_ROLE_IDS.CLOCKMAKER, SNV_ROLE_IDS.DREAMER, SNV_ROLE_IDS.SNAKECHARMER,
+  SNV_ROLE_IDS.MATHEMATICIAN, SNV_ROLE_IDS.FLOWERGIRL, SNV_ROLE_IDS.TOWNCRIER,
+  SNV_ROLE_IDS.ORACLE, SNV_ROLE_IDS.SAVANT, SNV_ROLE_IDS.SEAMSTRESS,
+  SNV_ROLE_IDS.PHILOSOPHER, SNV_ROLE_IDS.ARTIST, SNV_ROLE_IDS.JUGGLER, SNV_ROLE_IDS.SAGE
+];
+
+const SNV_OUTSIDER_ROLES = [
+  SNV_ROLE_IDS.MUTANT, SNV_ROLE_IDS.SWEETHEART, SNV_ROLE_IDS.BARBER, SNV_ROLE_IDS.KLUTZ
+];
+const SNV_MINION_ROLES = [
+  SNV_ROLE_IDS.EVILTWIN, SNV_ROLE_IDS.WITCH, SNV_ROLE_IDS.CERENOVUS, SNV_ROLE_IDS.PITHAG
+];
+const SNV_DEMON_ROLES = [
+  SNV_ROLE_IDS.FANGGU, SNV_ROLE_IDS.VIGORMORTIS, SNV_ROLE_IDS.NODASHII, SNV_ROLE_IDS.VORTOX
+];
+const SNV_ALL_ROLES = [
+  ...SNV_TOWNSFOLK_ROLES, ...SNV_OUTSIDER_ROLES, ...SNV_MINION_ROLES, ...SNV_DEMON_ROLES
+];
+
+// 首夜：恶魔不行动（与 TB 小恶魔一致），因此恶魔角色不列入首夜顺序。
+// 花艺师/公告员/神谕者/数学家的信息依赖「刚刚过去的白天」，首夜无可报信息，
+// 由各自 getNightWakeInfo 在首夜返回 null，这里仍列入以保持顺序表完整。
+// 官方首夜顺序：爪牙互认/恶魔得知爪牙（在第 1 步统一处理）→ 哲学家 → 舞蛇人
+// → 邪恶双子 → 女巫 → 洗脑师 → 钟表匠 → 入梦人 → 裁缝 → 数学家
+// （坑巫首夜不行动）
+const SNV_FIRST_NIGHT_ORDER = [
+  SNV_ROLE_IDS.PHILOSOPHER,
+  SNV_ROLE_IDS.SNAKECHARMER,
+  SNV_ROLE_IDS.EVILTWIN,
+  SNV_ROLE_IDS.WITCH,
+  SNV_ROLE_IDS.CERENOVUS,
+  SNV_ROLE_IDS.CLOCKMAKER,
+  SNV_ROLE_IDS.DREAMER,
+  SNV_ROLE_IDS.SEAMSTRESS,
+  SNV_ROLE_IDS.MATHEMATICIAN
+];
+
+// 恶魔必须排在杀人前的位置之前完成信息/毒杀类结算（方古的「首次外来者」跳转在
+// resolveDemonKills 中统一处理），因此恶魔放在中段唤醒。
+const SNV_OTHER_NIGHT_ORDER = [
+  SNV_ROLE_IDS.PHILOSOPHER,
+  SNV_ROLE_IDS.SNAKECHARMER,
+  SNV_ROLE_IDS.WITCH,
+  SNV_ROLE_IDS.CERENOVUS,
+  SNV_ROLE_IDS.PITHAG,
+  SNV_ROLE_IDS.FANGGU,
+  SNV_ROLE_IDS.VIGORMORTIS,
+  SNV_ROLE_IDS.NODASHII,
+  SNV_ROLE_IDS.VORTOX,
+  SNV_ROLE_IDS.JUGGLER,
+  SNV_ROLE_IDS.DREAMER,
+  SNV_ROLE_IDS.SEAMSTRESS,
+  SNV_ROLE_IDS.FLOWERGIRL,
+  SNV_ROLE_IDS.TOWNCRIER,
+  SNV_ROLE_IDS.ORACLE,
+  SNV_ROLE_IDS.MATHEMATICIAN
+];
+
+// SNV 恶魔自带的配比修正（外来者 ±1）
+const SNV_DEMON_SETUP_DELTA = {
+  [SNV_ROLE_IDS.FANGGU]: 1,       // 方古：外来者 +1，村民 -1
+  [SNV_ROLE_IDS.VIGORMORTIS]: -1  // 亡灵法师：外来者 -1，村民 +1
+};
+
 // ==================== 剧本注册表 ====================
 const SCRIPTS = {
   tb: {
@@ -208,6 +306,22 @@ const SCRIPTS = {
     otherNightOrder: BMR_OTHER_NIGHT_ORDER,
     setupCharacterId: 'godfather',
     setupType: 'godfather'
+  },
+  snv: {
+    id: 'snv',
+    name: '紫罗兰教派',
+    nameEn: 'Sects & Violets',
+    roleIds: SNV_ROLE_IDS,
+    townsfolkRoles: SNV_TOWNSFOLK_ROLES,
+    outsiderRoles: SNV_OUTSIDER_ROLES,
+    minionRoles: SNV_MINION_ROLES,
+    demonRoles: SNV_DEMON_ROLES,
+    allRoles: SNV_ALL_ROLES,
+    firstNightOrder: SNV_FIRST_NIGHT_ORDER,
+    otherNightOrder: SNV_OTHER_NIGHT_ORDER,
+    // 紫罗兰教派没有影响人数配比的角色（无男爵/教父），配比恒为标准值
+    setupCharacterId: null,
+    setupType: null
   }
 };
 
@@ -234,6 +348,7 @@ module.exports = {
   getRoleComposition,
   getScriptConfig,
   SCRIPTS,
+  SNV_DEMON_SETUP_DELTA,
   // TB 剧本（向后兼容）
   ROLE_IDS,
   TOWNSFOLK_ROLES,
@@ -252,5 +367,14 @@ module.exports = {
   BMR_ALL_ROLES,
   BMR_FIRST_NIGHT_ORDER,
   BMR_OTHER_NIGHT_ORDER,
+  // SNV 剧本
+  SNV_ROLE_IDS,
+  SNV_TOWNSFOLK_ROLES,
+  SNV_OUTSIDER_ROLES,
+  SNV_MINION_ROLES,
+  SNV_DEMON_ROLES,
+  SNV_ALL_ROLES,
+  SNV_FIRST_NIGHT_ORDER,
+  SNV_OTHER_NIGHT_ORDER,
   PHASES
 };

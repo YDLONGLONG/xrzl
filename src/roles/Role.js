@@ -12,6 +12,12 @@ class Role {
     this.selectCount = 0;     // 夜晚选择玩家数量
   }
 
+  // 有效阵营：默认等于角色阵营。少数「改变身份但阵营不变」的技能
+  // （如紫罗兰教派·坑巫）通过 snvAlignment 覆盖。
+  getEffectiveTeam() {
+    return this.snvAlignment || this.team;
+  }
+
   // 第一夜初始化
   onFirstNight(gameState, player, engine) {}
 

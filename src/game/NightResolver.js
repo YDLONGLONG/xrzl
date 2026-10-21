@@ -1,7 +1,9 @@
 // 夜晚结算器 - 支持多剧本
 const { getScriptConfig, PHASES, ROLE_IDS } = require('../config/game-config');
-const { getAlivePlayers, decrementDrunkPlayers, randomChoice, revivePlayer } = require('../utils/helpers');
+const { getAlivePlayers, decrementDrunkPlayers, randomChoice, revivePlayer, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { Lunatic } = require('../roles/Outsider2');
+const { NoDashii, Vigormortis } = require('../roles/Demon3');
+const { maintainPersistentPoison } = require('../roles/SnvUtils');
 
 class NightResolver {
   constructor(engine) {
@@ -29,6 +31,11 @@ class NightResolver {
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);
 
+    // SNV: 舞蛇人/亡灵法师的持续中毒维护
+    maintainPersistentPoison(this.engine);
+    // SNV: 黑暗之源的邻座中毒每夜重算
+    NoDashii.applyNeighborPoison(this.engine);
+
     gs.nightQueue = this.buildNightQueue(true);
 
     for (const [, player] of this.engine.room.players) {
@@ -55,6 +62,11 @@ class NightResolver {
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);
 
+    // SNV: 舞蛇人/亡灵法师的持续中毒维护
+    maintainPersistentPoison(this.engine);
+    // SNV: 黑暗之源的邻座中毒每夜重算
+    NoDashii.applyNeighborPoison(this.engine);
+
     gs.nightQueue = this.buildNightQueue(false);
 
     for (const [, player] of this.engine.room.players) {
@@ -65,6 +77,13 @@ class NightResolver {
         player.abilityState.masterVoted = false;
       }
     }
+    // 保存「刚刚过去的这个白天」的提名记录，供花艺师/公告员等能力判定使用
+    gs.lastDayNominations = (gs.nominations || []).map(n => ({
+      nominatorId: n.nominatorId,
+      nomineeId: n.nomineeId,
+      voteCount: n.voteCount,
+      currentVotes: Object.assign({}, n.currentVotes || {})
+    }));
     gs.nominations = [];
     // 先保存「刚刚过去的这个白天」的死亡记录，供僵怖等能力判定使用，再清空当日记录
     gs.lastDayDeaths = (gs.todaysDeaths || []).slice();
@@ -129,7 +148,25 @@ class NightResolver {
       fakeDemonsWithThisRole.forEach(fd => {
         queue.push({ roleId, playerId: fd.id, isFakeDemon: true });
       });
+      // SNV 亡灵法师：被其杀害的爪牙死亡后仍保留技能，需要继续被唤醒（且处于中毒）
+      this.engine.room && Array.from(this.engine.room.players.values())
+        .filter(p => p.seat !== -1 && !p.isAlive && p.abilityState
+          && p.abilityState.vigormortisKeepAbility && p.role && p.role.id === roleId)
+        .forEach(keeper => {
+          queue.push({ roleId, playerId: keeper.id, isDrunk: false, deadWake: true });
+        });
     });
+
+    // SNV 理发师：若理发师已死亡，当晚恶魔先被唤醒决定是否交换两名玩家的角色
+    const gs = this.engine.room.gameState;
+    if (!isFirstNight && gs && gs.pendingBarberSwap) {
+      const demon = getAlivePlayers(this.engine.room)
+        .find(p => p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon);
+      if (demon) {
+        queue.unshift({ roleId: 'barber_swap', playerId: demon.id, barberSwap: true });
+      }
+      gs.pendingBarberSwap = false;
+    }
 
     return queue;
   }
@@ -147,12 +184,24 @@ class NightResolver {
       const entry = queue[gs.currentNightIndex];
       const player = this.engine.room.players.get(entry.playerId);
 
-      if (player && player.isAlive) {
+      // deadWake：亡灵法师杀害的爪牙死亡后仍保留技能，需要被唤醒
+      if (player && (player.isAlive || entry.deadWake)) {
         const role = player.role;
         const isDrunkPlayer = entry.isDrunk;
         const isFakeDemon = entry.isFakeDemon;
         let effectiveRole = role;
         let wakeInfo = null;
+
+        // 角色在本夜中途被改变（舞蛇人互换 / 坑巫变形等）时跳过旧的队列项，
+        // 避免玩家按新身份重复行动。酒鬼/假恶魔的队列项使用假角色 id，故不参与此判定。
+        if (!isDrunkPlayer && !isFakeDemon && !entry.barberSwap && !entry.swappedDemon
+            && role && entry.roleId && role.id !== entry.roleId) {
+          this.engine.logAction('NIGHT_WAKE', `${player.seat+1}号 ${player.name} 身份已在夜晚中改变，跳过旧的唤醒项`, {
+            playerId: player.id, queueRole: entry.roleId, currentRole: role.id
+          });
+          gs.currentNightIndex++;
+          continue;
+        }
 
         // 驱魔人：被选中的恶魔当晚能力失效，不唤醒行动
         if (!isFakeDemon && role.category === 'DEMON' &&
@@ -189,6 +238,17 @@ class NightResolver {
         if (!wakeInfo) {
           wakeInfo = effectiveRole.getNightWakeInfo ? effectiveRole.getNightWakeInfo(gs, player, this.engine, isFirstNight) : null;
         }
+        // SNV 理发师的角色交换：恶魔获得一次额外的双人选择（可跳过）
+        if (entry.barberSwap) {
+          wakeInfo = {
+            canSelectCount: 2,
+            canSkip: true,
+            skipLabel: '今晚不交换',
+            message: '理发师已死亡：你可以选择两名玩家交换他们的角色（不能选择恶魔）'
+          };
+          shouldWake = true;
+        }
+
         if (!shouldWake && wakeInfo) shouldWake = true;
 
         if (shouldWake) {
@@ -200,9 +260,11 @@ class NightResolver {
           gs.currentWakePlayerId = player.id;
           gs.phase = PHASES.NIGHT_WAKE;
 
-          const roleName = (isDrunkPlayer || isFakeDemon) ? player.fakeRole.name : role.name;
+          const roleName = entry.barberSwap
+            ? '理发师'
+            : ((isDrunkPlayer || isFakeDemon) ? player.fakeRole.name : role.name);
           this.engine.logAction('NIGHT_WAKE', `唤醒 ${player.seat+1}号 ${player.name}（${roleName}${isDrunkPlayer?'/酒鬼':''}${isFakeDemon?'/假恶魔':''}）行动`, {
-            playerId: player.id, role: (isDrunkPlayer || isFakeDemon) ? player.fakeRole.id : role.id
+            playerId: player.id, role: entry.barberSwap ? 'barber_swap' : ((isDrunkPlayer || isFakeDemon) ? player.fakeRole.id : role.id)
           });
 
           // 假恶魔使用假角色的selectCount
@@ -290,6 +352,12 @@ class NightResolver {
 
     if (!player || gs.currentWakePlayerId !== playerId) {
       return { success: false, message: '还没轮到你行动' };
+    }
+
+    // SNV 理发师：恶魔决定是否交换两名玩家的角色
+    const currentEntry = (gs.nightQueue || [])[gs.currentNightIndex];
+    if (currentEntry && currentEntry.barberSwap) {
+      return this.processBarberSwap(playerId, player, action);
     }
 
     const isDrunk = player.role.id === ROLE_IDS.DRUNK;
@@ -418,6 +486,65 @@ class NightResolver {
     gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
     this.wakeNext();
     return { success: true };
+  }
+
+  // SNV 理发师：恶魔选择两名玩家交换角色（可选择跳过）
+  processBarberSwap(playerId, player, action) {
+    const gs = this.engine.room.gameState;
+    const finish = () => {
+      gs.currentWakePlayerId = null;
+      this.engine.io.to(playerId).emit('night:actionAck', { success: true });
+      gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
+      this.wakeNext();
+      return { success: true };
+    };
+
+    if (action && action.skip === true) {
+      this.engine.setPlayerPrivateInfo(player, {
+        type: 'barber_swap',
+        message: '你选择今晚不交换任何玩家的角色'
+      });
+      this.engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name} 放弃了理发师的角色交换`, {
+        playerId: player.id, skipped: true
+      });
+      return finish();
+    }
+
+    const targets = (action && action.targets) || [];
+    if (targets.length !== 2 || targets[0] === targets[1]) {
+      return { success: false, message: '请选择两名不同的玩家' };
+    }
+
+    const a = this.engine.room.players.get(targets[0]);
+    const b = this.engine.room.players.get(targets[1]);
+    for (const t of [a, b]) {
+      if (!t || !t.isAlive || !t.role) return { success: false, message: '选择的玩家无效' };
+      if (t.role.category === 'DEMON') return { success: false, message: '不能选择恶魔' };
+    }
+
+    const roleA = a.role;
+    const roleB = b.role;
+    // 官方：交换身份但阵营不变（阵营跟随玩家，不跟随角色）
+    const teamA = getPlayerEffectiveTeam(a);
+    const teamB = getPlayerEffectiveTeam(b);
+    a.role = roleB;
+    b.role = roleA;
+    if (roleB.team !== teamA) roleB.snvAlignment = teamA; else delete roleB.snvAlignment;
+    if (roleA.team !== teamB) roleA.snvAlignment = teamB; else delete roleA.snvAlignment;
+
+    this.engine.setPlayerPrivateInfo(a, {
+      type: 'barber_swap',
+      message: `理发师的能力生效：你的角色变成了【${a.role.name}】`
+    });
+    this.engine.setPlayerPrivateInfo(b, {
+      type: 'barber_swap',
+      message: `理发师的能力生效：你的角色变成了【${b.role.name}】`
+    });
+    this.engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（恶魔）通过理发师交换了 ${a.seat + 1}号 ${a.name}（${roleA.name}）与 ${b.seat + 1}号 ${b.name}（${roleB.name}）的角色`, {
+      playerId: player.id, aId: a.id, bId: b.id
+    });
+
+    return finish();
   }
 
   wakeRavenkeeper(player) {
@@ -555,6 +682,55 @@ class NightResolver {
       const targets = gs.nightActions.po.targets || [];
       targets.forEach(tid => this.executeDemonKill(tid, gs, 'po'));
     }
+
+    // SNV: 方古 - 首次杀死外来者时，该外来者变成邪恶方古，方古自身死亡
+    if (gs.nightActions.fanggu) {
+      const { targetId, actorId } = gs.nightActions.fanggu;
+      const demon = this.engine.room.players.get(actorId);
+      const target = this.engine.room.players.get(targetId);
+      const canJump = demon && demon.isAlive && demon.role && demon.role.id === 'fanggu'
+        && !(demon.abilityState && demon.abilityState.jumped)
+        && target && target.isAlive && target.role
+        && target.role.category === 'OUTSIDER'
+        && !target.isProtected && target.role.id !== 'soldier';
+
+      if (canJump) {
+        demon.abilityState = demon.abilityState || {};
+        demon.abilityState.jumped = true;
+        const newDemonRole = this.engine.roleAllocator.createRoleInstance('fanggu');
+        if (!newDemonRole) return;
+        target.role = newDemonRole;
+
+        const minions = getAlivePlayers(this.engine.room)
+          .filter(p => p.role && p.role.category === 'MINION');
+        this.engine.setPlayerPrivateInfo(target, {
+          type: 'fanggu_jump',
+          message: `方古杀死你时，你变成了邪恶的【方古】！你的爪牙是：${minions.map(m => `${m.seat + 1}号(${m.name})【${m.role.name}】`).join('、') || '无'}`
+        });
+        this.engine.logAction('ABILITY', `${demon.seat + 1}号 ${demon.name}（方古）杀死外来者 ${target.seat + 1}号 ${target.name}，对方成为新的方古，方古死亡`, {
+          playerId: demon.id, targetId: target.id
+        });
+        this.engine.deathManager.killPlayer(demon.id, 'FANGGU', gs.nightCount, -1);
+      } else {
+        this.executeDemonKill(targetId, gs, 'fanggu');
+      }
+    }
+
+    // SNV: 亡灵法师 / 黑暗之源 / 混沌 - 普通单杀
+    ['vigormortis', 'nodashii', 'vortox'].forEach(key => {
+      const action = gs.nightActions[key];
+      if (!action) return;
+      this.executeDemonKill(action.targetId, gs, key);
+
+      if (key === 'vigormortis') {
+        const victim = this.engine.room.players.get(action.targetId);
+        // 只有真正被杀害的爪牙才会「保留技能但中毒」
+        if (victim && victim.isDead && victim.role && victim.role.category === 'MINION'
+            && !(victim.abilityState && victim.abilityState.vigormortisKeepAbility)) {
+          Vigormortis.applyKill(this.engine, victim, gs);
+        }
+      }
+    });
   }
 
   // 小恶魔自尽时的「星传」：随机一名存活的爪牙成为新的小恶魔

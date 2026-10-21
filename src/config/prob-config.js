@@ -62,7 +62,10 @@ const DEFAULT_PROB_CONFIG = {
 // ==================== 各剧本固定概率项 ====================
 const SCRIPT_FIXED_PROB = {
   tb: TB_FIXED_PROB,
-  bmr: BMR_FIXED_PROB
+  bmr: BMR_FIXED_PROB,
+  // 紫罗兰教派的随机性（心上人醉酒对象、变种人处决、中毒/醉酒信息真伪）
+  // 全部由平衡系统自动控制，无独立可调概率项
+  snv: {}
 };
 
 // ==================== UI 展示（按剧本过滤） ====================

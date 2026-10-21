@@ -140,7 +140,12 @@ class DeathManager {
       'TINKER': '夜晚死亡',
       'RECLUSE': '夜晚意外死亡',
       'GRANDMOTHER': '因孙子被恶魔杀害而死',
-      'GAMBLER': '赌徒猜错而死'
+      'GAMBLER': '赌徒猜错而死',
+      'FANGGU': '被方古杀害',
+      'VIGORMORTIS': '被亡灵法师连累而死',
+      'WITCH': '被女巫诅咒而死',
+      'CERENOVUS': '因未按洗脑要求宣告而被处决',
+      'MUTANT': '因公开声称外来者而被处决'
     }[cause] || '死亡';
 
     this.engine.logAction('DEATH', `${player.seat+1}号 ${player.name} ${causeText}，身份是【${player.role ? player.role.name : '?'}】`, {

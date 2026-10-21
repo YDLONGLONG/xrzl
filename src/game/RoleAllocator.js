@@ -3,7 +3,9 @@ const {
   getRoleComposition,
   getScriptConfig,
   ROLE_IDS,
-  BMR_ROLE_IDS
+  BMR_ROLE_IDS,
+  SNV_ROLE_IDS,
+  SNV_DEMON_SETUP_DELTA
 } = require('../config/game-config');
 const { shuffle } = require('../utils/helpers');
 
@@ -24,6 +26,15 @@ const {
 const { Tinker, Moonchild, Lunatic, Madman } = require('../roles/Outsider2');
 const { Godfather, DevilsAdvocate, Assassin, Mastermind } = require('../roles/Minion2');
 const { Zombuul, Pukka, Shabaloth, Po } = require('../roles/Demon2');
+
+// SNV 角色类
+const {
+  Clockmaker, Dreamer, SnakeCharmer, Mathematician, Flowergirl, TownCrier,
+  Oracle, Savant, Seamstress, Philosopher, Artist, Juggler, Sage
+} = require('../roles/Townsfolk3');
+const { Mutant, Sweetheart, Barber, Klutz } = require('../roles/Outsider3');
+const { EvilTwin, Witch, Cerenovus, PitHag } = require('../roles/Minion3');
+const { FangGu, Vigormortis, NoDashii, Vortox } = require('../roles/Demon3');
 
 const BalanceSystem = require('./BalanceSystem');
 
@@ -77,7 +88,33 @@ const ROLE_INSTANCES = {
   [BMR_ROLE_IDS.ZOMBUUL]: Zombuul,
   [BMR_ROLE_IDS.PUKKA]: Pukka,
   [BMR_ROLE_IDS.SHABALOTH]: Shabaloth,
-  [BMR_ROLE_IDS.PO]: Po
+  [BMR_ROLE_IDS.PO]: Po,
+  // SNV
+  [SNV_ROLE_IDS.CLOCKMAKER]: Clockmaker,
+  [SNV_ROLE_IDS.DREAMER]: Dreamer,
+  [SNV_ROLE_IDS.SNAKECHARMER]: SnakeCharmer,
+  [SNV_ROLE_IDS.MATHEMATICIAN]: Mathematician,
+  [SNV_ROLE_IDS.FLOWERGIRL]: Flowergirl,
+  [SNV_ROLE_IDS.TOWNCRIER]: TownCrier,
+  [SNV_ROLE_IDS.ORACLE]: Oracle,
+  [SNV_ROLE_IDS.SAVANT]: Savant,
+  [SNV_ROLE_IDS.SEAMSTRESS]: Seamstress,
+  [SNV_ROLE_IDS.PHILOSOPHER]: Philosopher,
+  [SNV_ROLE_IDS.ARTIST]: Artist,
+  [SNV_ROLE_IDS.JUGGLER]: Juggler,
+  [SNV_ROLE_IDS.SAGE]: Sage,
+  [SNV_ROLE_IDS.MUTANT]: Mutant,
+  [SNV_ROLE_IDS.SWEETHEART]: Sweetheart,
+  [SNV_ROLE_IDS.BARBER]: Barber,
+  [SNV_ROLE_IDS.KLUTZ]: Klutz,
+  [SNV_ROLE_IDS.EVILTWIN]: EvilTwin,
+  [SNV_ROLE_IDS.WITCH]: Witch,
+  [SNV_ROLE_IDS.CERENOVUS]: Cerenovus,
+  [SNV_ROLE_IDS.PITHAG]: PitHag,
+  [SNV_ROLE_IDS.FANGGU]: FangGu,
+  [SNV_ROLE_IDS.VIGORMORTIS]: Vigormortis,
+  [SNV_ROLE_IDS.NODASHII]: NoDashii,
+  [SNV_ROLE_IDS.VORTOX]: Vortox
 };
 
 class RoleAllocator {
@@ -115,6 +152,22 @@ class RoleAllocator {
     const hasSetupChar = selectedMinions.includes(setupCharId);
     const composition = getRoleComposition(playerCount, hasSetupChar, setupType);
 
+    // 先选恶魔：SNV 的方古/亡灵法师会改变外来者数量
+    const selectedDemons = shuffle(sc.demonRoles).slice(0, composition.demon);
+    const demonDelta = (sc.id === 'snv' && SNV_DEMON_SETUP_DELTA[selectedDemons[0]]) || 0;
+    if (demonDelta) {
+      const newOutsider = Math.max(0, composition.outsider + demonDelta);
+      const realDelta = newOutsider - composition.outsider;
+      if (realDelta) {
+        composition.outsider = newOutsider;
+        composition.townsfolk -= realDelta;
+        composition.setupDelta = realDelta;
+        this.engine.logAction('GAME_START', `${this.createRoleInstance(selectedDemons[0]).name} 登场：外来者${realDelta > 0 ? '+1' : '-1'}，村民${realDelta > 0 ? '-1' : '+1'}`, {
+          demonId: selectedDemons[0], demonDelta: realDelta
+        });
+      }
+    }
+
     // 重新选角色
     let selectedTownsfolk = shuffle(sc.townsfolkRoles).slice(0, composition.townsfolk);
     let selectedOutsiders = shuffle(sc.outsiderRoles).slice(0, composition.outsider);
@@ -126,7 +179,6 @@ class RoleAllocator {
       selectedMinions = shuffle(sc.minionRoles.filter(r => r !== setupCharId)).slice(0, composition.minion);
     }
 
-    const selectedDemons = shuffle(sc.demonRoles).slice(0, composition.demon);
     const selectedRoles = [...selectedTownsfolk, ...selectedOutsiders, ...selectedMinions, ...selectedDemons];
 
     const notInPlay = sc.allRoles.filter(r => !selectedRoles.includes(r));
@@ -224,6 +276,16 @@ class RoleAllocator {
       : null;
     const composition = getRoleComposition(playerCount, hasSetupChar, setupType, setupDelta);
 
+    // SNV 恶魔配比修正（自定义角色模式下同样生效）
+    const customDemonId = assignedRoleIds.find(r => sc.demonRoles.includes(r));
+    const customDemonDelta = (sc.id === 'snv' && SNV_DEMON_SETUP_DELTA[customDemonId]) || 0;
+    if (customDemonDelta) {
+      const newOutsider = Math.max(0, composition.outsider + customDemonDelta);
+      const realDelta = newOutsider - composition.outsider;
+      composition.outsider = newOutsider;
+      composition.townsfolk -= realDelta;
+    }
+
     const counts = {
       townsfolk: assignedRoleIds.filter(r => sc.townsfolkRoles.includes(r)).length,
       outsider: assignedRoleIds.filter(r => sc.outsiderRoles.includes(r)).length,
@@ -304,6 +366,8 @@ class RoleAllocator {
     this.setupMinionInfo(players);
     this.setupDrunkInfo(players);
     this.setupFakeDemonInfo(players);
+    // SNV: 邪恶双子与一名善良玩家互知
+    EvilTwin.setupTwins(this.engine, players);
   }
 
   setupDrunkInfo(players) {
@@ -374,16 +438,21 @@ class RoleAllocator {
     if (!demon) return;
 
     const minions = players.filter(p => p.role.category === 'MINION');
-    const notInPlay = this.engine.room.gameState.rolesNotInPlay.slice(0, 3);
+    // 官方：恶魔得知 3 个不在场的「善良身份」（村民），而不是任意的未登场角色
+    const notInPlay = this.getNotInPlayTownsfolk(3);
+    // 5–6 人局（SNV）：恶魔与爪牙互不相认
+    const hideTeam = this.shouldHideEvilTeam(players.length);
 
     this.engine.setPlayerPrivateInfo(demon, {
       type: 'demon_info',
-      minions: minions.map(m => ({ id: m.id, name: m.name, seat: m.seat, roleName: m.role.name })),
+      minions: hideTeam ? [] : minions.map(m => ({ id: m.id, name: m.name, seat: m.seat, roleName: m.role.name })),
       notInPlay: notInPlay.map(roleId => {
         const role = this.createRoleInstance(roleId);
         return role ? role.name : roleId;
       }),
-      message: `你的爪牙是：${minions.map(m => `${m.seat+1}号(${m.name})【${m.role.name}】`).join('、')}。不在场身份：${notInPlay.map(rid => {
+      message: `${hideTeam
+        ? '本局人数较少：你不知道哪些玩家是爪牙。'
+        : `你的爪牙是：${minions.map(m => `${m.seat+1}号(${m.name})【${m.role.name}】`).join('、')}。`}不在场身份：${notInPlay.map(rid => {
         const r = this.createRoleInstance(rid);
         return r ? r.name : rid;
       }).join('、')}`
@@ -393,16 +462,35 @@ class RoleAllocator {
   setupMinionInfo(players) {
     const demon = players.find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
     const minions = players.filter(p => p.role.category === 'MINION');
+    const hideTeam = this.shouldHideEvilTeam(players.length);
 
     minions.forEach(m => {
-      const otherMinions = minions.filter(x => x.id !== m.id);
+      const otherMinions = hideTeam ? [] : minions.filter(x => x.id !== m.id);
       this.engine.setPlayerPrivateInfo(m, {
         type: 'minion_info',
-        demon: demon ? { id: demon.id, name: demon.name, seat: demon.seat, roleName: demon.role.name } : null,
+        demon: (demon && !hideTeam) ? { id: demon.id, name: demon.name, seat: demon.seat, roleName: demon.role.name } : null,
         teammates: otherMinions.map(om => ({ id: om.id, name: om.name, seat: om.seat, roleName: om.role.name })),
-        message: `恶魔是：${demon ? `${demon.seat+1}号(${demon.name})【${demon.role.name}】` : '无'}${otherMinions.length > 0 ? '。队友：' + otherMinions.map(om => `${om.seat+1}号(${om.name})【${om.role.name}】`).join('、') : ''}`
+        message: hideTeam
+          ? '本局人数较少：你不知道恶魔与队友是谁。'
+          : `恶魔是：${demon ? `${demon.seat+1}号(${demon.name})【${demon.role.name}】` : '无'}${otherMinions.length > 0 ? '。队友：' + otherMinions.map(om => `${om.seat+1}号(${om.name})【${om.role.name}】`).join('、') : ''}`
       });
     });
+  }
+
+  // 不在场的村民角色（恶魔首夜得知 3 个善良身份）
+  getNotInPlayTownsfolk(count) {
+    const gs = this.engine.room.gameState;
+    const notInPlay = (gs && gs.rolesNotInPlay) || [];
+    const townsfolk = this.scriptConfig.townsfolkRoles;
+    const pool = notInPlay.filter(rid => townsfolk.includes(rid));
+    // 兜底：极端配置下不在场村民不足时，从全部不在场角色补齐
+    const extra = notInPlay.filter(rid => !pool.includes(rid));
+    return [...pool, ...extra].slice(0, count);
+  }
+
+  // SNV：5–6 人局恶魔与爪牙互不相认（7 人以上互知）
+  shouldHideEvilTeam(playerCount) {
+    return this.scriptConfig.id === 'snv' && playerCount <= 6;
   }
 
   setupRedHerring(fortuneteller) {

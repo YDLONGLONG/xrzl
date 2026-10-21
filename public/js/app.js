@@ -1318,7 +1318,9 @@ function renderScriptPanel(state) {
   }
   const isHost = state.hostId === myId;
   const currentScript = state.script || 'tb';
-  const scriptList = state.scriptList || [{ id: 'tb', name: '灾祸之酿' }, { id: 'bmr', name: '黯月初升' }];
+  const scriptList = state.scriptList || [
+    { id: 'tb', name: '灾祸之酿' }, { id: 'bmr', name: '黯月初升' }, { id: 'snv', name: '紫罗兰教派' }
+  ];
 
   const cardsHtml = scriptList.map(s => {
     const info = SCRIPT_INFO[s.id] || { icon: '📜', desc: '', color: '#888', nameEn: '' };
@@ -1872,15 +1874,96 @@ function renderRoleCard(state) {
     moonchildBtn.style.display = 'none';
   }
 
+  // ===== 紫罗兰教派白天技能 =====
+  const myAbility = state.myAbilityState || {};
+  const isDayActionPhase = state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE';
+
+  // 艺术家：每局限一次
+  const artistBtn = $('artistBtn');
+  if (artistBtn) {
+    const artistUsed = !!myAbility.artistUsed;
+    if (role.id === 'artist' && me.isAlive && isDayActionPhase) {
+      artistBtn.style.display = 'block';
+      artistBtn.textContent = artistUsed ? '艺术家：已使用' : '艺术家：向说书人提问';
+      artistBtn.disabled = artistUsed;
+      artistBtn.classList.toggle('disabled', artistUsed);
+    } else {
+      artistBtn.style.display = 'none';
+      artistBtn.disabled = false;
+      artistBtn.classList.remove('disabled');
+      artistBtn.textContent = '艺术家：向说书人提问';
+    }
+  }
+
+  // 学者：每天一次
+  const savantBtn = $('savantBtn');
+  if (savantBtn) {
+    const savantAsked = !!myAbility.savantAskedToday;
+    if (role.id === 'savant' && me.isAlive && isDayActionPhase) {
+      savantBtn.style.display = 'block';
+      savantBtn.textContent = savantAsked ? '学者：今日已提问' : '学者：提问两个问题';
+      savantBtn.disabled = savantAsked;
+      savantBtn.classList.toggle('disabled', savantAsked);
+    } else {
+      savantBtn.style.display = 'none';
+      savantBtn.disabled = false;
+      savantBtn.classList.remove('disabled');
+      savantBtn.textContent = '学者：提问两个问题';
+    }
+  }
+
+  // 杂耍艺人：仅首个白天可公开猜测
+  const jugglerBtn = $('jugglerBtn');
+  if (jugglerBtn) {
+    const guessesUsed = myAbility.jugglerGuesses || 0;
+    if (role.id === 'juggler' && me.isAlive && state.dayCount === 1 && isDayActionPhase
+      && guessesUsed < 5) {
+      jugglerBtn.style.display = 'block';
+      jugglerBtn.textContent = guessesUsed > 0
+        ? `杂耍艺人：继续猜（${guessesUsed}/5）`
+        : '杂耍艺人：猜角色（最多5个）';
+    } else {
+      jugglerBtn.style.display = 'none';
+      jugglerBtn.textContent = '杂耍艺人：猜角色';
+    }
+  }
+
+  // 变种人：每天可公开声称外来者
+  const mutantBtn = $('mutantBtn');
+  if (mutantBtn) {
+    mutantBtn.style.display = (role.id === 'mutant' && me.isAlive && isDayActionPhase) ? 'block' : 'none';
+  }
+
+  // 洗脑宣告：被洗脑的玩家（任意角色）当天必须公开声称指定角色
+  const cerenovusBtn = $('cerenovusBtn');
+  if (cerenovusBtn) {
+    if (myAbility.cerenovusClaimRole) {
+      cerenovusBtn.style.display = 'block';
+      cerenovusBtn.textContent = `洗脑宣告：我是${myAbility.cerenovusClaimRole}`;
+    } else {
+      cerenovusBtn.style.display = 'none';
+      cerenovusBtn.textContent = '洗脑宣告';
+    }
+  }
+
+  // 傻瓜：死亡后公开选择一名存活玩家
+  const klutzBtn = $('klutzBtn');
+  if (klutzBtn) {
+    const klutzPhases = ['DAY_DAWN', 'DAY_DISCUSSION', 'NOMINATION_PHASE', 'EXECUTION', 'VOTING', 'DEFENSE'];
+    const showKlutz = role.id === 'klutz' && !!myAbility.pendingKlutzSelect && klutzPhases.includes(state.phase);
+    klutzBtn.style.display = showKlutz ? 'block' : 'none';
+  }
+
   const deadTab = $('deadChatTab');
   if (deadTab) deadTab.style.display = me.isDead ? 'block' : 'none';
 
   // 身份技能按钮栏（右栏）
   const abilityBar = $('roleAbilityBar');
   if (abilityBar) {
-    const anyShown = slayerBtn.style.display === 'block'
-      || gossipBtn.style.display === 'block'
-      || moonchildBtn.style.display === 'block';
+    const abilityButtons = [slayerBtn, gossipBtn, moonchildBtn,
+      $('artistBtn'), $('savantBtn'), $('jugglerBtn'),
+      $('mutantBtn'), $('cerenovusBtn'), $('klutzBtn')];
+    const anyShown = abilityButtons.some(b => b && b.style.display === 'block');
     abilityBar.style.display = anyShown ? 'flex' : 'none';
   }
 
@@ -2574,6 +2657,136 @@ function showPlayerSelect(title, players, options = {}) {
 
     requestAnimationFrame(() => overlay.classList.add('confirm-show'));
   });
+}
+
+// 角色选择弹窗（杂耍艺人猜角色等）
+function showRoleSelect(title, roles, options = {}) {
+  return new Promise((resolve) => {
+    const type = options.type || 'info';
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    const buttons = roles.map(r =>
+      `<button class="slayer-player-btn" data-rid="${r.id}" title="${r.team === 'GOOD' ? '善良阵营' : '邪恶阵营'}">${r.name}</button>`
+    ).join('');
+    overlay.innerHTML = `
+      <div class="confirm-dialog confirm-type-${type}" style="min-width:340px;max-width:520px;">
+        <div class="confirm-title">${title}</div>
+        <div class="confirm-input-area" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;max-height:50vh;overflow-y:auto;">
+          ${buttons}
+        </div>
+        <div class="confirm-buttons">
+          <button class="confirm-btn confirm-cancel">取消</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = (result) => {
+      overlay.classList.add('confirm-closing');
+      setTimeout(() => { overlay.remove(); resolve(result); }, 200);
+    };
+
+    overlay.querySelectorAll('.slayer-player-btn').forEach(btn => {
+      btn.style.cssText = 'padding:8px 6px;background:rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.09);border-radius:6px;color:#191919;cursor:pointer;font-size:13px;font-family:inherit;transition:all 0.15s;';
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(7,193,96,0.25)'; btn.style.borderColor = 'rgba(7,193,96,0.6)'; });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'rgba(0,0,0,0.05)';
+        btn.style.borderColor = 'rgba(0,0,0,0.09)';
+      });
+      btn.addEventListener('click', () => close(btn.dataset.rid));
+    });
+
+    overlay.querySelector('.confirm-cancel').addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } };
+    document.addEventListener('keydown', onKey);
+
+    requestAnimationFrame(() => overlay.classList.add('confirm-show'));
+  });
+}
+
+// ========== 紫罗兰教派：白天技能 ==========
+async function useArtistAbility() {
+  const originEl = getLoadingClickTarget();
+  const question = await showTextInput('艺术家：向说书人提问', {
+    placeholder: '输入一个是非题（例如：3号是恶魔吗？）',
+    description: '每局游戏限一次。说书人会给出真实答案（混沌在场时答案会被反转）。',
+    maxLength: 120, minLength: 2, multiline: false,
+    type: 'success', confirmText: '向说书人提问'
+  });
+  if (question) {
+    emitRequest('day:useAbility', { abilityName: 'artist', extra: question }, originEl);
+  }
+}
+
+async function useSavantAbility() {
+  const originEl = getLoadingClickTarget();
+  const desc = '每天可以私下问两个是非题，你会得到一个真话和一个假话。';
+  const q1 = await showTextInput('学者：第一个问题', {
+    placeholder: '输入第一个是非题',
+    description: desc,
+    maxLength: 120, minLength: 2, multiline: false,
+    type: 'success', confirmText: '下一个问题'
+  });
+  if (!q1) return;
+  const q2 = await showTextInput('学者：第二个问题', {
+    placeholder: '输入第二个是非题',
+    description: desc,
+    maxLength: 120, minLength: 2, multiline: false,
+    type: 'success', confirmText: '提交问题'
+  });
+  if (!q2) return;
+  emitRequest('day:useAbility', { abilityName: 'savant', extra: [q1, q2] }, originEl);
+}
+
+async function useJugglerAbility() {
+  const originEl = getLoadingClickTarget();
+  const guessed = (currentState.myAbilityState && currentState.myAbilityState.jugglerGuesses) || 0;
+  if (guessed >= 5) {
+    showToast('杂耍艺人最多只能公开猜测 5 名玩家');
+    return;
+  }
+  const players = currentState.players.filter(p => p.isAlive && p.seat !== -1);
+  const targetId = await showPlayerSelect('杂耍艺人：选择要猜测的玩家', players, { type: 'info' });
+  if (!targetId) return;
+  const scriptId = (currentState && currentState.script) || 'tb';
+  const roles = ALL_ROLE_INFO.filter(r => r.script === scriptId)
+    .map(r => ({ id: r.id, name: r.name, team: r.team }));
+  const roleId = await showRoleSelect('杂耍艺人：猜测他的角色', roles);
+  if (!roleId) return;
+  emitRequest('day:useAbility', { abilityName: 'juggler', targetId, extra: { roleId } }, originEl);
+}
+
+async function useMutantAbility() {
+  const originEl = getLoadingClickTarget();
+  const ok = await showConfirm('你将公开声称自己是外来者（疯狂）。你可能因此被处决。', {
+    type: 'warning', title: '变种人', confirmText: '公开声称'
+  });
+  if (ok) {
+    emitRequest('day:useAbility', { abilityName: 'mutant' }, originEl);
+  }
+}
+
+function useCerenovusClaim() {
+  const roleName = currentState && currentState.myAbilityState && currentState.myAbilityState.cerenovusClaimRole;
+  if (!roleName) return;
+  emitRequest('day:useAbility', { abilityName: 'cerenovus_claim' }, getLoadingClickTarget());
+}
+
+async function useKlutzAbility() {
+  const originEl = getLoadingClickTarget();
+  const players = currentState.players.filter(p => p.isAlive && p.seat !== -1);
+  const targetId = await showPlayerSelect('傻瓜：公开选择一名存活玩家', players, { type: 'danger' });
+  if (!targetId) return;
+  const target = players.find(p => p.id === targetId);
+  const ok = await showConfirm(
+    `确定选择 ${target.seat + 1}号 ${target.name} 吗？如果他是邪恶阵营，善良阵营将立即落败。`,
+    { type: 'danger', title: '傻瓜选择', confirmText: '确认选择' }
+  );
+  if (ok) {
+    emitRequest('day:useAbility', { abilityName: 'klutz', targetId }, originEl);
+  }
 }
 
 // 说明：技能使用与玩家死亡的结果不再由客户端弹提示框，
@@ -4538,6 +4751,85 @@ const ALL_ROLE_INFO = [
     color: '#E64340' },
   { id: 'po', name: '珀', team: 'EVIL', category: '恶魔', script: 'bmr',
     ability: '每个夜晚，你可以选择一名玩家：他死亡。如果你上次选择时没有选择任何玩家，当晚你要选择三名玩家：他们死亡。',
+    color: '#E64340' },
+  // SNV 村民
+  { id: 'clockmaker', name: '钟表匠', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '在你的首个夜晚，你得知恶魔与最近的爪牙之间隔了几名玩家。',
+    color: '#07C160' },
+  { id: 'dreamer', name: '入梦人', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚，选择除你以外的一名玩家：你得知一个善良角色和一个邪恶角色，其中一个是该玩家的角色。',
+    color: '#07C160' },
+  { id: 'snakecharmer', name: '舞蛇人', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚，选择一名存活玩家：如果你选中了恶魔，你与恶魔交换身份和阵营，且原恶魔从此中毒（永久）。',
+    color: '#07C160' },
+  { id: 'mathematician', name: '数学家', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚，你得知自拂晓起有多少名玩家的技能因其他角色的技能而未正常生效（中毒或醉酒）。',
+    color: '#07C160' },
+  { id: 'flowergirl', name: '花艺师', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚（首夜除外），你得知恶魔在今天是否投过票。',
+    color: '#07C160' },
+  { id: 'towncrier', name: '公告员', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚（首夜除外），你得知今天是否有爪牙发起过提名。',
+    color: '#07C160' },
+  { id: 'oracle', name: '神谕者', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个夜晚（首夜除外），你得知死亡玩家中有多少名是邪恶阵营。',
+    color: '#07C160' },
+  { id: 'savant', name: '学者', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每个白天，你可以私下向说书人问两个是非题，你会得到一个真话和一个假话。',
+    color: '#07C160' },
+  { id: 'seamstress', name: '裁缝', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每局游戏限一次，在夜晚时选择除你以外的两名玩家（可以是死亡玩家）：你得知他们是否属于同一阵营。',
+    color: '#07C160' },
+  { id: 'philosopher', name: '哲学家', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每局游戏限一次，在夜晚时选择一个善良角色：你获得该角色的能力。如果该角色在场，该玩家醉酒直到你死亡。',
+    color: '#07C160' },
+  { id: 'artist', name: '艺术家', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '每局游戏限一次，在白天时私下向说书人提一个是非题，你会得到真实答案。',
+    color: '#07C160' },
+  { id: 'juggler', name: '杂耍艺人', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '在首个白天，你可以公开猜测至多5名玩家的角色。当晚，你得知你猜对了几个。',
+    color: '#07C160' },
+  { id: 'sage', name: '贤者', team: 'GOOD', category: '村民', script: 'snv',
+    ability: '如果你被恶魔杀害，你得知两名玩家，其中一名是恶魔。',
+    color: '#07C160' },
+  // SNV 外来者
+  { id: 'mutant', name: '变种人', team: 'GOOD', category: '外来者', script: 'snv',
+    ability: '如果你公开声称自己是外来者（疯狂），你可能被处决。',
+    color: '#FF9500' },
+  { id: 'sweetheart', name: '心上人', team: 'GOOD', category: '外来者', script: 'snv',
+    ability: '当你死亡时，一名玩家会永久醉酒。',
+    color: '#FF9500' },
+  { id: 'barber', name: '理发师', team: 'GOOD', category: '外来者', script: 'snv',
+    ability: '如果你死亡，当晚恶魔可以选择两名玩家交换他们的身份（不能选恶魔，阵营不变）。',
+    color: '#FF9500' },
+  { id: 'klutz', name: '傻瓜', team: 'GOOD', category: '外来者', script: 'snv',
+    ability: '当你得知你死亡时，你要公开选择一名存活玩家：如果他是邪恶的，你的阵营落败。',
+    color: '#FF9500' },
+  // SNV 爪牙
+  { id: 'eviltwin', name: '邪恶双子', team: 'EVIL', category: '爪牙', script: 'snv',
+    ability: '你与一名善良玩家互知身份。若善良的双子被处决，邪恶阵营获胜；若你被处决，善良阵营获胜。只要双子都存活，好人即使杀死恶魔也无法获胜。',
+    color: '#FA5151' },
+  { id: 'witch', name: '女巫', team: 'EVIL', category: '爪牙', script: 'snv',
+    ability: '每个夜晚，选择一名玩家：如果他在明天发起了提名，他会立即死亡（提名仍然有效）。场上仅剩3名存活玩家时你失去此技能。',
+    color: '#FA5151' },
+  { id: 'cerenovus', name: '洗脑师', team: 'EVIL', category: '爪牙', script: 'snv',
+    ability: '每个夜晚，选择一名玩家和一个善良角色：如果他明天没有公开声称自己是该角色，他会被处决。',
+    color: '#FA5151' },
+  { id: 'pithag', name: '坑巫', team: 'EVIL', category: '爪牙', script: 'snv',
+    ability: '每个夜晚（首夜除外），选择一名玩家和一个不在场的角色：该玩家变成该角色（阵营不变）；若因此产生新恶魔，当晚死亡由说书人决定。',
+    color: '#FA5151' },
+  // SNV 恶魔
+  { id: 'fanggu', name: '方古', team: 'EVIL', category: '恶魔', script: 'snv',
+    ability: '每个夜晚（首夜除外），选择一名玩家杀害。方古首次杀死外来者时，该外来者变成邪恶的方古，你死亡。（设置修正：外来者+1）',
+    color: '#E64340' },
+  { id: 'vigormortis', name: '亡灵法师', team: 'EVIL', category: '恶魔', script: 'snv',
+    ability: '每个夜晚（首夜除外），选择一名玩家杀害。被你杀害的爪牙保留技能但中毒，并使一名相邻村民中毒；当你死亡时，一名爪牙死亡。',
+    color: '#E64340' },
+  { id: 'nodashii', name: '黑暗之源', team: 'EVIL', category: '恶魔', script: 'snv',
+    ability: '每个夜晚（首夜除外），选择一名玩家杀害。与你相邻的两名存活村民中毒。',
+    color: '#E64340' },
+  { id: 'vortox', name: '混沌', team: 'EVIL', category: '恶魔', script: 'snv',
+    ability: '每个夜晚（首夜除外），选择一名玩家杀害。所有村民技能必定产出错误信息。如果今天无人被处决，邪恶阵营获胜。',
     color: '#E64340' }
 ];
 
@@ -4546,7 +4838,9 @@ const SCRIPT_INFO = {
   tb: { id: 'tb', name: '灾祸之酿', nameEn: 'Trouble Brewing', icon: '🍺', color: '#07C160',
         desc: '新手友好，推荐入门' },
   bmr: { id: 'bmr', name: '黯月初升', nameEn: 'Bad Moon Rising', icon: '🌑', color: '#9b59b6',
-         desc: '进阶剧本，更多恶魔' }
+         desc: '进阶剧本，更多恶魔' },
+  snv: { id: 'snv', name: '紫罗兰教派', nameEn: 'Sects & Violets', icon: '🟣', color: '#8e44ad',
+         desc: '高难剧本，疯狂与变形' }
 };
 
 // ========== 公开公告（伪装用，不触发任何角色能力） ==========
@@ -4556,7 +4850,12 @@ const SCRIPT_INFO = {
 const ANNOUNCE_ROLE_PRESETS = [
   { id: 'slayer', name: '杀手', script: 'tb', inputType: 'player', prefix: '【杀手声明】我选择 ', maxLen: 60 },
   { id: 'gossip', name: '造谣者', script: 'bmr', inputType: 'text', prefix: '【造谣者声明】', placeholder: '例如：3号 是恶魔', maxLen: 120 },
-  { id: 'moonchild', name: '月之子', script: 'bmr', inputType: 'player', prefix: '【月之子声明】我选择 ', maxLen: 60 }
+  { id: 'moonchild', name: '月之子', script: 'bmr', inputType: 'player', prefix: '【月之子声明】我选择 ', maxLen: 60 },
+  // 紫罗兰教派（宣称类技能，真伪公告格式一致）
+  { id: 'mutant', name: '变种人', script: 'snv', inputType: 'text', prefix: '【变种人声明】我是外来者', placeholder: '变种人声明（内容固定）', maxLen: 40 },
+  { id: 'cerenovus_claim', name: '洗脑宣告', script: 'snv', inputType: 'text', prefix: '【洗脑宣告】我是', placeholder: '例如：僧侣', maxLen: 40 },
+  { id: 'juggler', name: '杂耍艺人', script: 'snv', inputType: 'text', prefix: '【杂耍艺人猜测】', placeholder: '例如：3号 是僧侣', maxLen: 60 },
+  { id: 'klutz', name: '傻瓜', script: 'snv', inputType: 'player', prefix: '【傻瓜声明】我选择 ', maxLen: 60 }
 ];
 
 // 当前剧本下可发起公告的角色（剧本内没有此类角色时返回空数组）
@@ -4803,7 +5102,18 @@ const ROLE_CATEGORY = {
   // BMR 爪牙
   godfather: 'minion', devilsadvocate: 'minion', assassin: 'minion', mastermind: 'minion',
   // BMR 恶魔
-  zombuul: 'demon', pukka: 'demon', shabaloth: 'demon', po: 'demon'
+  zombuul: 'demon', pukka: 'demon', shabaloth: 'demon', po: 'demon',
+  // SNV 村民
+  clockmaker: 'townsfolk', dreamer: 'townsfolk', snakecharmer: 'townsfolk',
+  mathematician: 'townsfolk', flowergirl: 'townsfolk', towncrier: 'townsfolk',
+  oracle: 'townsfolk', savant: 'townsfolk', seamstress: 'townsfolk',
+  philosopher: 'townsfolk', artist: 'townsfolk', juggler: 'townsfolk', sage: 'townsfolk',
+  // SNV 外来者
+  mutant: 'outsider', sweetheart: 'outsider', barber: 'outsider', klutz: 'outsider',
+  // SNV 爪牙
+  eviltwin: 'minion', witch: 'minion', cerenovus: 'minion', pithag: 'minion',
+  // SNV 恶魔
+  fanggu: 'demon', vigormortis: 'demon', nodashii: 'demon', vortox: 'demon'
 };
 
 // 角色所属剧本映射（用于按剧本过滤角色选项）
@@ -4818,8 +5128,26 @@ const ROLE_SCRIPT_MAP = {
   gambler: 'bmr', gossip: 'bmr', courtier: 'bmr', professor: 'bmr', bard: 'bmr',
   tealady: 'bmr', pacifist: 'bmr', fool: 'bmr', tinker: 'bmr', moonchild: 'bmr',
   lunatic: 'bmr', madman: 'bmr', godfather: 'bmr', devilsadvocate: 'bmr', assassin: 'bmr',
-  mastermind: 'bmr', zombuul: 'bmr', pukka: 'bmr', shabaloth: 'bmr', po: 'bmr'
+  mastermind: 'bmr', zombuul: 'bmr', pukka: 'bmr', shabaloth: 'bmr', po: 'bmr',
+  // SNV
+  clockmaker: 'snv', dreamer: 'snv', snakecharmer: 'snv', mathematician: 'snv',
+  flowergirl: 'snv', towncrier: 'snv', oracle: 'snv', savant: 'snv', seamstress: 'snv',
+  philosopher: 'snv', artist: 'snv', juggler: 'snv', sage: 'snv', mutant: 'snv',
+  sweetheart: 'snv', barber: 'snv', klutz: 'snv', eviltwin: 'snv', witch: 'snv',
+  cerenovus: 'snv', pithag: 'snv', fanggu: 'snv', vigormortis: 'snv', nodashii: 'snv',
+  vortox: 'snv'
 };
+
+// 各剧本影响配比的角色（null 表示该剧本没有此类角色）
+const SCRIPT_SETUP_CHAR = {
+  tb: { id: 'baron', name: '男爵', type: 'baron' },
+  bmr: { id: 'godfather', name: '教父', type: 'godfather' },
+  snv: { id: null, name: '', type: null }
+};
+
+function getSetupChar(scriptId) {
+  return SCRIPT_SETUP_CHAR[scriptId] || SCRIPT_SETUP_CHAR.tb;
+}
 
 // 人数配置表：[玩家数, 村民, 外来者, 爪牙, 恶魔]
 const ROLE_COMPOSITION_TABLE = [
@@ -4833,7 +5161,7 @@ function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
   const entry = ROLE_COMPOSITION_TABLE.find(c => c[0] === playerCount);
   if (!entry) return { townsfolk: 3, outsider: 0, minion: 1, demon: 1 };
   let t = entry[1], o = entry[2];
-  const setupType = (scriptId === 'bmr') ? 'godfather' : 'baron';
+  const setupType = getSetupChar(scriptId).type;
   let effectiveDelta = null;
   if (hasSetupChar) {
     if (setupType === 'baron') {
@@ -4862,8 +5190,9 @@ function getComp(playerCount, hasSetupChar, scriptId, gfDelta = customGfDelta) {
 // 验证自定义角色配置，返回 { valid: boolean, errors: string[], comp: object, counts: object }
 function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = customGfDelta) {
   const script = scriptId || 'tb';
-  const setupCharId = (script === 'bmr') ? 'godfather' : 'baron';
-  const setupCharName = (script === 'bmr') ? '教父' : '男爵';
+  const setupChar = getSetupChar(script);
+  const setupCharId = setupChar.id;
+  const setupCharName = setupChar.name;
   const assigned = Object.values(customRoleMap).filter(r => r);
   const errors = [];
 
@@ -4897,7 +5226,8 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = cus
     errors.push(`恶魔最多 ${comp.demon} 名，已指定 ${counts.demon} 名`);
   }
   if (counts.minion > comp.minion) {
-    errors.push(`爪牙最多 ${comp.minion} 名${hasSetupChar ? '' : `（不含${setupCharName}）`}，已指定 ${counts.minion} 名`);
+    const setupTag = (hasSetupChar || !setupCharName) ? '' : `（不含${setupCharName}）`;
+    errors.push(`爪牙最多 ${comp.minion} 名${setupTag}，已指定 ${counts.minion} 名`);
   }
   if (counts.outsider > comp.outsider) {
     errors.push(`外来者最多 ${comp.outsider} 名${gfTag ? `（含${gfTag}）` : ''}，已指定 ${counts.outsider} 名`);
@@ -4986,7 +5316,36 @@ const CUSTOM_ROLE_OPTIONS = [
   { id: 'zombuul', name: '僵怖（恶魔）', color: '#E64340' },
   { id: 'pukka', name: '普卡（恶魔）', color: '#E64340' },
   { id: 'shabaloth', name: '沙巴洛斯（恶魔）', color: '#E64340' },
-  { id: 'po', name: '珀（恶魔）', color: '#E64340' }
+  { id: 'po', name: '珀（恶魔）', color: '#E64340' },
+  // SNV 村民
+  { id: 'clockmaker', name: '钟表匠（村民）', color: '#07C160' },
+  { id: 'dreamer', name: '入梦人（村民）', color: '#07C160' },
+  { id: 'snakecharmer', name: '舞蛇人（村民）', color: '#07C160' },
+  { id: 'mathematician', name: '数学家（村民）', color: '#07C160' },
+  { id: 'flowergirl', name: '花艺师（村民）', color: '#07C160' },
+  { id: 'towncrier', name: '公告员（村民）', color: '#07C160' },
+  { id: 'oracle', name: '神谕者（村民）', color: '#07C160' },
+  { id: 'savant', name: '学者（村民）', color: '#07C160' },
+  { id: 'seamstress', name: '裁缝（村民）', color: '#07C160' },
+  { id: 'philosopher', name: '哲学家（村民）', color: '#07C160' },
+  { id: 'artist', name: '艺术家（村民）', color: '#07C160' },
+  { id: 'juggler', name: '杂耍艺人（村民）', color: '#07C160' },
+  { id: 'sage', name: '贤者（村民）', color: '#07C160' },
+  // SNV 外来者
+  { id: 'mutant', name: '变种人（外来者）', color: '#FF9500' },
+  { id: 'sweetheart', name: '心上人（外来者）', color: '#FF9500' },
+  { id: 'barber', name: '理发师（外来者）', color: '#FF9500' },
+  { id: 'klutz', name: '傻瓜（外来者）', color: '#FF9500' },
+  // SNV 爪牙
+  { id: 'eviltwin', name: '邪恶双子（爪牙）', color: '#FA5151' },
+  { id: 'witch', name: '女巫（爪牙）', color: '#FA5151' },
+  { id: 'cerenovus', name: '洗脑师（爪牙）', color: '#FA5151' },
+  { id: 'pithag', name: '坑巫（爪牙）', color: '#FA5151' },
+  // SNV 恶魔
+  { id: 'fanggu', name: '方古（恶魔）', color: '#E64340' },
+  { id: 'vigormortis', name: '亡灵法师（恶魔）', color: '#E64340' },
+  { id: 'nodashii', name: '黑暗之源（恶魔）', color: '#E64340' },
+  { id: 'vortox', name: '混沌（恶魔）', color: '#E64340' }
 ];
 
 function openCustomRolePanel() {
