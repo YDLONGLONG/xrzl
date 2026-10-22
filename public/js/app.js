@@ -30,6 +30,7 @@ const REQUEST_RELEASE_MAP = {
   'room:join': ['room:joined', 'room:reconnected', 'room:error'],
   'room:leave': ['room:stateUpdate'],
   'room:seat': ['room:stateUpdate', 'room:error'],
+  'room:unseat': ['room:stateUpdate', 'room:error'],
   'room:toggleReady': ['room:stateUpdate', 'room:error'],
   'room:addBot': ['room:stateUpdate', 'room:error'],
   'room:setScript': ['room:stateUpdate', 'room:error'],
@@ -1074,6 +1075,11 @@ function sitDown(seatNum) {
   socket.emit('room:seat', { seatNumber: seatNum });
 }
 
+// 下座：回到旁观者状态（座位左上角按钮触发）
+function standUp() {
+  socket.emit('room:unseat');
+}
+
 function toggleReady() {
   socket.emit('room:toggleReady');
 }
@@ -1168,6 +1174,7 @@ function renderGameState(state) {
   }
   updateHeader(state);
   renderSeats(state);
+  renderSpectators(state);
   renderCenter(state);
   renderScriptPanel(state);
   renderRoleCard(state);
@@ -1297,11 +1304,15 @@ function renderSeats(state) {
       const canKick = isHostView && !state.gameStarted && !p.isHost;
       const clickHandler = canNominate ? `onclick="nominatePlayer('${p.id}')"` : '';
       const kickBtn = canKick ? `<span class="kick-btn" onclick="event.stopPropagation(); kickPlayer('${p.id}')" title="踢出房间">✕</span>` : '';
+      // 自己的座位：左上角显示「下座」按钮（悬停才出现，移动端常显）
+      const unseatBtn = (isMe && !state.gameStarted)
+        ? `<span class="unseat-btn" onclick="event.stopPropagation(); standUp()" title="下座">下</span>` : '';
 
       html += `<div class="${classes.join(' ')}" data-pid="${p.id}" ${clickHandler}>
         <div class="seat-num">${i+1}</div>
         <div class="seat-name">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</div>
         ${markHtml}
+        ${unseatBtn}
         ${kickBtn}
       </div>`;
     } else if (!state.gameStarted) {
@@ -1313,6 +1324,37 @@ function renderSeats(state) {
     // 游戏开始后空座位不显示
   }
   container.innerHTML = html;
+}
+
+// 旁观者列表（已加入房间但未入座）
+function renderSpectators(state) {
+  const panel = $('spectatorPanel');
+  const list = $('spectatorList');
+  const countEl = $('spectatorCount');
+  if (!panel || !list) return;
+
+  const spectators = (state && state.spectators) ? state.spectators : [];
+  if (!myRoomId || spectators.length === 0) {
+    panel.style.display = 'none';
+    list.innerHTML = '';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+
+  const isHost = state.hostId === myId;
+  const canKick = isHost && !state.gameStarted;
+  panel.style.display = 'block';
+  if (countEl) countEl.textContent = `(${spectators.length})`;
+
+  list.innerHTML = spectators.map(p => {
+    const cls = ['spectator-chip'];
+    if (p.id === myId) cls.push('you');
+    if (p.isConnected === false) cls.push('disconnected');
+    const kick = (canKick && p.id !== myId && !p.isHost)
+      ? `<span class="spectator-kick" onclick="event.stopPropagation(); kickPlayer('${p.id}')" title="踢出房间">✕</span>`
+      : '';
+    return `<span class="${cls.join(' ')}" title="${escapeHtml(p.name)}${p.isHost ? '（房主）' : ''}">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}${kick}</span>`;
+  }).join('');
 }
 
 // 中央剧本选择（仅大厅阶段显示）

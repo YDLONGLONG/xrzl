@@ -814,6 +814,16 @@ class GameEngine {
       .sort((a, b) => a.seat - b.seat);
 
     const seatedCount = players.length;
+    // 未入座的旁观者（游戏进行中仍留在房间里的玩家）
+    const spectators = Array.from(room.players.values())
+      .filter(p => p.seat === -1)
+      .map(p => ({
+        id: p.id,
+        name: p.name,
+        isHost: p.id === room.hostId,
+        isConnected: p.isConnected,
+        isBot: !!p.isBot
+      }));
     const neededConfirm = Array.from(room.players.values())
       .filter(p => p.seat !== -1 && (p.isBot || p.isConnected)).length;
 
@@ -835,6 +845,7 @@ class GameEngine {
       hostId: room.hostId,
       players,
       seats: room.seats.map(s => s ? s.id : null),
+      spectators,
       gameStarted: room.gameStarted,
       phase: gs.phase,
       dayCount: gs.dayCount,

@@ -255,6 +255,19 @@ function replacePlayerId(room, engine, oldId, newId) {
   }
 }
 
+// 未入座的旁观者（加入了房间但没坐座位）
+function getSpectators(room) {
+  if (!room) return [];
+  return Array.from(room.players.values())
+    .filter(p => p.seat === -1)
+    .map(p => ({
+      id: p.id, name: p.name,
+      isHost: p.id === room.hostId,
+      isConnected: p.isConnected,
+      isBot: !!p.isBot
+    }));
+}
+
 function broadcastRoomState(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -273,6 +286,7 @@ function broadcastRoomState(roomId) {
       io.to(pid).emit('room:stateUpdate', {
         roomId: room.id, hostId: room.hostId, players,
         seats: room.seats.map(s => s ? s.id : null),
+        spectators: getSpectators(room),
         gameStarted: false, phase: 'LOBBY',
         isHost: pid === room.hostId,
         script: room.script || 'tb',
@@ -691,6 +705,22 @@ io.on('connection', (socket) => {
     } else {
       socket.emit('room:error', { message: '座位已被占用' }); return;
     }
+    broadcastRoomState(roomId);
+  });
+
+  // 下座（回到旁观者状态，游戏未开始时可用）
+  socket.on('room:unseat', () => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
+    const { roomId, room } = result;
+    if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法下座' }); return; }
+
+    const player = room.players.get(socket.id);
+    if (!player || player.seat === -1) return;
+
+    room.seats[player.seat] = null;
+    player.seat = -1;
+    player.isReady = false;
     broadcastRoomState(roomId);
   });
 
