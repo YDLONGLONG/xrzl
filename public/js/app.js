@@ -35,6 +35,7 @@ const REQUEST_RELEASE_MAP = {
   'room:addBot': ['room:stateUpdate', 'room:error'],
   'room:setScript': ['room:stateUpdate', 'room:error'],
   'room:kick': ['room:stateUpdate', 'room:error'],
+  'room:aiTakeover': ['room:stateUpdate', 'game:stateUpdate', 'room:error'],
   'game:start': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
   'game:confirm': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
   'night:action': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
@@ -928,7 +929,7 @@ function checkReconnectInfo() {
       card.style.display = 'none';
       return;
     }
-    // 重连信息过期（服务端RECONNECT_TIMEOUT是3分钟，这里留5分钟余量）
+    // 重连信息过期：仅用于展示本地重连卡片，超过 5 分钟不再引导重连
     if (time && Date.now() - parseInt(time) > 5 * 60 * 1000) {
       clearReconnectInfo();
       card.style.display = 'none';
@@ -1131,6 +1132,19 @@ async function kickPlayer(pid) {
   emitRequest('room:kick', { targetId: pid }, originEl);
 }
 
+// 房主：将断线玩家立即交由 AI 托管（托管后本人重连可收回控制权）
+async function takeoverByAi(pid) {
+  const originEl = getLoadingClickTarget();
+  const p = currentState && currentState.players ? currentState.players.find(x => x.id === pid) : null;
+  if (!p) return;
+  const ok = await showConfirm(
+    `立即将 ${p.name} 交由 AI 托管？托管后其确认、投票与夜间行动由 AI 代打，本人重连可收回控制权。`,
+    { type: 'warning', title: '交由 AI 托管' }
+  );
+  if (!ok) return;
+  emitRequest('room:aiTakeover', { playerId: pid }, originEl);
+}
+
 // 角色数量配置（人数 → 村民/外来者/爪牙/恶魔）
 const ROLE_COMPOSITION_MAP = {};
 [
@@ -1288,19 +1302,28 @@ function renderSeats(state) {
       if (isDead) classes.push('dead');
       if (p.isConnected === false) classes.push('disconnected');
 
+      // 房主视角：可以踢人，也可以把断线玩家立即交由 AI 托管
+      const isHostView = state.hostId === myId;
+      const canTakeover = isHostView && !p.isBot && p.isConnected === false && !p.aiTakeover;
+
       let markHtml = '';
       if (isDead) markHtml += '<span class="seat-mark dead-mark">死亡</span>';
       if (p.isHost) markHtml += '<span class="seat-mark" style="color:#07C160;">房主</span>';
       if (state.gameStarted && p.voteToken > 0 && isDead) markHtml += '<span class="seat-mark" style="color:#10AEFF;">余1票</span>';
       if (!state.gameStarted && p.isReady) markHtml += '<span class="seat-mark good">已准备</span>';
-      if (p.isConnected === false) markHtml += '<span class="seat-mark" style="color:#F5822B; background:rgba(245,130,43,0.15);">断线</span>';
+      if (p.isConnected === false) {
+        const disconnectLabel = p.aiTakeover ? 'AI托管' : '断线';
+        // 断线标记本身就是房主的「立即托管」入口（点击不触发提名/行动）
+        markHtml += canTakeover
+          ? `<span class="seat-mark takeover-mark" onclick="event.stopPropagation(); takeoverByAi('${p.id}')" title="点击立即交由 AI 托管">${disconnectLabel} · 托管</span>`
+          : `<span class="seat-mark" style="color:#F5822B; background:rgba(245,130,43,0.15);">${disconnectLabel}</span>`;
+      }
 
       // 白天可以提名任意座位（包括死亡玩家）：死者同样可被提名，
       // 僵怖这类"被当作死亡但仍存活"的角色因此仍能被再次处决。
       // 但发起提名的必须是存活玩家：死亡玩家（含被当作死亡的僵怖）不能发起提名。
       const canNominate = (state.phase === 'DAY_DISCUSSION' || state.phase === 'NOMINATION_PHASE') &&
                           state.gameStarted && me && me.isAlive && !me.isDead;
-      const isHostView = state.hostId === myId;
       const canKick = isHostView && !state.gameStarted && !p.isHost;
       const clickHandler = canNominate ? `onclick="nominatePlayer('${p.id}')"` : '';
       const kickBtn = canKick ? `<span class="kick-btn" onclick="event.stopPropagation(); kickPlayer('${p.id}')" title="踢出房间">✕</span>` : '';
@@ -1794,10 +1817,12 @@ function renderCenter(state) {
       .filter(p => p.seat >= 0)
       .sort((a, b) => a.seat - b.seat)
       .map(p => {
-        const isConfirmed = confirmedIds.includes(p.id);
+        // 已交由 AI 托管的断线玩家由 AI 代确认，不阻塞进度
+        const isAiHosted = p.aiTakeover && p.isConnected === false;
+        const isConfirmed = confirmedIds.includes(p.id) || isAiHosted;
         const isYou = p.id === myId;
-        return `<span class="confirm-player-chip${isConfirmed ? ' confirmed' : ' unconfirmed'}${isYou ? ' you' : ''}">
-          ${isConfirmed ? '✓' : '○'} ${p.seat+1}号${p.name}
+        return `<span class="confirm-player-chip${isConfirmed ? ' confirmed' : ' unconfirmed'}${isYou ? ' you' : ''}"${isAiHosted ? ' title="已交由 AI 托管，由 AI 代确认"' : ''}>
+          ${isAiHosted ? '🤖' : (isConfirmed ? '✓' : '○')} ${p.seat+1}号${p.name}
         </span>`;
       })
       .join('');
@@ -5347,7 +5372,7 @@ function closeRoleOverview() {
   document.getElementById('roleOverviewPanel').style.display = 'none';
 }
 
-// ========== 自定义角色分配（测试用） ==========
+// ========== 自定义角色分配 ==========
 // 角色分类（与服务端 game-config.js 保持一致）
 const ROLE_CATEGORY = {
   // TB 村民

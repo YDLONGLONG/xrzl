@@ -26,6 +26,7 @@ class GameEngine {
       pendingExecution: null,
       todaysDeaths: [],
       nightQueue: [],
+      wokenThisNight: [], // 本夜实际被唤醒的玩家（侍女等技能依赖）
       currentNightIndex: -1,
       currentWakePlayerId: null,
       currentWakeInfo: null, // 当前唤醒玩家的行动面板数据（掉线重连后补发用）
@@ -579,10 +580,17 @@ class GameEngine {
     const needConfirmPhases = ['DAY_DISCUSSION'];
     if (!needConfirmPhases.includes(gs.phase)) return;
 
-    const seatedPlayers = getSeatedPlayers(this.room).filter(p => p.isBot || p.isConnected);
-    if (this.room.confirmations.size >= seatedPlayers.length && seatedPlayers.length > 0) {
-      this.onAllConfirmed();
-    }
+    // 断线但尚未被托管的真人仍要计入：座位为他们保留，等重连或房主手动托管。
+    // 只有已交由 AI 托管的断线玩家改由 AI 代确认，不再阻塞阶段推进。
+    const seatedPlayers = getSeatedPlayers(this.room)
+      .filter(p => p.isBot || p.isConnected || !p.aiTakeover);
+    if (seatedPlayers.length === 0) return;
+
+    // 必须按「名单内还有谁没确认」判断，不能用 confirmations.size：
+    // 集合里可能残留名单外玩家（已托管/已断线）的确认记录，用 size 比较会让计数虚高，
+    // 出现「房主还没确认，托管别人后阶段却被直接推进」的问题。
+    const pending = seatedPlayers.filter(p => !this.room.confirmations.has(p.id));
+    if (pending.length === 0) this.onAllConfirmed();
   }
 
   // 处理夜晚行动
@@ -807,7 +815,8 @@ class GameEngine {
         isHost: p.id === room.hostId,
         voteToken: p.voteToken,
         isConnected: p.isConnected,
-        isBot: !!p.isBot
+        isBot: !!p.isBot,
+        aiTakeover: !!p.aiTakeover
       }))
       // 固定按座位号排序：players 的 Map 顺序会受加入/重连/加机器人时机影响，
       // 前端多处按此数组顺序渲染（选人、投票、会话列表等），不排序会出现“座位号没变但顺序变了”
@@ -824,8 +833,12 @@ class GameEngine {
         isConnected: p.isConnected,
         isBot: !!p.isBot
       }));
-    const neededConfirm = Array.from(room.players.values())
-      .filter(p => p.seat !== -1 && (p.isBot || p.isConnected)).length;
+    // 与 checkConfirmations 口径一致：断线未托管的真人仍需要确认
+    const needConfirmPlayers = Array.from(room.players.values())
+      .filter(p => p.seat !== -1 && (p.isBot || p.isConnected || !p.aiTakeover));
+    const neededConfirm = needConfirmPlayers.length;
+    // 进度只统计名单内玩家的确认，避免把已被托管玩家的确认记录算进分子
+    const confirmedNeeded = needConfirmPlayers.filter(p => room.confirmations.has(p.id)).length;
 
     // 管家限制：主人存活且尚未投赞成时，本人不能投赞成（中毒者不受限）
     // 判定口径与 VoteManager.castVote 保持一致，供前端禁用「赞成」按钮
@@ -874,7 +887,7 @@ class GameEngine {
       winReason: gs.winReason,
       winEffect: gs.winEffect || null,
       mastermindExtraRound: !!gs.mastermindExtraRound,
-      confirmedCount: room.confirmations.size,
+      confirmedCount: confirmedNeeded,
       confirmedIds: Array.from(room.confirmations),
       totalNeeded: neededConfirm,
       yourRole: viewer.role ? (() => {

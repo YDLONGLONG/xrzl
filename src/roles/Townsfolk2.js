@@ -1,33 +1,14 @@
 // BMR镇民角色集合（黯月初升）
 const Role = require('./Role');
-const { BMR_ROLE_IDS } = require('../config/game-config');
+const { BMR_ROLE_IDS, getScriptConfig } = require('../config/game-config');
 const { randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, revivePlayer } = require('../utils/helpers');
 
 // 辅助：获取当晚因自身能力被唤醒的玩家ID集合
-// 判定必须与 NightResolver.wakeNext 的 shouldWake 逻辑保持一致，
-// 否则女仆等依赖"谁被唤醒"的技能会得到错误结果。
-// 注意：夜晚行动顺序的真正来源是脚本配置（FIRST_NIGHT_ORDER / OTHER_NIGHT_ORDER）
-// 与 getNightWakeInfo，而不是角色类上的 firstNightOrder/otherNightOrder 数值。
-function getWokenPlayerIds(gameState, engine) {
-  const wokenIds = new Set();
-  const isFirstNight = gameState.nightCount === 0;
-  for (const [, player] of engine.room.players) {
-    if (!player.isAlive || !player.role) continue;
-    const role = player.role;
-    const isDrunk = player.isDrunk === true;
-    const effectiveRole = (isDrunk && player.fakeRole) ? player.fakeRole : role;
-    const wakeInfo = role.getNightWakeInfo ? role.getNightWakeInfo(gameState, player, engine, isFirstNight) : null;
-    const selectCount = isDrunk ? (role.selectCount || 0) : (effectiveRole.selectCount || 0);
-    const wakesForInfo = effectiveRole.wakesForInfo === true;
-    const selectType = effectiveRole.selectType || 'player';
-    const isFakeDemon = role.isFakeDemon === true;
-    const shouldWake = (selectCount > 0) || wakesForInfo || selectType === 'role'
-      || (isDrunk && wakeInfo !== null) || (isFakeDemon && wakeInfo !== null);
-    if (shouldWake) {
-      wokenIds.add(player.id);
-    }
-  }
-  return wokenIds;
+// 数据来源是 NightResolver.markWoken 记录的真实唤醒名单：只有真正进入行动面板的玩家才算，
+// 因此首夜不行动的旅店老板/赌徒、首夜不杀人的恶魔等不会被误计入。
+// （不要再用角色静态属性判断，否则"能否选人"会被误当成"当晚是否被唤醒"。）
+function getWokenPlayerIds(gameState) {
+  return new Set(Array.isArray(gameState.wokenThisNight) ? gameState.wokenThisNight : []);
 }
 
 // 辅助：从夜晚行动记录中取出目标ID列表（兼容单目标 targetId 与多目标 targets）
@@ -40,12 +21,12 @@ function getActionTargetIds(action) {
 }
 
 // 辅助：检查玩家是否被恶魔杀害（当夜）
-function isKilledByDemon(gameState, playerId) {
-  const demonActionKeys = ['imp', 'zombuul', 'pukka', 'shabaloth', 'po'];
-  return demonActionKeys.some(k => {
-    const action = gameState.nightActions[k];
-    return getActionTargetIds(action).includes(playerId);
-  });
+// 恶魔名单取当前剧本配置：不同剧本的角色不会同时在场，不能硬编码其它剧本的恶魔。
+function isKilledByDemon(gameState, playerId, engine) {
+  const scriptId = (engine && engine.room && engine.room.script) || 'tb';
+  const demonRoles = getScriptConfig(scriptId).demonRoles || [];
+  const nightActions = gameState.nightActions || {};
+  return demonRoles.some(roleId => getActionTargetIds(nightActions[roleId]).includes(playerId));
 }
 
 // ==================== 1. 祖母 ====================
@@ -106,7 +87,7 @@ class Grandmother extends Role {
       const grandchild = engine.room.players.get(grandchildId);
       if (!grandchild) return;
 
-      if (grandchild.isDead && grandchild.deathNight === gameState.nightCount && isKilledByDemon(gameState, grandchildId)) {
+      if (grandchild.isDead && grandchild.deathNight === gameState.nightCount && isKilledByDemon(gameState, grandchildId, engine)) {
         if (player.isAlive && !player.isPoisoned) {
           const result = engine.deathManager.killPlayer(player.id, 'GRANDMOTHER', gameState.nightCount, -1);
           if (result && !result.prevented) {
@@ -243,7 +224,7 @@ class Maid extends Role {
     const targets = player.abilityState.maidTargets;
     if (!targets || targets.length !== 2) return;
 
-    const wokenIds = getWokenPlayerIds(gameState, engine);
+    const wokenIds = getWokenPlayerIds(gameState);
     let count = 0;
     for (const tid of targets) {
       if (wokenIds.has(tid)) count++;

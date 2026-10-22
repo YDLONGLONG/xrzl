@@ -220,8 +220,9 @@ class BotManager {
     }
 
     // 确认阶段 - 自动确认（讨论/提名）—— 天亮已改为自动推进，不再需要确认
+    // 机器人，以及房主手动交由 AI 托管的断线真人，都由 AI 代为确认
     if (['DAY_DISCUSSION'].includes(gs.phase)) {
-      if (bot.isBot && !room.confirmations.has(botId) && !bot._botConfirmed) {
+      if (this._isAiControlled(bot) && !room.confirmations.has(botId) && !bot._botConfirmed) {
         if (bot._botTimer) return;
         bot._botConfirmed = true;
         this._scheduleBot(botId, 600 + Math.random() * 2000, (b) => {

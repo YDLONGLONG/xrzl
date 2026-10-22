@@ -26,6 +26,8 @@ class NightResolver {
     gs.deathsToAnnounce = [];
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
+    // 本夜实际被唤醒的玩家（侍女等「谁被唤醒」类技能的唯一数据来源）
+    gs.wokenThisNight = [];
     this.pendingRavenkeeper = null;
     this.extraBarberSwapNight = null;
     gs.pithagOutcome = null;
@@ -60,6 +62,8 @@ class NightResolver {
     gs.deathsToAnnounce = [];
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
+    // 本夜实际被唤醒的玩家（侍女等「谁被唤醒」类技能的唯一数据来源）
+    gs.wokenThisNight = [];
     this.pendingRavenkeeper = null;
     this.extraBarberSwapNight = null;
     gs.pithagOutcome = null;
@@ -179,6 +183,14 @@ class NightResolver {
     }
 
     return queue;
+  }
+
+  // 记录本夜实际被唤醒的玩家：只有真正进入行动面板的玩家才算，
+  // 因此首夜不行动的旅店老板/赌徒、首夜不杀人的恶魔等不会被误记。
+  markWoken(gs, playerId) {
+    if (!gs || !playerId) return;
+    if (!Array.isArray(gs.wokenThisNight)) gs.wokenThisNight = [];
+    if (!gs.wokenThisNight.includes(playerId)) gs.wokenThisNight.push(playerId);
   }
 
   wakeNext() {
@@ -318,6 +330,9 @@ class NightResolver {
           // 缓存本夜唤醒信息：玩家掉线/刷新后重新拿到状态时仍能补出行动面板，
           // 否则会一直停在「等待其他玩家行动」且无按钮可点。
           gs.currentWakeInfo = wakePayload;
+
+          // 真正进入行动面板才算「被唤醒」：可选目标不足而跳过的分支不会走到这里
+          this.markWoken(gs, player.id);
 
           this.engine.io.to(player.id).emit('night:wake', wakePayload);
 
@@ -565,6 +580,7 @@ class NightResolver {
     this.pendingRavenkeeper = player.id;
     gs.currentWakePlayerId = player.id;
     gs.phase = PHASES.NIGHT_WAKE;
+    this.markWoken(gs, player.id);
 
     gs.currentWakeInfo = {
       role: player.role.name,
@@ -661,6 +677,7 @@ class NightResolver {
     this.extraBarberSwapNight = gs.nightCount;
     gs.currentWakePlayerId = demon.id;
     gs.phase = PHASES.NIGHT_WAKE;
+    this.markWoken(gs, demon.id);
     gs.currentWakeInfo = {
       role: '理发师',
       barberSwap: true,

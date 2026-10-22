@@ -1435,6 +1435,17 @@ body.resizing-active * {
 .seat-mark.evil { color: #E64340; }
 .seat-mark.dead-mark { color: #999999; }
 
+/* 断线标记：房主可点击，立即将该玩家交由 AI 托管 */
+.seat-mark.takeover-mark {
+  color: #F5822B;
+  background: rgba(245, 130, 43, 0.15);
+  border-radius: 4px;
+  padding: 0 3px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.seat-mark.takeover-mark:hover { background: rgba(245, 130, 43, 0.3); }
+
 /* 旁观者列表（未入座玩家） */
 .spectator-panel {
   margin: 0 0 10px;
