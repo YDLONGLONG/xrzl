@@ -804,6 +804,7 @@ function backToHome() {
   godState = null;
   isReconnecting = false;
   roleInfoHtml = '';
+  resetRoleAbilityUi();
   systemMessageHtml = '';
   systemMessageClass = '';
   const cmEl = $('centerMessage');
@@ -1793,12 +1794,44 @@ function buildRoleInfoHtml(state, role, me) {
   return html + '</div>';
 }
 
+// 重置身份技能按钮栏（大厅阶段 / 无身份时调用）
+// 作用：退出房间后重新创建 / 加入房间时，清掉上一局遗留的技能按钮与「已使用」文案，
+// 避免在没有角色的情况下仍显示杀手、造谣者等按钮。
+function resetRoleAbilityUi() {
+  const buttonIds = ['slayerBtn', 'gossipBtn', 'moonchildBtn', 'artistBtn', 'savantBtn',
+    'jugglerBtn', 'mutantBtn', 'cerenovusBtn', 'klutzBtn'];
+  buttonIds.forEach(id => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.style.display = 'none';
+    btn.disabled = false;
+    btn.classList.remove('disabled');
+  });
+  const defaultTexts = {
+    slayerBtn: '杀手：击杀恶魔',
+    gossipBtn: '造谣者：发表声明',
+    artistBtn: '艺术家：向说书人提问',
+    savantBtn: '学者：提问两个问题',
+    jugglerBtn: '杂耍艺人：猜角色',
+    cerenovusBtn: '洗脑宣告'
+  };
+  Object.keys(defaultTexts).forEach(id => {
+    const btn = $(id);
+    if (btn) btn.textContent = defaultTexts[id];
+  });
+  const bar = $('roleAbilityBar');
+  if (bar) bar.style.display = 'none';
+}
+
 function renderRoleCard(state) {
   const card = $('roleCard');
   const me = state.players?.find(p => p.id === myId);
   
   if (!state.yourRole || !me) {
+    // 大厅 / 未分配身份：同时清理上一局遗留的身份信息与技能按钮
     card.style.display = 'none';
+    roleInfoHtml = '';
+    resetRoleAbilityUi();
     return;
   }
 
