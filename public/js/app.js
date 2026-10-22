@@ -1304,7 +1304,7 @@ function renderSeats(state) {
       const canKick = isHostView && !state.gameStarted && !p.isHost;
       const clickHandler = canNominate ? `onclick="nominatePlayer('${p.id}')"` : '';
       const kickBtn = canKick ? `<span class="kick-btn" onclick="event.stopPropagation(); kickPlayer('${p.id}')" title="踢出房间">✕</span>` : '';
-      // 自己的座位：左上角显示「下座」按钮（悬停才出现，移动端常显）
+      // 自己的座位：右上角显示「下座」按钮（悬停才出现，移动端常显）
       const unseatBtn = (isMe && !state.gameStarted)
         ? `<span class="unseat-btn" onclick="event.stopPropagation(); standUp()" title="下座">下</span>` : '';
 
