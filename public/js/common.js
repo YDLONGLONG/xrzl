@@ -96,24 +96,6 @@ function getToastContainer() {
   return container;
 }
 
-function getQueryParam(name) {
-  const params = new URLSearchParams(window.location.search);
-  return params.get(name);
-}
-
-function getPlayerId() {
-  return sessionStorage.getItem('playerId');
-}
-
-function getRoomId() {
-  return sessionStorage.getItem('roomId');
-}
-
-function setSession(roomId, playerId) {
-  sessionStorage.setItem('roomId', roomId);
-  sessionStorage.setItem('playerId', playerId);
-}
-
 function showConfirm(message, options = {}) {
   return new Promise((resolve) => {
     const title = options.title || '确认';
@@ -375,22 +357,4 @@ function showDoubleTextInput(title, options = {}) {
       overlay.classList.add('confirm-show');
     });
   });
-}
-
-function copyToClipboard(text) {
-  if (navigator.clipboard && window.isSecureContext) {
-    return navigator.clipboard.writeText(text);
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    document.execCommand('copy');
-  } finally {
-    document.body.removeChild(textarea);
-  }
-  return Promise.resolve();
 }

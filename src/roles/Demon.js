@@ -1,7 +1,6 @@
 // 恶魔角色
 const Role = require('./Role');
 const { ROLE_IDS } = require('../config/game-config');
-const { getAlivePlayers } = require('../utils/helpers');
 
 // 小恶魔
 class Imp extends Role {

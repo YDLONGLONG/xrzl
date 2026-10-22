@@ -11,12 +11,10 @@ let nightCanSkip = false;
 let nightSelectedRoleId = null;
 let nightPeeked = false;        // 夜间行动时是否临时收起遮罩查看局势
 let currentChatChannel = 'public';
-let selectedNominateTarget = null;
 let whisperTargetId = null; // 当前私聊对象ID
 let isGodView = false;
 let godState = null;
 let isReconnecting = false;
-let reconnectAttempts = 0;
 let pendingManualJoin = false; // 是否由用户手动点击“加入房间”触发
 let hasLeftRoom = false;
 let gossipPending = false;      // 造谣者声明等待裁判判定中（期间禁止重复发动）
@@ -1576,9 +1574,7 @@ function renderCenter(state) {
       case 'DEFENSE':
         const defNom = state.nominations && state.nominations.length > 0 ? state.nominations[state.nominations.length - 1] : null;
         const defNominator = defNom ? state.players.find(p => p.id === defNom.nominatorId) : null;
-        const defNominee = defNom ? state.players.find(p => p.id === defNom.nomineeId) : null;
         const nominatorText = defNominator ? `${defNominator.seat+1}号 ${defNominator.name}` : '?';
-        const nomineeText = defNominee ? `${defNominee.seat+1}号 ${defNominee.name}` : '?';
         if (state.currentDefensePlayerId === myId) {
           html = '<div style="color:#FA5151;">⚖️ 你被提名了！请辩护</div>';
           html += `<div style="margin-top:8px; font-size:0.9em; color:#666666;">提名者：<span style="color:#FF9500;">${nominatorText}</span></div>`;
@@ -2092,30 +2088,6 @@ function showNightWake(data) {
     });
   }
 
-  function renderRoleButtons(onConfirm) {
-    if (!data.selectRoles) return;
-    const roleHint = document.createElement('div');
-    roleHint.style.cssText = 'color:#07C160;margin:12px 0 8px;font-size:14px;';
-    roleHint.textContent = '猜测该玩家的角色：';
-    selectArea.appendChild(roleHint);
-
-    data.selectRoles.forEach(r => {
-      const btn = document.createElement('button');
-      btn.className = `night-role-btn ${(r.category || '').toLowerCase()}`;
-      if (nightSelectedRoleId === r.id) btn.classList.add('selected');
-      btn.textContent = r.name;
-      btn.dataset.rid = r.id;
-      btn.title = r.team === 'GOOD' ? '善良阵营' : '邪恶阵营';
-      btn.onclick = () => {
-        document.querySelectorAll('.night-role-btn.selected').forEach(b => b.classList.remove('selected'));
-        nightSelectedRoleId = r.id;
-        btn.classList.add('selected');
-        updateConfirmState();
-      };
-      selectArea.appendChild(btn);
-    });
-  }
-
   function renderPlayerAndRole() {
     selectArea.innerHTML = '';
     selectArea.style.cssText = 'display:flex;gap:12px;max-width:900px;width:100%;max-height:50vh;overflow-y:auto;';
@@ -2241,18 +2213,6 @@ function showNightWake(data) {
   }
 
   skipBtn.style.display = nightCanSkip ? 'block' : 'none';
-}
-
-function toggleNightRole(rid, btn) {
-  if (nightSelectedRoleId === rid) {
-    nightSelectedRoleId = null;
-    btn.classList.remove('selected');
-  } else {
-    document.querySelectorAll('.night-role-btn.selected').forEach(b => b.classList.remove('selected'));
-    nightSelectedRoleId = rid;
-    btn.classList.add('selected');
-  }
-  $('nightConfirmBtn').disabled = !nightSelectedRoleId;
 }
 
 function toggleNightTarget(pid, btn) {
@@ -2667,53 +2627,6 @@ function showPlayerSelect(title, players, options = {}) {
         }
       });
       btn.addEventListener('click', () => { close(btn.dataset.pid); });
-    });
-
-    overlay.querySelector('.confirm-cancel').addEventListener('click', () => close(null));
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
-
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } };
-    document.addEventListener('keydown', onKey);
-
-    requestAnimationFrame(() => overlay.classList.add('confirm-show'));
-  });
-}
-
-// 角色选择弹窗（杂耍艺人猜角色等）
-function showRoleSelect(title, roles, options = {}) {
-  return new Promise((resolve) => {
-    const type = options.type || 'info';
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-    const buttons = roles.map(r =>
-      `<button class="slayer-player-btn" data-rid="${r.id}" title="${r.team === 'GOOD' ? '善良阵营' : '邪恶阵营'}">${r.name}</button>`
-    ).join('');
-    overlay.innerHTML = `
-      <div class="confirm-dialog confirm-type-${type}" style="min-width:340px;max-width:520px;">
-        <div class="confirm-title">${title}</div>
-        <div class="confirm-input-area" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;max-height:50vh;overflow-y:auto;">
-          ${buttons}
-        </div>
-        <div class="confirm-buttons">
-          <button class="confirm-btn confirm-cancel">取消</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-
-    const close = (result) => {
-      overlay.classList.add('confirm-closing');
-      setTimeout(() => { overlay.remove(); resolve(result); }, 200);
-    };
-
-    overlay.querySelectorAll('.slayer-player-btn').forEach(btn => {
-      btn.style.cssText = 'padding:8px 6px;background:rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.09);border-radius:6px;color:#191919;cursor:pointer;font-size:13px;font-family:inherit;transition:all 0.15s;';
-      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(7,193,96,0.25)'; btn.style.borderColor = 'rgba(7,193,96,0.6)'; });
-      btn.addEventListener('mouseleave', () => {
-        btn.style.background = 'rgba(0,0,0,0.05)';
-        btn.style.borderColor = 'rgba(0,0,0,0.09)';
-      });
-      btn.addEventListener('click', () => close(btn.dataset.rid));
     });
 
     overlay.querySelector('.confirm-cancel').addEventListener('click', () => close(null));
@@ -3250,12 +3163,6 @@ function selectSession(channel, pid) {
 function switchChatChannel(channel) {
   if (channel === 'voice') return;
   selectSession(channel, channel === 'whisper' ? whisperTargetId : null);
-}
-
-function showWhisperPanel() {
-  // 私聊对象选择已由左侧会话列表承担
-  renderSessionList();
-  showToast('请在左侧会话列表中选择私聊对象');
 }
 
 function selectWhisperTarget(pid) {
@@ -5992,7 +5899,6 @@ let _probConfigDraft = null;
 let _probConfigMeta = null;
 let _probBackupAdvanced = null; // 切到标准模式前备份高级模式的配置
 let _probMode = 'standard'; // 'standard' | 'advanced'
-let _probShowAdvanced = false; // 已废弃（高级权重面板已移除），保留声明以兼容
 
 // 偏袒强度映射（前端版，与后端 prob-config.js 中 applyFavorStrength 逻辑一致）
 function applyFavorStrength(cfg, strength) {
@@ -6119,8 +6025,6 @@ function setProbMode(mode) {
   _updateModeButtons();
   _renderProbSettingsUI();
 }
-
-// resetProbConfig 中的 _probShowAdvanced 重置已移除（高级权重面板不再显示）
 
 function _updateModeButtons() {
   const btnS = $('probModeStandard');

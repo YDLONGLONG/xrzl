@@ -1,7 +1,7 @@
 // BMR镇民角色集合（黯月初升）
 const Role = require('./Role');
 const { BMR_ROLE_IDS } = require('../config/game-config');
-const { shuffle, randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, revivePlayer } = require('../utils/helpers');
+const { randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, revivePlayer } = require('../utils/helpers');
 
 // 辅助：获取当晚因自身能力被唤醒的玩家ID集合
 // 判定必须与 NightResolver.wakeNext 的 shouldWake 逻辑保持一致，
@@ -999,7 +999,5 @@ module.exports = {
   Bard,
   Tealady,
   Pacifist,
-  Fool,
-  getActionTargetIds,
-  isKilledByDemon
+  Fool
 };

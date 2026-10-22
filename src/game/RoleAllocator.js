@@ -132,12 +132,6 @@ class RoleAllocator {
     return RoleClass ? new RoleClass() : null;
   }
 
-  // 获取假身份候选角色（TB: 不在场的村民；BMR: 不在场的恶魔给疯子/莽夫）
-  getFakeRolePool(scriptConfig, selectedRoles, category) {
-    const pool = category === 'TOWNSFOLK' ? scriptConfig.townsfolkRoles : scriptConfig.demonRoles;
-    return pool.filter(r => !selectedRoles.includes(r));
-  }
-
   allocate(seatedPlayers) {
     const playerCount = seatedPlayers.length;
     const sc = this.scriptConfig;

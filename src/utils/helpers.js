@@ -21,14 +21,6 @@ function getAlivePlayers(room) {
   return Array.from(room.players.values()).filter(p => p.isAlive && p.seat !== -1);
 }
 
-function getDeadPlayers(room) {
-  return Array.from(room.players.values()).filter(p => p.isDead);
-}
-
-function getPlayerById(room, id) {
-  return room.players.get(id) || null;
-}
-
 function getAliveNeighbors(room, player) {
   const seats = room.seats;
   const total = seats.length;
@@ -155,8 +147,6 @@ module.exports = {
   randomChoice,
   getSeatedPlayers,
   getAlivePlayers,
-  getDeadPlayers,
-  getPlayerById,
   getAliveNeighbors,
   decrementDrunkPlayers,
   applyDrunk,

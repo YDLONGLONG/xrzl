@@ -4,7 +4,7 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const GameEngine = require('./src/game/GameEngine');
-const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('./src/config/prob-config');
+const { getStandardProbConfig, getProbConfigMeta } = require('./src/config/prob-config');
 const { SCRIPTS, PHASES } = require('./src/config/game-config');
 
 // 智谱 GLM API Key：从环境变量读取，切勿硬编码提交到仓库
@@ -283,23 +283,6 @@ function broadcastRoomState(roomId) {
       });
     }
   }
-}
-
-function actuallyRemovePlayer(socketId) {
-  const result = getPlayerRoom(socketId);
-  if (!result) {
-    // 可能已经重连（id变了），尝试从所有房间找
-    for (const [rid, room] of rooms) {
-      for (const [pid, p] of room.players) {
-        if (p.id === socketId || pid === socketId) {
-          removePlayerFromRoom(rid, pid);
-          return;
-        }
-      }
-    }
-    return;
-  }
-  removePlayerFromRoom(result.roomId, socketId);
 }
 
 // 强制移除玩家（含机器人），供房主踢人使用

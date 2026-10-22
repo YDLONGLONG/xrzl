@@ -1,5 +1,5 @@
 // 投票/提名管理器
-const { PHASES, ROLE_IDS } = require('../config/game-config');
+const { PHASES } = require('../config/game-config');
 const { getAlivePlayers, isEffectivelyDead } = require('../utils/helpers');
 const { Bard } = require('../roles/Townsfolk2');
 const { Mutant } = require('../roles/Outsider3');

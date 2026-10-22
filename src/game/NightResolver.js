@@ -989,7 +989,6 @@ class NightResolver {
         const adjustedResult = this.engine.balanceSystem.adjustInfo(player.role, { roleName, teamName }, player, this.engine, '守鸦人中毒正确信息');
         if (adjustedResult.info === null) {
           isFalse = true;
-          const goodRoles = ['洗衣妇','图书管理员','调查员','厨师','共情者','僧侣','守鸦人','圣女','杀手','士兵','市长','圣徒'];
           const evilRoles = ['下毒者','红唇女郎','男爵','间谍','小恶魔'];
           teamName = '邪恶';
           roleName = evilRoles[Math.floor(Math.random() * evilRoles.length)];

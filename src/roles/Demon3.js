@@ -165,6 +165,5 @@ module.exports = {
   Vigormortis,
   NoDashii,
   Vortox,
-  SnvDemon,
   isVortoxActive
 };

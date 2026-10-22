@@ -232,9 +232,6 @@ class DeathManager {
     }
   }
 
-  getAliveCount() {
-    return getAlivePlayers(this.engine.room).length;
-  }
 }
 
 module.exports = DeathManager;

@@ -28,37 +28,6 @@ const BOT_PROB = {
   bot_good_vote_yes: 0.5,
 };
 
-// ==================== 默认配置（标准模式） ====================
-const DEFAULT_PROB_CONFIG = {
-  ...TB_FIXED_PROB,
-  ...BMR_FIXED_PROB,
-  ...BOT_PROB,
-
-  // ===== 动态概率（平衡系统参数）—— 标准模式：按失衡程度帮弱方 =====
-  balance: {
-    baseFavor: 0,                // 偏袒基准概率（必须为 0，否则概率失去渐变）
-    maxFavor: 1,
-    favorMultiplier: 1,          // 偏袒斜率
-    mayorSaveBase: 0.5,
-    mayorSaveBonus: 0.5,
-    mayorSavePenalty: 0.5,
-    goodWeakThreshold: -0.2,
-    evilWeakThreshold: 0.3,
-    redHerringFavorMinion: true,
-    redHerringFavorGood: true,
-    favorStrength: 1.0           // 偏袒强度（0=完全不偏袒；1=按 |score| 线性偏袒，越失衡越强）
-  },
-
-  // ===== 平衡分数权重（通用）=====
-  balanceWeights: {
-    numbersAdvantage: 0.3,
-    deadEvil: 0.2,
-    deadGood: -0.15,
-    keyRolesAlive: 0.15,
-    demonSafety: 0.1
-  }
-};
-
 // ==================== 各剧本固定概率项 ====================
 const SCRIPT_FIXED_PROB = {
   tb: TB_FIXED_PROB,
@@ -126,11 +95,6 @@ function applyFavorStrength(cfg, strength) {
   b.favorStrength = s;
 }
 
-// 深拷贝默认配置
-function getDefaultProbConfig() {
-  return JSON.parse(JSON.stringify(DEFAULT_PROB_CONFIG));
-}
-
 // 获取标准模式配置（按剧本）
 function getStandardProbConfig(scriptId = 'tb') {
   const cfg = {
@@ -158,23 +122,10 @@ function getProbConfigMeta(scriptId = 'tb') {
     .map(cat => ({ ...cat, script: undefined }));
 }
 
-function getProb(config, keyPath) {
-  const parts = keyPath.split('.');
-  let val = config;
-  for (const p of parts) {
-    if (val === undefined || val === null) return undefined;
-    val = val[p];
-  }
-  return val;
-}
-
 module.exports = {
-  DEFAULT_PROB_CONFIG,
   PROB_CONFIG_META,
   SCRIPT_FIXED_PROB,
-  getDefaultProbConfig,
   getStandardProbConfig,
   getProbConfigMeta,
-  applyFavorStrength,
-  getProb
+  applyFavorStrength
 };

@@ -46,14 +46,6 @@ class Role {
 
   // 死亡时
   onDeath(gameState, player, cause, engine) {}
-
-  // 获取给该玩家的信息（考虑中毒/醉酒）
-  getInfo(rawInfo, player, engine) {
-    if (player.isPoisoned || player.isDrunk) {
-      return engine.balanceSystem.adjustInfo(this, rawInfo, player, engine);
-    }
-    return rawInfo;
-  }
 }
 
 module.exports = Role;

@@ -1,7 +1,7 @@
 // 外来者角色
 const Role = require('./Role');
 const { ROLE_IDS } = require('../config/game-config');
-const { randomChoice, shuffle } = require('../utils/helpers');
+const { shuffle } = require('../utils/helpers');
 
 // 圣徒
 class Saint extends Role {

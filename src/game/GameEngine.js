@@ -1,7 +1,7 @@
 // 游戏引擎 - 状态机核心
 const { PHASES, ROLE_IDS } = require('../config/game-config');
-const { getSeatedPlayers, getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
-const { getStandardProbConfig, getProbConfigMeta, PROB_CONFIG_META } = require('../config/prob-config');
+const { getSeatedPlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
+const { getStandardProbConfig, getProbConfigMeta } = require('../config/prob-config');
 const RoleAllocator = require('./RoleAllocator');
 const NightResolver = require('./NightResolver');
 const VoteManager = require('./VoteManager');
