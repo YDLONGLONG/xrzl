@@ -120,6 +120,11 @@ function findDisconnectedPlayer(room, name) {
   return null;
 }
 
+// 已入座玩家数：旁观者（seat=-1）不占房间名额
+function getSeatedCount(room) {
+  return Array.from(room.players.values()).filter(p => p.seat >= 0).length;
+}
+
 function createPlayer(socketId, name) {
   return {
     id: socketId,
@@ -225,6 +230,25 @@ function replacePlayerId(room, engine, oldId, newId) {
       }
     }
 
+    // 人工说书人：同步待处理项中的玩家 id
+    const st = gs.storyteller;
+    if (st) {
+      if (st.pendingWake && st.pendingWake.playerId === oldId) st.pendingWake.playerId = newId;
+      if (Array.isArray(st.pendingInfos)) {
+        st.pendingInfos.forEach(info => { if (info.playerId === oldId) info.playerId = newId; });
+      }
+      if (st.pendingQuestion && st.pendingQuestion.playerId === oldId) st.pendingQuestion.playerId = newId;
+      if (st.nightReview) {
+        ['deaths', 'statuses', 'infos', 'players'].forEach(key => {
+          if (!Array.isArray(st.nightReview[key])) return;
+          st.nightReview[key].forEach(item => {
+            if (item.id === oldId) item.id = newId;
+            if (item.playerId === oldId) item.playerId = newId;
+          });
+        });
+      }
+    }
+
     // 更新red herring
     if (player.abilityState && player.abilityState.redHerring === oldId) {
       // red herring是其他玩家的abilityState，不需要改（引用的是其他玩家）
@@ -267,6 +291,8 @@ function broadcastRoomState(roomId) {
         spectators: getSpectators(room),
         gameStarted: false, phase: 'LOBBY',
         isHost: pid === room.hostId,
+        storytellerMode: !!room.storytellerMode,
+        isStoryteller: pid === room.hostId && !!room.storytellerMode,
         script: room.script || 'tb',
         scriptList: Object.values(SCRIPTS).map(s => ({ id: s.id, name: s.name })),
         probConfig: pid === room.hostId ? JSON.parse(JSON.stringify(room.probConfig)) : null,
@@ -291,9 +317,15 @@ function forceRemovePlayer(roomId, playerId) {
   room.players.delete(playerId);
 
   // 更新房主
+  const wasHost = room.hostId === playerId;
   if (room.hostId === playerId && room.players.size > 0) {
     const humanPlayers = Array.from(room.players.values()).filter(p => !p.isBot && p.isConnected);
     room.hostId = humanPlayers.length > 0 ? humanPlayers[0].id : room.players.keys().next().value;
+  }
+  // 房主交接：中断挂起的说书人问题，避免原等待永久悬挂
+  if (wasHost) {
+    const engine = gameEngines.get(roomId);
+    if (engine && engine.cancelStorytellerQuestion) engine.cancelStorytellerQuestion('hostChanged');
   }
 
   // 房间空了则销毁
@@ -373,9 +405,15 @@ function removePlayerFromRoom(roomId, playerId) {
   room.players.delete(playerId);
 
   // 更新房主
+  const wasHost = room.hostId === playerId;
   if (room.hostId === playerId && room.players.size > 0) {
     const humanPlayers = Array.from(room.players.values()).filter(p => !p.isBot && p.isConnected);
     room.hostId = humanPlayers.length > 0 ? humanPlayers[0].id : room.players.keys().next().value;
+  }
+  // 房主交接：中断挂起的说书人问题，避免原等待永久悬挂
+  if (wasHost) {
+    const engine = gameEngines.get(roomId);
+    if (engine && engine.cancelStorytellerQuestion) engine.cancelStorytellerQuestion('hostChanged');
   }
 
   // 房间空了则销毁
@@ -541,7 +579,8 @@ io.on('connection', (socket) => {
       maxPlayers: 15, minPlayers: 5, confirmations: new Set(), createdAt: new Date(),
       probConfig: getStandardProbConfig('tb'),
       probMode: 'standard',
-      script: 'tb'
+      script: 'tb',
+      storytellerMode: false
     };
     const player = createPlayer(socket.id, playerName);
     room.players.set(socket.id, player);
@@ -608,7 +647,7 @@ io.on('connection', (socket) => {
 
     // 正常加入
     if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，若你是断线玩家请使用相同昵称重连' }); return; }
-    if (room.players.size >= room.maxPlayers) { socket.emit('room:error', { message: '房间已满' }); return; }
+    if (getSeatedCount(room) >= room.maxPlayers) { socket.emit('room:error', { message: '房间已满' }); return; }
 
     const nameExists = Array.from(room.players.values()).some(
       p => p.name.toLowerCase() === playerName.trim().toLowerCase() && p.isConnected
@@ -631,6 +670,9 @@ io.on('connection', (socket) => {
     if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
     const { roomId, room } = result;
     if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始' }); return; }
+    if (room.storytellerMode && socket.id === room.hostId) {
+      socket.emit('room:error', { message: '说书人模式下房主不能入座' }); return;
+    }
 
     seatNumber = parseInt(seatNumber);
     if (isNaN(seatNumber) || seatNumber < 0 || seatNumber >= 15) {
@@ -675,9 +717,33 @@ io.on('connection', (socket) => {
     if (!result) return;
     const { roomId, room } = result;
     if (room.gameStarted) return;
+    if (room.storytellerMode && socket.id === room.hostId) {
+      socket.emit('room:error', { message: '说书人模式下房主无需准备' }); return;
+    }
     const player = room.players.get(socket.id);
     if (player.seat === -1) { socket.emit('room:error', { message: '请先选择座位' }); return; }
     player.isReady = !player.isReady;
+    broadcastRoomState(roomId);
+  });
+
+  // 人工说书人模式开关（仅房主、仅开局前）
+  socket.on('room:setStorytellerMode', ({ enabled } = {}) => {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return; }
+    const { roomId, room } = result;
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以切换说书人模式' }); return; }
+    if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始，无法切换说书人模式' }); return; }
+
+    room.storytellerMode = !!enabled;
+    // 开启后房主不占座，作为专职说书人
+    if (room.storytellerMode) {
+      const host = room.players.get(room.hostId);
+      if (host && host.seat !== -1) {
+        room.seats[host.seat] = null;
+        host.seat = -1;
+        host.isReady = false;
+      }
+    }
     broadcastRoomState(roomId);
   });
 
@@ -706,7 +772,7 @@ io.on('connection', (socket) => {
     const { roomId, room } = result;
     if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有房主可以添加机器人' }); return; }
     if (room.gameStarted) { socket.emit('room:error', { message: '游戏已开始' }); return; }
-    if (room.players.size >= 15) { socket.emit('room:error', { message: '房间已满' }); return; }
+    if (getSeatedCount(room) >= room.maxPlayers) { socket.emit('room:error', { message: '房间已满' }); return; }
 
     const botNames = ['豆包', '通义千问', '文心一言', '混元', 'MiMo', 'DeepSeek', 'GLM', 'Kimi', 'MiniMax', '科大讯飞', 'GPT', 'Claude', 'Gemini', 'Grok'];
     const usedNames = new Set(Array.from(room.players.values()).map(p => p.name));
@@ -928,7 +994,40 @@ io.on('connection', (socket) => {
       socket.emit('room:error', { message: `还有${notReady.length}人未准备` }); return;
     }
 
+    // 人工说书人模式：房主不占座，且必须由房主指定全部座位角色
+    if (room.storytellerMode) {
+      const host = room.players.get(room.hostId);
+      if (host && host.seat !== -1) {
+        socket.emit('room:error', { message: '说书人模式下房主不能占座，请先下座' }); return;
+      }
+      const presetRoles = data.customRoles || {};
+      const scriptConf = SCRIPTS[room.script || 'tb'];
+      const validRoleIds = new Set(scriptConf.allRoles || []);
+      const missingSeats = seated.filter(p => !presetRoles[p.seat]);
+      const invalidSeats = seated.filter(p => presetRoles[p.seat] && !validRoleIds.has(presetRoles[p.seat]));
+      if (missingSeats.length > 0 || invalidSeats.length > 0) {
+        socket.emit('room:error', {
+          message: `人工说书人模式需先为全部座位指定角色（缺少 ${missingSeats.length} 个，非法 ${invalidSeats.length} 个）`
+        });
+        return;
+      }
+    }
+
     const customRoles = data.customRoles || {};
+    const scriptConf = SCRIPTS[room.script || 'tb'];
+    // 酒鬼的虚假身份：仅限本剧本村民角色
+    const goodRoleIds = new Set(scriptConf.townsfolkRoles || []);
+    const drunkFakes = {};
+    Object.entries(data.drunkFakes || {}).forEach(([seat, roleId]) => {
+      if (goodRoleIds.has(roleId)) drunkFakes[Number(seat)] = roleId;
+    });
+    // 祖母的孙子：由房主指定（说书人座位号 -> 孙子座位号），服务端再校验一次
+    const grandchildren = {};
+    Object.entries(data.grandchildren || {}).forEach(([seat, targetSeat]) => {
+      const s = Number(seat);
+      const t = Number(targetSeat);
+      if (Number.isInteger(s) && Number.isInteger(t) && s !== t) grandchildren[s] = t;
+    });
     // 教父「外来者 ±1」：自定义角色模式下由房主指定，缺省时服务端随机
     const godfatherDelta = (data.godfatherDelta === 1 || data.godfatherDelta === -1)
       ? data.godfatherDelta
@@ -938,8 +1037,69 @@ io.on('connection', (socket) => {
     });
     gameEngines.set(roomId, engine);
     room.gameStarted = true;
-    engine.startGame(customRoles, { godfatherDelta });
+    engine.startGame(customRoles, { godfatherDelta, drunkFakes, grandchildren });
     broadcastRoomState(roomId);
+  });
+
+  // 人工说书人：校验并取出引擎
+  function getStorytellerContext(socket) {
+    const result = getPlayerRoom(socket.id);
+    if (!result) { socket.emit('room:error', { message: '你不在房间中' }); return null; }
+    const { roomId, room } = result;
+    if (!room.gameStarted) { socket.emit('room:error', { message: '游戏尚未开始' }); return null; }
+    if (!room.storytellerMode) { socket.emit('room:error', { message: '当前不是人工说书人模式' }); return null; }
+    if (room.hostId !== socket.id) { socket.emit('room:error', { message: '只有说书人可以执行该操作' }); return null; }
+    const engine = gameEngines.get(roomId);
+    if (!engine) { socket.emit('room:error', { message: '对局状态不存在' }); return null; }
+    return { roomId, room, engine };
+  }
+
+  // 说书人：唤醒 / 跳过当前玩家
+  socket.on('storyteller:wake', ({ action, message } = {}) => {
+    const ctx = getStorytellerContext(socket);
+    if (!ctx) return;
+    const res = ctx.engine.handleStorytellerWake(action, message);
+    if (!res || !res.success) {
+      socket.emit('room:error', { message: (res && res.message) || '当前没有待唤醒的玩家' });
+      return;
+    }
+    broadcastRoomState(ctx.roomId);
+  });
+
+  // 说书人：确认夜晚信息、死亡、状态与随机决策
+  socket.on('storyteller:confirmNight', (payload = {}) => {
+    const ctx = getStorytellerContext(socket);
+    if (!ctx) return;
+    const res = ctx.engine.handleStorytellerConfirmNight(payload);
+    if (!res || !res.success) {
+      socket.emit('room:error', { message: (res && res.message) || '夜晚审核尚未就绪' });
+      return;
+    }
+    broadcastRoomState(ctx.roomId);
+  });
+
+  // 说书人：执行白天随机决策（如心上人死亡后的永久醉酒对象）
+  socket.on('storyteller:choose', ({ kind, chosenId } = {}) => {
+    const ctx = getStorytellerContext(socket);
+    if (!ctx) return;
+    const res = ctx.engine.applyStorytellerChoice(kind, chosenId);
+    if (!res) {
+      socket.emit('room:error', { message: '该选择不存在或已失效' });
+      return;
+    }
+    broadcastRoomState(ctx.roomId);
+  });
+
+  // 说书人：回答白天问题（艺术家 / 学者 / 造谣者 / 处决判定）
+  socket.on('storyteller:answerQuestion', ({ id, answers } = {}) => {
+    const ctx = getStorytellerContext(socket);
+    if (!ctx) return;
+    const res = ctx.engine.answerStorytellerQuestion(id, answers);
+    if (!res || !res.success) {
+      socket.emit('room:error', { message: (res && res.message) || '问题不存在或已失效' });
+      return;
+    }
+    broadcastRoomState(ctx.roomId);
   });
 
   // 确认进入下一阶段
@@ -1035,13 +1195,13 @@ io.on('connection', (socket) => {
   });
 
   // 结束投票
-  socket.on('day:endVoting', () => {
+  socket.on('day:endVoting', async () => {
     const result = getPlayerRoom(socket.id);
     if (!result || !result.room.gameStarted) return;
     const { roomId } = result;
     const engine = gameEngines.get(roomId);
     if (engine) {
-      engine.endVoting();
+      await engine.endVoting();
       broadcastRoomState(roomId);
     }
   });
@@ -1068,7 +1228,31 @@ io.on('connection', (socket) => {
           return;
         }
         const player = room.players.get(socket.id);
-        const judge = await judgeGossipByAI(engine, roomId, socket.id, res.statement);
+        let judge;
+        if (room.storytellerMode) {
+          // 人工说书人：直接由房主判定声明真伪
+          const q = await engine.askStorytellerQuestions(
+            [`造谣者声明：「${res.statement}」\n该声明是否为真？`],
+            { kind: 'gossip', playerId: socket.id, playerName: player ? player.name : '' }
+          );
+          if (!q.ok) {
+            engine.cancelDayAbility(socket.id);
+            socket.emit('gossip:result', {
+              success: false,
+              retryable: true,
+              statement: res.statement,
+              message: '声明发表失败：说书人未在限时内判定，请稍后重新发动'
+            });
+            return;
+          }
+          if (player) {
+            player.abilityState.gossipResult = !!q.answers[0];
+            player.abilityState.gossipAIPending = false;
+          }
+          judge = { ok: true, isTrue: !!q.answers[0] };
+        } else {
+          judge = await judgeGossipByAI(engine, roomId, socket.id, res.statement);
+        }
         if (!judge.ok) {
           engine.cancelDayAbility(socket.id);
           socket.emit('gossip:result', {
@@ -1109,15 +1293,23 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // 艺术家 / 学者：由说书人（AI）回答是非题
+      // 艺术家 / 学者：自动模式由 AI 回答，人工说书人模式由房主回答
       if (res.success && (abilityName === 'artist' || abilityName === 'savant')) {
         const player = room.players.get(socket.id);
         const questions = abilityName === 'artist' ? [res.question] : res.questions;
-        const ai = await askNarratorQuestions(engine, questions);
+        const ai = room.storytellerMode
+          ? await engine.askStorytellerQuestions(questions, {
+              kind: abilityName,
+              playerId: socket.id,
+              playerName: player ? player.name : ''
+            })
+          : await askNarratorQuestions(engine, questions);
         if (!ai.ok) {
           engine.cancelDayAbility(socket.id);
           socket.emit('room:error', {
-            message: '说书人暂时无法回答（裁判服务不可用），已为你保留这次的问题，稍后可直接重试'
+            message: room.storytellerMode
+              ? '说书人未在限时内回答，已为你保留这次的问题，稍后可直接重试'
+              : '说书人暂时无法回答（裁判服务不可用），已为你保留这次的问题，稍后可直接重试'
           });
           broadcastRoomState(roomId);
           return;

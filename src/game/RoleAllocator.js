@@ -370,6 +370,37 @@ class RoleAllocator {
     const assignedDemons = assignedRoleIds.filter(r => sc.demonRoles.includes(r));
     this.assignFakeRoles(seatedPlayers, sc, assignedTownsfolk, assignedDemons);
 
+    // 酒鬼的虚假身份可由房主手动指定（优先于随机结果，且仅限村民角色）
+    if (options.drunkFakes) {
+      const goodRoleIds = new Set(sc.townsfolkRoles);
+      Object.entries(options.drunkFakes).forEach(([seat, fakeId]) => {
+        const p = seatedPlayers.find(x => x.seat === Number(seat));
+        if (!p || !p.role || p.role.id !== 'drunk') return;
+        if (!goodRoleIds.has(fakeId)) return;
+        p.drunkRole = fakeId;
+        p.fakeRole = this.createRoleInstance(fakeId);
+        this.engine.logAction('CUSTOM_ASSIGN', `${p.seat + 1}号 酒鬼的虚假身份由房主指定为【${p.fakeRole.name}】`, {
+          playerId: p.id, fakeRole: fakeId
+        });
+      });
+    }
+
+    // 祖母的孙子可由房主手动指定（优先于随机结果，且必须是善良阵营玩家）
+    if (options.grandchildren) {
+      Object.entries(options.grandchildren).forEach(([seat, targetSeat]) => {
+        const grandma = seatedPlayers.find(x => x.seat === Number(seat));
+        if (!grandma || !grandma.role || grandma.role.id !== BMR_ROLE_IDS.GRANDMOTHER) return;
+        const target = seatedPlayers.find(x => x.seat === Number(targetSeat));
+        if (!target || target.id === grandma.id || !target.role) return;
+        if (target.role.team !== 'GOOD') return;
+        grandma.abilityState = grandma.abilityState || {};
+        grandma.abilityState.grandchildId = target.id;
+        this.engine.logAction('CUSTOM_ASSIGN', `${grandma.seat + 1}号 祖母的孙子由房主指定为 ${target.seat + 1}号 ${target.name}`, {
+          playerId: grandma.id, grandchildId: target.id
+        });
+      });
+    }
+
     const allAssigned = [...new Set(assignedRoleIds)];
     this.engine.room.gameState.rolesInPlay = allAssigned;
     this.engine.room.gameState.rolesNotInPlay = shuffle(sc.allRoles.filter(r => !allAssigned.includes(r)));

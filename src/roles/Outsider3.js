@@ -1,7 +1,7 @@
 // SNV 剧本（紫罗兰教派）外来者角色
 const Role = require('./Role');
 const { SNV_ROLE_IDS, PHASES } = require('../config/game-config');
-const { applyDrunk, getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
+const { applyDrunk, clearDrunkSource, getAlivePlayers, getPlayerEffectiveTeam } = require('../utils/helpers');
 const { pickRandom, isDayPhase } = require('./SnvUtils');
 
 function seatedPlayers(engine) {
@@ -77,6 +77,33 @@ class Sweetheart extends Role {
 
     const alive = getAlivePlayers(engine.room).filter(p => p.role);
     if (alive.length === 0) return {};
+
+    // 人工说书人：由说书人选择永久醉酒的玩家（白天同样挂起等待选择）
+    if (engine.isManualStoryteller && engine.isManualStoryteller()) {
+      engine.requestStorytellerChoice(
+        'sweetheart_drunk',
+        '心上人死亡：选择一名永久醉酒的玩家',
+        alive.map(p => ({ id: p.id, seat: p.seat, name: p.name })),
+        (opt) => {
+          const target = engine.room.players.get(opt.id);
+          if (!target) return;
+          applyDrunk(target, 'sweetheart', 999);
+          engine.setPlayerPrivateInfo(target, {
+            type: 'sweetheart_drunk',
+            message: '心上人死亡，你开始醉酒（持续到游戏结束）'
+          });
+          engine.logAction('ABILITY', `${target.seat + 1}号 ${target.name} 因心上人死亡而永久醉酒（说书人判定）`, {
+            playerId: player.id, targetId: target.id, byStoryteller: true
+          });
+        },
+        (prevId) => {
+          // 说书人改选：撤销上一次选择造成的永久醉酒
+          const prev = engine.room.players.get(prevId);
+          if (prev) clearDrunkSource(prev, 'sweetheart');
+        }
+      );
+      return {};
+    }
 
     // 平衡偏袒：好人弱势时让邪恶玩家醉酒（变相帮好人），否则让好人醉酒
     const favor = engine.balanceSystem.favorWeakSide(engine);

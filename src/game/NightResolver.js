@@ -22,8 +22,13 @@ class NightResolver {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.FIRST_NIGHT;
     gs.nightCount = 0;
+    // 夜间行动记录：保留上一夜的结构化记录供白天查看
+    gs.lastNightActionLog = gs.nightActionLog || [];
+    gs.nightActionLog = [];
     gs.nightActions = {};
     gs.deathsToAnnounce = [];
+    gs.revivesToAnnounce = [];
+    this.nightRevives = [];
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     // 本夜实际被唤醒的玩家（侍女等「谁被唤醒」类技能的唯一数据来源）
@@ -34,6 +39,14 @@ class NightResolver {
     gs.pithagNoDemonKill = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
+
+    // 人工说书人：夜间启用信息拦截并清空上一夜的待决项
+    if (gs.storyteller) {
+      gs.storytellerArmed = true;
+      gs.storyteller.pendingWake = null;
+      gs.storyteller.pendingChoices = [];
+      gs.storyteller.nightReview = null;
+    }
 
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);
@@ -58,8 +71,13 @@ class NightResolver {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.NIGHT;
     gs.nightCount = nightCount;
+    // 夜间行动记录：保留上一夜的结构化记录供白天查看
+    gs.lastNightActionLog = gs.nightActionLog || [];
+    gs.nightActionLog = [];
     gs.nightActions = {};
     gs.deathsToAnnounce = [];
+    gs.revivesToAnnounce = [];
+    this.nightRevives = [];
     gs.currentNightIndex = -1;
     gs.currentWakePlayerId = null;
     // 本夜实际被唤醒的玩家（侍女等「谁被唤醒」类技能的唯一数据来源）
@@ -70,6 +88,14 @@ class NightResolver {
     gs.pithagNoDemonKill = null;
     gs.goonTriggeredThisNight = false;
     gs.slayerDemonKill = null; // 杀手公开击杀恶魔的胜利特效上下文仅当日内有效
+
+    // 人工说书人：夜间启用信息拦截并清空上一夜的待决项
+    if (gs.storyteller) {
+      gs.storytellerArmed = true;
+      gs.storyteller.pendingWake = null;
+      gs.storyteller.pendingChoices = [];
+      gs.storyteller.nightReview = null;
+    }
 
     // 醉酒时长递减：上一轮「直到明天黄昏」的醉酒在此解除
     decrementDrunkPlayers(this.engine.room);
@@ -193,14 +219,39 @@ class NightResolver {
     if (!gs.wokenThisNight.includes(playerId)) gs.wokenThisNight.push(playerId);
   }
 
+  // 记录一条结构化的夜间行动（说书人控制台展示用），与 actionLog 相互独立。
+  // 只记录已入座的玩家（seat >= 0），房主/旁观者不记录。
+  _recordNightAction(player, action, extra = {}) {
+    if (!player || player.seat === undefined || player.seat === null || player.seat < 0) return;
+    const gs = this.engine.room.gameState;
+    if (!Array.isArray(gs.nightActionLog)) gs.nightActionLog = [];
+    gs.nightActionLog.push({
+      playerId: player.id,
+      seat: player.seat,
+      name: player.name,
+      roleName: extra.roleName || (player.role ? player.role.name : ''),
+      action,
+      targets: extra.targets || [],
+      roleId: extra.roleId || null,
+      note: extra.note || '',
+      at: Date.now()
+    });
+  }
+
   wakeNext() {
     const gs = this.engine.room.gameState;
-    const isFirstNight = gs.nightCount === 0;
-    const queue = gs.nightQueue;
 
     // 每次进入下一位玩家前清空缓存的唤醒信息，避免把上一人的面板下发给新的状态
     gs.currentWakeInfo = null;
     gs.currentNightIndex++;
+    this._wakeLoop();
+  }
+
+  // 唤醒循环主体：人工说书人模式下会在每次真人唤醒前暂停
+  _wakeLoop() {
+    const gs = this.engine.room.gameState;
+    const isFirstNight = gs.nightCount === 0;
+    const queue = gs.nightQueue;
 
     while (gs.currentNightIndex < queue.length) {
       const entry = queue[gs.currentNightIndex];
@@ -285,6 +336,7 @@ class NightResolver {
           const roleName = entry.barberSwap
             ? '理发师'
             : ((isDrunkPlayer || isFakeDemon) ? player.fakeRole.name : role.name);
+
           this.engine.logAction('NIGHT_WAKE', `唤醒 ${player.seat+1}号 ${player.name}（${roleName}${isDrunkPlayer?'/酒鬼':''}${isFakeDemon?'/假恶魔':''}）行动`, {
             playerId: player.id, role: entry.barberSwap ? 'barber_swap' : ((isDrunkPlayer || isFakeDemon) ? player.fakeRole.id : role.id)
           });
@@ -310,6 +362,7 @@ class NightResolver {
               this.engine.logAction('NIGHT_WAKE', `${player.seat+1}号 ${player.name}（${roleName}）可选目标不足（${available.length}/${effectiveSelectCount}），跳过本次唤醒`, {
                 playerId: player.id
               });
+              this._recordNightAction(player, 'skipped', { note: '可选目标不足', roleName });
               gs.currentNightIndex++;
               continue;
             }
@@ -327,6 +380,26 @@ class NightResolver {
             excludeSelf: wakeInfo?.excludeSelf || false,
             message: wakeInfo?.message || '请行动'
           };
+
+          // 人工说书人：真人玩家行动前暂停，等待说书人确认唤醒并编辑文案
+          const isHumanPlayer = player.seat >= 0 && !player.isBot && !player.aiTakeover;
+          if (this.engine.isManualStoryteller() && isHumanPlayer) {
+            const st = this.engine._ensureStorytellerState();
+            st.pendingWake = {
+              playerId: player.id,
+              seat: player.seat,
+              name: player.name,
+              roleName,
+              payload: wakePayload,
+              index: gs.currentNightIndex
+            };
+            gs.phase = PHASES.NIGHT;
+            gs.currentWakePlayerId = null;
+            gs.currentWakeInfo = null;
+            this.engine.broadcastState();
+            return;
+          }
+
           // 缓存本夜唤醒信息：玩家掉线/刷新后重新拿到状态时仍能补出行动面板，
           // 否则会一直停在「等待其他玩家行动」且无按钮可点。
           gs.currentWakeInfo = wakePayload;
@@ -349,6 +422,44 @@ class NightResolver {
     this.resolveNight();
   }
 
+  // 人工说书人：确认唤醒或跳过当前玩家
+  resumeWake(action, message) {
+    const gs = this.engine.room.gameState;
+    const st = this.engine.room.gameState.storyteller;
+    const pending = st && st.pendingWake;
+    if (!pending) return { success: false, message: '当前没有待唤醒的玩家' };
+
+    const player = this.engine.room.players.get(pending.playerId);
+    st.pendingWake = null;
+
+    if (action === 'skip') {
+      this.engine.logAction('NIGHT_WAKE', `说书人跳过 ${pending.seat+1}号 ${pending.name}（${pending.roleName}）的唤醒`, {
+        playerId: pending.playerId, skippedByStoryteller: true
+      });
+      this._recordNightAction(player, 'skipped', { note: '说书人跳过', roleName: pending.roleName });
+      gs.currentNightIndex = pending.index + 1;
+      this._wakeLoop();
+      this.engine.broadcastState();
+      return { success: true };
+    }
+
+    // 默认按唤醒处理，允许说书人修改行动面板上的提示文案
+    gs.currentWakePlayerId = pending.playerId;
+    gs.phase = PHASES.NIGHT_WAKE;
+    gs.currentWakeInfo = Object.assign({}, pending.payload, {
+      message: (message && String(message).trim()) ? String(message) : pending.payload.message
+    });
+    this.markWoken(gs, pending.playerId);
+    this.engine.logAction('NIGHT_WAKE', `唤醒 ${pending.seat+1}号 ${pending.name}（${pending.roleName}）行动（说书人确认）`, {
+      playerId: pending.playerId, confirmedByStoryteller: true
+    });
+    if (player && !player.isBot) {
+      this.engine.io.to(player.id).emit('night:wake', gs.currentWakeInfo);
+    }
+    this.engine.broadcastState();
+    return { success: true };
+  }
+
   // 兜底：该玩家无法给出合法行动（如 bot 选不到合法目标）时跳过本次唤醒，
   // 避免整套夜晚流程永远停在「等待其他玩家行动」。
   forceSkipCurrentWake(playerId, reason = '') {
@@ -359,6 +470,7 @@ class NightResolver {
     this.engine.logAction('NIGHT_WAKE', `${player ? `${player.seat + 1}号 ${player.name}` : playerId} 跳过本夜行动${reason ? `（${reason}）` : ''}`, {
       playerId, autoSkipped: true
     });
+    this._recordNightAction(player, 'skipped', { note: reason || '' });
 
     gs.currentWakePlayerId = null;
     gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
@@ -377,6 +489,11 @@ class NightResolver {
 
     if (!player || gs.currentWakePlayerId !== playerId) {
       return { success: false, message: '还没轮到你行动' };
+    }
+    // 兜底：没有角色的玩家不应进入夜晚队列（例如中途加入/异常替换）
+    if (!player.role) {
+      this.forceSkipCurrentWake(playerId, 'roleMissing');
+      return { success: false, message: '该玩家尚未分配角色，已跳过' };
     }
 
     // SNV 理发师：恶魔决定是否交换两名玩家的角色
@@ -422,7 +539,7 @@ class NightResolver {
 
       // 通知真恶魔
       const realDemon = Array.from(this.engine.room.players.values())
-        .find(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
+        .find(p => p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon);
       if (realDemon) {
         this.engine.setPlayerPrivateInfo(realDemon, {
           type: 'fake_demon_choice',
@@ -464,6 +581,7 @@ class NightResolver {
         const result = player.role.onNightAction(gs, player, { roleId }, this.engine);
         if (!result.success) return result;
       }
+      this._recordNightAction(player, 'role', { roleId });
       gs.currentWakePlayerId = null;
       this.engine.io.to(playerId).emit('night:actionAck', { success: true });
       gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
@@ -476,6 +594,7 @@ class NightResolver {
         const result = player.role.onNightAction(gs, player, { targets: [] }, this.engine);
         if (!result.success) return result;
       }
+      this._recordNightAction(player, 'none');
       gs.currentWakePlayerId = null;
       this.engine.io.to(playerId).emit('night:actionAck', { success: true });
       gs.phase = gs.nightCount === 0 ? PHASES.FIRST_NIGHT : PHASES.NIGHT;
@@ -492,6 +611,13 @@ class NightResolver {
       const result = player.role.onNightAction(gs, player, action, this.engine);
       if (!result.success) return result;
     }
+
+    this._recordNightAction(player, 'targets', {
+      targets: targets.map(tid => {
+        const t = this.engine.room.players.get(tid);
+        return t ? { id: t.id, seat: t.seat, name: t.name } : null;
+      }).filter(Boolean)
+    });
 
     if (isDrunk) {
       player.role.selectCount = 0;
@@ -803,17 +929,28 @@ class NightResolver {
           .map(id => this.engine.room.players.get(id))
           .filter(p => p && p.isDead && p.deathNight === gs.nightCount - 1);
         if (deadLastTargets.length > 0) {
-          // 在上一夜的已死亡目标中随机反刍一名（技能描述为「之一」）
-          const revived = randomChoice(deadLastTargets);
-          // 反刍概率由平衡系统按当前局势动态给出（目标阵营不同，偏袒方向相反）
-          const targetIsGood = !(revived.role && revived.role.team === 'EVIL');
-          const probInfo = this.engine.balanceSystem.getShabalothReviveProbability(this.engine, targetIsGood);
-          if (Math.random() < probInfo.probability) {
-            // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
-            revivePlayer(revived);
-            this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活`, {
-              playerId: revived.id, probInfo
-            });
+          if (this.engine.isManualStoryteller()) {
+            // 人工说书人：是否反刍、复活谁由说书人决定
+            const options = deadLastTargets.map(p => ({ id: p.id, seat: p.seat, name: p.name }));
+            options.push({ id: '__none__', seat: -1, name: '不复活' });
+            this.engine.requestStorytellerChoice('shabaloth_revive', '沙巴洛斯反刍：选择复活的目标', options,
+              (opt) => this._applyShabalothRevive(opt),
+              (prevId) => this._revertShabalothRevive(prevId)
+            );
+          } else {
+            // 在上一夜的已死亡目标中随机反刍一名（技能描述为「之一」）
+            const revived = randomChoice(deadLastTargets);
+            // 反刍概率由平衡系统按当前局势动态给出（目标阵营不同，偏袒方向相反）
+            const targetIsGood = !(revived.role && revived.role.team === 'EVIL');
+            const probInfo = this.engine.balanceSystem.getShabalothReviveProbability(this.engine, targetIsGood);
+            if (Math.random() < probInfo.probability) {
+              // 统一复活口径：恢复存活 + 清除醉酒/中毒，不改动 voteToken
+              revivePlayer(revived);
+              this._recordRevive(revived);
+              this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活`, {
+                playerId: revived.id, probInfo
+              });
+            }
           }
         }
       }
@@ -883,7 +1020,27 @@ class NightResolver {
     const minions = getAlivePlayers(this.engine.room)
       .filter(p => p.role && p.role.category === 'MINION' && p.id !== imp.id);
     if (minions.length === 0) return;
+
+    if (this.engine.isManualStoryteller()) {
+      // 人工说书人：由说书人选择继位者
+      this.engine.requestStorytellerChoice(
+        'imp_starpass',
+        '小恶魔星传：选择继承恶魔身份的爪牙',
+        minions.map(p => ({ id: p.id, seat: p.seat, name: p.name })),
+        (opt) => {
+          const heir = this.engine.room.players.get(opt.id);
+          if (heir) this._applyStarPass(imp, heir);
+        }
+      );
+      return;
+    }
+
     const heir = minions[Math.floor(Math.random() * minions.length)];
+    this._applyStarPass(imp, heir);
+  }
+
+  // 实际执行星传
+  _applyStarPass(imp, heir) {
     const newRole = this.engine.roleAllocator.createRoleInstance(imp.role.id);
     if (!newRole) return;
     heir.role = newRole;
@@ -971,6 +1128,30 @@ class NightResolver {
 
   // 修补匠可能死亡
   resolveTinkerDeath(gs) {
+    // 人工说书人：概率死亡改为死亡名单候选，由说书人勾选
+    if (this.engine.isManualStoryteller()) {
+      const st = this.engine._ensureStorytellerState();
+      const tinkers = getAlivePlayers(this.engine.room).filter(p => p.role && p.role.id === 'tinker');
+      if (tinkers.length > 0) {
+        st.pendingChoices.push({
+          kind: 'night_death_candidate',
+          label: '修补匠：勾选死亡名单即视为本夜死亡',
+          options: tinkers.map(p => ({ id: p.id, seat: p.seat, name: p.name, roleName: '修补匠' })),
+          applyFn: null
+        });
+      }
+      const recluses = getAlivePlayers(this.engine.room).filter(p => p.role && p.role.id === 'recluse');
+      if (recluses.length > 0) {
+        st.pendingChoices.push({
+          kind: 'night_death_candidate',
+          label: '隐士：勾选死亡名单即视为本夜死亡',
+          options: recluses.map(p => ({ id: p.id, seat: p.seat, name: p.name, roleName: '隐士' })),
+          applyFn: null
+        });
+      }
+      return;
+    }
+
     const tinkers = getAlivePlayers(this.engine.room).filter(p => p.role && p.role.id === 'tinker');
     tinkers.forEach(tinker => {
       const probInfo = this.engine.balanceSystem.getTinkerDeathProbability(this.engine);
@@ -1020,6 +1201,29 @@ class NightResolver {
   }
 
   finalizeNight() {
+    const gs = this.engine.room.gameState;
+    const st = gs.storyteller;
+
+    // 已完成结算并进入审核：重复调用时不再重新结算
+    if (st && st.nightReview) {
+      if (st.nightReview.ready) this.engine.broadcastState();
+      return;
+    }
+
+    this._resolveEndOfNight();
+
+    // 人工说书人：夜晚收尾暂停，等待说书人确认信息、死亡、状态与随机决策
+    if (this.engine.isManualStoryteller()) {
+      this._buildNightReview();
+      this.engine.broadcastState();
+      return;
+    }
+
+    this._announceNightAndDawn();
+  }
+
+  // 夜晚结算前半段：月之子结算 + 信息位技能
+  _resolveEndOfNight() {
     const gs = this.engine.room.gameState;
 
     // 结算月之子白天选择的目标：善良则当晚死亡
@@ -1073,8 +1277,79 @@ class NightResolver {
         player.role.resolveNight(gs, player, this.engine);
       }
     }
+  }
 
-    // 收集死亡名单
+  // 人工说书人：构建夜晚审核快照
+  _buildNightReview() {
+    const gs = this.engine.room.gameState;
+    const st = this.engine._ensureStorytellerState();
+    const nightCount = gs.nightCount;
+
+    const pendingChoices = st.pendingChoices || [];
+    // 修补匠 / 隐士：待处理区勾选的候选，同步勾进死亡名单
+    const candidateChosen = new Set(
+      pendingChoices
+        .filter(c => c.kind === 'night_death_candidate' && c.chosenId)
+        .map(c => c.chosenId)
+    );
+
+    const deaths = [];
+    const systemDeaths = [];
+    Array.from(this.engine.room.players.values())
+      .filter(p => p.seat !== -1)
+      .sort((a, b) => a.seat - b.seat)
+      .forEach(p => {
+        const diedTonight = p.isDead && p.deathNight === nightCount;
+        if (diedTonight) systemDeaths.push(p.id);
+        // 之前夜晚已死亡且本夜未复活的玩家不列入，避免被误复活
+        if (!p.isAlive && !diedTonight) return;
+        // 说书人拥有最终裁定权，允许取消任何本夜死亡（如市长替死）
+        const locked = false;
+        deaths.push({
+          id: p.id,
+          seat: p.seat,
+          name: p.name,
+          roleName: p.role ? p.role.name : '未知',
+          checked: diedTonight || candidateChosen.has(p.id),
+          locked
+        });
+      });
+
+    const statuses = Array.from(this.engine.room.players.values())
+      .filter(p => p.seat !== -1 && p.isAlive)
+      .sort((a, b) => a.seat - b.seat)
+      .map(p => ({
+        playerId: p.id,
+        seat: p.seat,
+        name: p.name,
+        drunk: !!p.isDrunk,
+        poisoned: !!p.isPoisoned,
+        // 弄臣：首次死亡免疫是否还可触发
+        foolImmune: p.role && p.role.id === 'fool' ? !(p.abilityState && p.abilityState.usedDeath) : null
+      }));
+
+    st.nightReview = {
+      ready: true,
+      nightCount,
+      systemDeaths,
+      deaths,
+      statuses,
+      // 随机决策（替死者、继位者、醉酒对象等）统一放到「待处理」区由说书人点击选择，
+      // 夜晚审核区不再重复展示
+      choices: [],
+      infos: st.pendingInfos.slice(),
+      players: []
+    };
+  }
+
+  // 夜晚收尾：公布死亡名单并进入天亮
+  _announceNightAndDawn() {
+    const gs = this.engine.room.gameState;
+
+    // 夜晚结束：把本夜的行动记录转存一份，白天控制台据此展示刚结束的一夜
+    gs.lastNightActionLog = gs.nightActionLog || [];
+
+    // 收集死亡名单（以说书人确认后的最终状态为准）
     gs.deathsToAnnounce = Array.from(this.engine.room.players.values())
       .filter(p => p.isDead && p.deathNight === gs.nightCount)
       .map(p => ({
@@ -1084,12 +1359,26 @@ class NightResolver {
         cause: p.deathNight === 0 ? 'FIRST_NIGHT' : 'DEMON'
       }));
 
+    // 收集复活名单（本夜被说书人 / 沙巴洛斯复活且当前存活）
+    gs.revivesToAnnounce = (Array.isArray(this.nightRevives) ? this.nightRevives : [])
+      .filter(r => {
+        const p = this.engine.room.players.get(r.playerId);
+        return p && p.isAlive;
+      })
+      .map(r => ({ playerId: r.playerId, seat: r.seat, name: r.name }));
+
     const nightLabel = gs.nightCount === 0 ? '首夜' : `第${gs.nightCount}夜`;
+    const reviveNames = gs.revivesToAnnounce.map(d => `${d.seat+1}号${d.name}`).join('、');
+    const reviveText = reviveNames ? `，复活玩家：${reviveNames}` : '';
     if (gs.deathsToAnnounce.length > 0) {
       const names = gs.deathsToAnnounce.map(d => `${d.seat+1}号${d.name}`).join('、');
-      this.engine.logAction('NIGHT_END', `${nightLabel}结束，死亡玩家：${names}`, { deaths: gs.deathsToAnnounce });
+      this.engine.logAction('NIGHT_END', `${nightLabel}结束，死亡玩家：${names}${reviveText}`, {
+        deaths: gs.deathsToAnnounce, revives: gs.revivesToAnnounce
+      });
     } else {
-      this.engine.logAction('NIGHT_END', `${nightLabel}结束，平安夜`, {});
+      this.engine.logAction('NIGHT_END', `${nightLabel}结束，平安夜${reviveText}`, {
+        revives: gs.revivesToAnnounce
+      });
     }
 
     // 兜底：技能互相抵消可能造成长期没有任何死亡，房间会永久卡住
@@ -1100,6 +1389,118 @@ class NightResolver {
 
     this.engine.transitionTo(PHASES.DAY_DAWN);
   }
+
+  // 人工说书人：确认夜晚审核
+  confirmNight(payload = {}) {
+    const gs = this.engine.room.gameState;
+    const st = gs.storyteller;
+    const review = st && st.nightReview;
+    if (!review) return { success: false, message: '夜晚审核尚未就绪' };
+
+    // 1. 发送说书人确认后的信息
+    this.engine.flushStorytellerInfos(payload.infos || review.infos || []);
+
+    // 2. 写入醉酒 / 中毒状态
+    const statusMap = new Map();
+    (review.statuses || []).forEach(s => statusMap.set(s.playerId, s));
+    (Array.isArray(payload.statuses) ? payload.statuses : []).forEach(s => {
+      if (s && s.playerId) statusMap.set(s.playerId, s);
+    });
+    for (const [pid, s] of statusMap) {
+      const p = this.engine.room.players.get(pid);
+      if (!p) continue;
+      p.isDrunk = !!s.drunk;
+      p.isPoisoned = !!s.poisoned;
+    }
+
+    // 3. 执行说书人选择的随机决策（死亡候选由第 4 步统一处理）
+    (Array.isArray(payload.choices) ? payload.choices : []).forEach(c => {
+      if (c && c.kind && c.chosenId) this.engine.applyStorytellerChoice(c.kind, c.chosenId);
+    });
+
+    // 4. 死亡名单差集：复活被取消的，击杀新增的
+    // 系统死亡以玩家实时状态为准（审核快照生成后仍可能产生死亡，如赌徒猜错）
+    const desired = new Set((Array.isArray(payload.deaths) ? payload.deaths : []).map(String));
+    const systemDeaths = new Set();
+    Array.from(this.engine.room.players.values())
+      .filter(p => p.seat !== -1 && p.isDead && p.deathNight === gs.nightCount)
+      .forEach(p => systemDeaths.add(p.id));
+    for (const pid of systemDeaths) {
+      if (!desired.has(pid)) this._reviveByStoryteller(pid);
+    }
+    for (const pid of desired) {
+      if (systemDeaths.has(pid)) continue;
+      const p = this.engine.room.players.get(pid);
+      if (p && p.isAlive && p.seat !== -1) {
+        // 弄臣：说书人勾选死亡同样只免疫第一次（与恶魔击杀口径一致）
+        if (p.role && p.role.id === 'fool' && !(p.abilityState && p.abilityState.usedDeath) && !p.isPoisoned && !p.isDrunk) {
+          p.abilityState = p.abilityState || {};
+          p.abilityState.usedDeath = true;
+          this.engine.logAction('ABILITY', `${p.seat + 1}号 ${p.name}（弄臣）首次死亡免疫（说书人判定）`, {
+            playerId: p.id, event: 'fool_immune'
+          });
+          continue;
+        }
+        this.engine.deathManager.killPlayerDirect(pid, 'STORYTELLER', gs.nightCount, -1);
+      }
+    }
+
+    // 5. 清理并进入天亮
+    st.nightReview = null;
+    st.pendingChoices = [];
+    this._announceNightAndDawn();
+    this.engine.broadcastState();
+    return { success: true };
+  }
+
+  // 沙巴洛斯反刍：复活说书人选择的目标
+  _applyShabalothRevive(opt) {
+    if (!opt || opt.id === '__none__') return;
+    const revived = this.engine.room.players.get(opt.id);
+    if (!revived || revived.isAlive) return;
+    revivePlayer(revived);
+    this._recordRevive(revived);
+    this.engine.logAction('ABILITY', `${revived.seat+1}号 ${revived.name} 被沙巴洛斯反刍复活（说书人判定）`, {
+      playerId: revived.id, byStoryteller: true
+    });
+  }
+
+  // 沙巴洛斯反刍改选：撤回上一次的复活
+  _revertShabalothRevive(prevId) {
+    if (!prevId || prevId === '__none__') return;
+    const p = this.engine.room.players.get(prevId);
+    if (!p || !p.isAlive) return;
+    this.engine.deathManager.killPlayerDirect(prevId, 'SHABALOTH', this.engine.room.gameState.nightCount, -1);
+    this.engine.logAction('ABILITY', `${p.seat+1}号 ${p.name} 的反刍复活被说书人改选撤回`, {
+      playerId: prevId, byStoryteller: true
+    });
+  }
+
+  // 记录本夜复活（用于天亮公告）
+  _recordRevive(player) {
+    if (!player) return;
+    if (!Array.isArray(this.nightRevives)) this.nightRevives = [];
+    if (!this.nightRevives.some(r => r.playerId === player.id)) {
+      this.nightRevives.push({ playerId: player.id, seat: player.seat, name: player.name });
+    }
+  }
+
+  // 说书人取消某位玩家的死亡（视为「本就没死」，不算复活，天亮不公告复活）
+  _reviveByStoryteller(playerId) {
+    const dm = this.engine.deathManager;
+    if (dm && typeof dm.revivePlayer === 'function') {
+      dm.revivePlayer(playerId);
+      return;
+    }
+    const p = this.engine.room.players.get(playerId);
+    if (!p) return;
+    p.isAlive = true;
+    p.isDead = false;
+    p.deathNight = -1;
+    p.deathDay = -1;
+    p.deathCause = null;
+  }
+
 
   // 对局卡死兜底：
   //  - 连续多个昼夜无人死亡（技能互相抵消）→ 先告警，超过上限强制结束；

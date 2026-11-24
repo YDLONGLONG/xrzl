@@ -555,6 +555,14 @@ class Mayor extends Role {
 
   onDeath(gameState, player, cause, engine) {
     if (cause === 'DEMON' && !player.isPoisoned && !player.isDrunk) {
+      // 人工说书人：是否替死、由谁替死由说书人在夜晚审核中勾选死亡名单决定
+      if (engine.isManualStoryteller && engine.isManualStoryteller()) {
+        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（市长）夜晚死亡，是否由他人替死由说书人在夜晚审核中决定`, {
+          playerId: player.id
+        });
+        return {};
+      }
+
       const score = engine.balanceSystem.calculateBalanceScore(engine.room, engine);
       const prob = engine.balanceSystem.getMayorSaveProbability(engine);
       const cfg = engine.probConfig;

@@ -34,6 +34,11 @@ const REQUEST_RELEASE_MAP = {
   'room:toggleReady': ['room:stateUpdate', 'room:error'],
   'room:addBot': ['room:stateUpdate', 'room:error'],
   'room:setScript': ['room:stateUpdate', 'room:error'],
+  'room:setStorytellerMode': ['room:stateUpdate', 'room:error'],
+  'storyteller:wake': ['game:stateUpdate', 'room:error'],
+  'storyteller:confirmNight': ['game:stateUpdate', 'room:error'],
+  'storyteller:choose': ['game:stateUpdate', 'room:error'],
+  'storyteller:answerQuestion': ['game:stateUpdate', 'room:error'],
   'room:kick': ['room:stateUpdate', 'room:error'],
   'room:aiTakeover': ['room:stateUpdate', 'game:stateUpdate', 'room:error'],
   'game:start': ['game:stateUpdate', 'room:stateUpdate', 'room:error'],
@@ -430,12 +435,20 @@ function initSocketEvents() {
   socket.on('game:dawnReport', (data) => {
     if (hasLeftRoom) return;
     const deaths = (data && data.deaths) || [];
-    const body = deaths.length > 0
-      ? '昨夜死亡：' + deaths.map(d => {
-          const seat = Number.isInteger(d.seat) ? `${d.seat + 1}号 ` : '';
-          return `${seat}${d.name || ''}`.trim();
-        }).filter(Boolean).join('、')
-      : '平安夜，无人死亡';
+    const revives = (data && data.revives) || [];
+    const formatNames = (list) => list.map(d => {
+      const seat = Number.isInteger(d.seat) ? `${d.seat + 1}号 ` : '';
+      return `${seat}${d.name || ''}`.trim();
+    }).filter(Boolean).join('、');
+    let body;
+    if (deaths.length > 0) {
+      body = '昨夜死亡：' + formatNames(deaths);
+      if (revives.length > 0) body += '；复活：' + formatNames(revives);
+    } else if (revives.length > 0) {
+      body = '平安夜，无人死亡；复活：' + formatNames(revives);
+    } else {
+      body = '平安夜，无人死亡';
+    }
     playPhaseTransition('day', '天亮了', body);
   });
 
@@ -801,7 +814,10 @@ function backToHome() {
   isAiThinking = false;
   customRoleMode = false;
   customRoleMap = {};
+  customDrunkFakes = {};
+  customGrandchildren = {};
   customGfDelta = 1;
+  _storytellerAutoRoleKey = '';
   isGodView = false;
   godState = null;
   isReconnecting = false;
@@ -1087,10 +1103,68 @@ function toggleReady() {
 
 let customRoleMode = false;  // 是否启用自定义角色分配
 let customRoleMap = {};      // seat -> roleId
+let customDrunkFakes = {};   // seat -> roleId（酒鬼以为自己是哪个善良角色）
+let customGrandchildren = {}; // 祖母座位 -> 孙子座位
 let customGfDelta = 1;       // 教父「外来者±1」方向：1 = 外来者+1/村民-1，-1 = 外来者-1/村民+1
+
+// 收集酒鬼的虚假身份配置（仅对当前分配为酒鬼的座位生效）
+function collectDrunkFakes(seatedPlayers) {
+  const out = {};
+  seatedPlayers.forEach(p => {
+    if (customRoleMap[p.seat] === 'drunk' && customDrunkFakes[p.seat]) {
+      out[p.seat] = customDrunkFakes[p.seat];
+    }
+  });
+  return out;
+}
+
+// 收集祖母的自定义孙子（仅对当前分配为祖母的座位生效）
+function collectGrandchildren(seatedPlayers) {
+  const out = {};
+  seatedPlayers.forEach(p => {
+    if (customRoleMap[p.seat] !== 'grandmother') return;
+    const targetSeat = customGrandchildren[p.seat];
+    if (targetSeat === undefined || targetSeat === null || targetSeat === '') return;
+    if (Number(targetSeat) !== p.seat) out[p.seat] = Number(targetSeat);
+  });
+  return out;
+}
 
 function startGame() {
   const seatedPlayers = (currentState.players || []).filter(p => p.seat !== -1);
+
+  // 人工说书人：必须为全部座位指定角色后才能开局
+  if (currentState.storytellerMode) {
+    const missing = seatedPlayers.filter(p => !customRoleMap[p.seat]);
+    if (missing.length > 0) {
+      // 席位数变化后自动补齐，保证开启说书人模式即有完整角色配置
+      autoAssignStorytellerRoles();
+      const stillMissing = seatedPlayers.filter(p => !customRoleMap[p.seat]);
+      if (stillMissing.length > 0) {
+        showToast(`人工说书人模式需先为全部座位指定角色（还差 ${stillMissing.length} 个）`);
+        openCustomRolePanel();
+        return;
+      }
+    }
+    const v = validateCustomRoles(customRoleMap, seatedPlayers.length, currentState.script || 'tb');
+    if (!v.valid) {
+      showToast('身份配置有误：' + v.errors[0]);
+      openCustomRolePanel();
+      return;
+    }
+    const roleAssignments = {};
+    seatedPlayers.forEach(p => {
+      roleAssignments[p.seat] = customRoleMap[p.seat];
+    });
+    emitRequest('game:start', {
+      customRoles: roleAssignments,
+      drunkFakes: collectDrunkFakes(seatedPlayers),
+      grandchildren: collectGrandchildren(seatedPlayers),
+      godfatherDelta: customGfDelta
+    });
+    return;
+  }
+
   if (customRoleMode) {
     // 使用统一的验证函数
     const v = validateCustomRoles(customRoleMap, seatedPlayers.length, currentState.script || 'tb');
@@ -1107,6 +1181,8 @@ function startGame() {
     // 教父在场时把「外来者±1」的方向一并下发给服务端，保证与前端校验一致
     socket.emit('game:start', {
       customRoles: roleAssignments,
+      drunkFakes: collectDrunkFakes(seatedPlayers),
+      grandchildren: collectGrandchildren(seatedPlayers),
       godfatherDelta: customGfDelta
     });
   } else {
@@ -1186,6 +1262,8 @@ function renderGameState(state) {
     lastRenderedPhase = state.phase;
     handlePhaseChange(prevPhase, state.phase);
   }
+  // 人工说书人：人数/剧本变化时先自动分配角色，再渲染大厅与按钮
+  maybeAutoAssignStorytellerRoles();
   updateHeader(state);
   renderSeats(state);
   renderSpectators(state);
@@ -1195,15 +1273,16 @@ function renderGameState(state) {
   if (state.players) updateWhisperTargets(state.players);
   renderSessionList();
   handleNightOverlay(state);
+  // 人工说书人控制台
+  if (state.isStoryteller) renderStorytellerPanel(state);
 }
 
 function updateHeader(state) {
-  // 显示角色数量配置
+  // 显示角色数量配置（人数只统计入座玩家，不含旁观者）
   const playerCount = state.players ? state.players.filter(p => p.seat !== -1).length : 0;
   const compEl = $('headerRoomComp');
   const compHTML = getCompHTML(playerCount, state.composition);
-  const compPlayers = state.players ? state.players.length : 0;
-  compEl.innerHTML = compHTML ? `<span class="comp-players">${compPlayers}人</span>${compHTML}` : '';
+  compEl.innerHTML = compHTML ? `<span class="comp-players">${playerCount}人</span>${compHTML}` : '';
   
   let dayTextHTML = '';
   let phaseText = '';
@@ -1339,7 +1418,10 @@ function renderSeats(state) {
         ${kickBtn}
       </div>`;
     } else if (!state.gameStarted) {
-      html += `<div class="game-seat" onclick="sitDown(${i})" title="点击入座">
+      const seatAttrs = state.isStoryteller
+        ? 'title="说书人模式下不可入座"'
+        : `onclick="sitDown(${i})" title="点击入座"`;
+      html += `<div class="game-seat" ${seatAttrs}>
         <div class="seat-num">${i+1}</div>
         <div class="seat-name" style="color:#B2B2B2;">空位</div>
       </div>`;
@@ -1551,7 +1633,14 @@ function renderCenter(state) {
     if (isHost) {
       lobbyButtons.push({ cls: 'btn-warning', label: '+ 添加机器人', action: 'addBot()' });
     }
-    if (me && me.seat !== -1) {
+    if (isHost) {
+      lobbyButtons.push({
+        cls: state.storytellerMode ? 'btn-info' : 'btn-secondary',
+        label: state.storytellerMode ? '🕯 说书人：开' : '🕯 说书人：关',
+        action: 'toggleStorytellerMode()',
+      });
+    }
+    if (me && me.seat !== -1 && !state.storytellerMode) {
       lobbyButtons.push({
         cls: me.isReady ? 'btn-secondary' : 'btn-success',
         label: me.isReady ? '取消准备' : '准备',
@@ -1562,15 +1651,20 @@ function renderCenter(state) {
       const customCount = Object.values(customRoleMap).filter(r => r).length;
       lobbyButtons.push({
         cls: customRoleMode ? 'btn-info' : 'btn-secondary',
-        label: customRoleMode ? `🎭 自定义角色(${customCount})` : '🎭 自定义角色',
+        label: state.storytellerMode
+          ? `🎭 身份配置(${customCount})`
+          : (customRoleMode ? `🎭 自定义角色(${customCount})` : '🎭 自定义角色'),
         action: 'openCustomRolePanel()',
       });
       const allReady = (state.players || []).filter(p => p.seat !== -1).every(p => p.isReady);
+      const unassigned = state.storytellerMode
+        ? (state.players || []).filter(p => p.seat !== -1 && !customRoleMap[p.seat]).length
+        : 0;
       lobbyButtons.push({
         cls: 'btn-primary',
         label: '开始游戏',
         action: 'startGame()',
-        disabled: seatedCount < 5 || !allReady,
+        disabled: seatedCount < 5 || !allReady || unassigned > 0,
       });
     }
 
@@ -1616,6 +1710,12 @@ function renderCenter(state) {
           ).join('')}</div>`;
         } else {
           html += '<div style="margin-top:8px; color:#06AD56;">平安夜，无人死亡</div>';
+        }
+        if (state.revivesToAnnounce && state.revivesToAnnounce.length > 0) {
+          html += '<div style="margin-top:8px;">昨晚复活的玩家：</div>';
+          html += `<div class="ss-row">${state.revivesToAnnounce.map(r =>
+            `<span class="ss-chip">${r.seat+1}号 ${escapeHtml(r.name)}</span>`
+          ).join('')}</div>`;
         }
         // 天亮自动进入白天，无需全员确认
         html += '<div style="margin-top:10px; color:#999999; font-size:0.9em;">即将自动进入白天...</div>';
@@ -1751,6 +1851,19 @@ function renderCenter(state) {
         if (state.allRoles) showGameOverRoles(state.allRoles);
         playVictoryEffect(state.winEffect);
         break;
+    }
+
+    // 人工说书人：固定提供控制台入口（游戏结束时保留「返回大厅」）
+    if (state.isStoryteller && state.phase !== 'GAME_OVER') {
+      showAction = true;
+      $('actionTitle').textContent = '说书人';
+      $('selectedTargets').innerHTML = '<div style="color:#666666; font-size:0.9em;">你以说书人身份主持本局</div>';
+      const waiting = state.storyteller && state.storyteller.awaiting;
+      const waitText = waiting === 'wake' ? '待唤醒' : waiting === 'nightEnd' ? '待审核夜晚' : waiting === 'question' ? '待回答问题' : '';
+      $('actionButtons').innerHTML = `
+        ${waitText ? `<div style="text-align:center; color:#FF9500; margin-bottom:8px;">⏳ ${waitText}</div>` : ''}
+        <button class="btn btn-sm btn-info" style="width:100%;" onclick="openStorytellerPanel()">🕯 打开说书人控制台</button>
+      `;
     }
 
     // 统一显示玩家私密信息（所有阶段都显示，不标注真假——仅在上帝视角标注）
@@ -5578,6 +5691,82 @@ function validateCustomRoles(customRoleMap, playerCount, scriptId, gfDelta = cus
   };
 }
 
+// 人工说书人：角色自动分配
+let _storytellerAutoRoleKey = '';
+
+function shuffleArray(list) {
+  const arr = list.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// 按剧本与人数随机生成一套合法角色（seat -> roleId）
+function generateRandomRoleMap(playerCount, scriptId) {
+  const script = scriptId || 'tb';
+  const seated = (currentState.players || []).filter(p => p.seat !== -1).map(p => p.seat).sort((a, b) => a - b);
+  if (seated.length !== playerCount || playerCount < 5) return null;
+  // 排除设置角色（男爵/教父）与影响外来者数量的恶魔，保证配比与 getComp 一致
+  const excluded = new Set([getSetupChar(script).id, 'fanggu', 'vigormortis']);
+  const byCat = { townsfolk: [], outsider: [], minion: [], demon: [] };
+  Object.keys(ROLE_CATEGORY).forEach(id => {
+    if (ROLE_SCRIPT_MAP[id] !== script || excluded.has(id)) return;
+    const cat = ROLE_CATEGORY[id];
+    if (byCat[cat]) byCat[cat].push(id);
+  });
+  const comp = getComp(playerCount, false, script, customGfDelta, null);
+  const pick = (cat, n) => shuffleArray(byCat[cat]).slice(0, n);
+  let selected = [
+    ...pick('demon', comp.demon),
+    ...pick('minion', comp.minion),
+    ...pick('outsider', comp.outsider),
+    ...pick('townsfolk', comp.townsfolk)
+  ];
+  if (selected.length < playerCount) {
+    const chosen = new Set(selected);
+    const rest = shuffleArray(Object.keys(ROLE_CATEGORY).filter(id => ROLE_SCRIPT_MAP[id] === script && !excluded.has(id) && !chosen.has(id)));
+    selected = selected.concat(rest.slice(0, playerCount - selected.length));
+  }
+  selected = shuffleArray(selected).slice(0, playerCount);
+  const map = {};
+  seated.forEach((seat, i) => { if (selected[i]) map[seat] = selected[i]; });
+  const check = validateCustomRoles(map, playerCount, script);
+  return check.valid ? map : null;
+}
+
+// 立即为全部座位自动分配角色（人工说书人）
+function autoAssignStorytellerRoles() {
+  const st = currentState;
+  if (!st || st.gameStarted) return false;
+  const seated = (st.players || []).filter(p => p.seat !== -1);
+  if (seated.length < 5) return false;
+  const script = st.script || 'tb';
+  const map = generateRandomRoleMap(seated.length, script);
+  if (!map) return false;
+  customRoleMap = map;
+  customRoleMode = true;
+  const seatKey = seated.map(p => p.seat).sort((a, b) => a - b).join(',');
+  _storytellerAutoRoleKey = `${script}|${seatKey}`;
+  return true;
+}
+
+// 人工说书人开启后，人数/剧本变化时自动重新分配角色
+function maybeAutoAssignStorytellerRoles() {
+  const st = currentState;
+  if (!st || !st.storytellerMode || st.gameStarted) return;
+  const seated = (st.players || []).filter(p => p.seat !== -1);
+  if (seated.length < 5) return;
+  const script = st.script || 'tb';
+  const seatKey = seated.map(p => p.seat).sort((a, b) => a - b).join(',');
+  if (`${script}|${seatKey}` === _storytellerAutoRoleKey) return;
+  if (!autoAssignStorytellerRoles()) return;
+  const panel = document.getElementById('customRolePanel');
+  if (panel && panel.style.display !== 'none') renderCustomRoleList();
+  showToast('已自动分配角色，可在「身份配置」中调整');
+}
+
 const CUSTOM_ROLE_OPTIONS = [
   { id: '', name: '随机分配', color: '#888' },
   // TB 村民
@@ -5701,6 +5890,11 @@ function renderCustomRoleList() {
 
   // 按剧本过滤角色选项
   const filteredOptions = CUSTOM_ROLE_OPTIONS.filter(opt => !opt.id || ROLE_SCRIPT_MAP[opt.id] === scriptId);
+  // 酒鬼虚假身份候选：当前剧本村民角色
+  const fakeRoleOptions = CUSTOM_ROLE_OPTIONS.filter(opt =>
+    opt.id && ROLE_SCRIPT_MAP[opt.id] === scriptId
+    && ROLE_CATEGORY[opt.id] === 'townsfolk'
+  ).map(opt => ({ id: opt.id, name: opt.name }));
 
   let html = '';
   seated.forEach(p => {
@@ -5710,7 +5904,40 @@ function renderCustomRoleList() {
     const isWrongScript = currentVal && currentOpt && ROLE_SCRIPT_MAP[currentVal] !== scriptId;
     const isDuplicate = currentVal && usedRoles[currentVal] > 1;
     const borderColor = isDuplicate ? '#FA5151' : (currentVal ? (isWrongScript ? '#FF9500' : '#07C160') : 'rgba(0,0,0,0.06)');
-    html += `<div style="display:flex; align-items:center; padding:8px 12px; margin-bottom:6px; background:rgba(0,0,0,0.05); border-radius:6px; border-left:3px solid ${borderColor};">
+    const drunkFake = currentVal === 'drunk'
+      ? `<div style="flex-basis:100%; display:flex; align-items:center; gap:6px; margin:6px 0 0 50px; font-size:12px; color:#8c8c8c;">
+          虚假身份：
+          <select onchange="setCustomDrunkFake(${p.seat}, this.value)" style="background:#ffffff; color:#191919; border:1px solid rgba(0,0,0,0.12); border-radius:4px; padding:3px 8px; font-size:12px;">
+            <option value="">随机（不在场村民）</option>
+            ${fakeRoleOptions.map(opt =>
+              `<option value="${opt.id}" ${customDrunkFakes[p.seat] === opt.id ? 'selected' : ''}>${opt.name}</option>`
+            ).join('')}
+          </select>
+        </div>`
+      : '';
+    // 祖母的自定义孙子：只能选其他善良阵营玩家（未指定角色/善良角色）
+    const grandchildCandidates = currentVal === 'grandmother'
+      ? seated.filter(x => {
+          if (x.seat === p.seat) return false;
+          const rid = customRoleMap[x.seat];
+          if (!rid) return true; // 未分配角色的座位可能被自动填为善良角色
+          return ROLE_CATEGORY[rid] === 'townsfolk' || ROLE_CATEGORY[rid] === 'outsider';
+        })
+      : [];
+    const grandchildSel = currentVal === 'grandmother'
+      ? `<div style="flex-basis:100%; display:flex; align-items:center; gap:6px; margin:6px 0 0 50px; font-size:12px; color:#8c8c8c;">
+          孙子：
+          <select onchange="setCustomGrandchild(${p.seat}, this.value)" style="background:#ffffff; color:#191919; border:1px solid rgba(0,0,0,0.12); border-radius:4px; padding:3px 8px; font-size:12px;">
+            <option value="">随机（善良玩家）</option>
+            ${grandchildCandidates.map(x => {
+              const rid = customRoleMap[x.seat];
+              const rname = rid ? (CUSTOM_ROLE_OPTIONS.find(o => o.id === rid) || {}).name : '';
+              return `<option value="${x.seat}" ${Number(customGrandchildren[p.seat]) === x.seat ? 'selected' : ''}>${x.seat + 1}号 ${escapeHtml(x.name)}${rname ? '（' + rname + '）' : ''}</option>`;
+            }).join('')}
+          </select>
+        </div>`
+      : '';
+    html += `<div style="display:flex; flex-wrap:wrap; align-items:center; padding:8px 12px; margin-bottom:6px; background:rgba(0,0,0,0.05); border-radius:6px; border-left:3px solid ${borderColor};">
       <span style="width:50px; color:#07C160; font-weight:bold;">${p.seat+1}号</span>
       <span style="flex:1; color:#191919; margin-right:10px;">${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</span>
       <select onchange="setCustomRole(${p.seat}, this.value)" style="background:#ffffff; color:#191919; border:1px solid rgba(0,0,0,0.12); border-radius:4px; padding:4px 8px; min-width:180px; font-size:13px;">
@@ -5718,6 +5945,8 @@ function renderCustomRoleList() {
           `<option value="${opt.id}" ${currentVal === opt.id ? 'selected' : ''} style="color:${opt.color};">${opt.name}</option>`
         ).join('')}
       </select>
+      ${drunkFake}
+      ${grandchildSel}
     </div>`;
   });
 
@@ -5786,6 +6015,29 @@ function setCustomRole(seat, roleId) {
     customRoleMap[seat] = roleId;
   } else {
     delete customRoleMap[seat];
+  }
+  // 不再是酒鬼 / 祖母时清除其专属配置
+  if (roleId !== 'drunk') delete customDrunkFakes[seat];
+  if (roleId !== 'grandmother') delete customGrandchildren[seat];
+  renderCustomRoleList();
+}
+
+// 酒鬼的虚假身份（以为自己是哪个善良角色）
+function setCustomDrunkFake(seat, roleId) {
+  if (roleId) {
+    customDrunkFakes[seat] = roleId;
+  } else {
+    delete customDrunkFakes[seat];
+  }
+  renderCustomRoleList();
+}
+
+// 祖母的自定义孙子（选择一个善良阵营玩家）
+function setCustomGrandchild(seat, targetSeat) {
+  if (targetSeat !== '' && targetSeat !== null && targetSeat !== undefined) {
+    customGrandchildren[seat] = Number(targetSeat);
+  } else {
+    delete customGrandchildren[seat];
   }
   renderCustomRoleList();
 }
@@ -6639,5 +6891,377 @@ async function viewHistoryDetail(historyId) {
   } finally {
     _historyDetailLoading = false;
   }
+}
+
+// ==================== 人工说书人控制台 ====================
+let _stRenderedSig = '';
+let _stAutoKey = '';
+let _stDismissedKey = '';
+let _stState = null;
+let _stHadReview = false;
+
+// 大厅：切换人工说书人模式
+function toggleStorytellerMode() {
+  const enabled = !(currentState && currentState.storytellerMode);
+  if (!enabled) {
+    // 关闭人工说书人时自动清除自定义角色配置
+    customRoleMode = false;
+    customRoleMap = {};
+    customDrunkFakes = {};
+    customGrandchildren = {};
+    customGfDelta = 1;
+    _storytellerAutoRoleKey = '';
+    const panel = $('customRolePanel');
+    if (panel) panel.style.display = 'none';
+  }
+  emitRequest('room:setStorytellerMode', { enabled });
+}
+
+// 游戏内：打开控制台
+function openStorytellerPanel() {
+  const panel = $('storytellerPanel');
+  if (!panel) return;
+  panel.style.display = 'flex';
+  _stRenderedSig = '';
+  if (_stState) renderStorytellerPanel({ isStoryteller: true, storyteller: _stState });
+}
+
+// 游戏内：关闭控制台（当前等待项不再自动弹出）
+function closeStorytellerPanel() {
+  const panel = $('storytellerPanel');
+  if (panel) panel.style.display = 'none';
+  _stDismissedKey = _stAutoKey;
+}
+
+// 说书人：唤醒 / 跳过
+function submitStorytellerWake(action) {
+  const messageEl = $('stWakeMessage');
+  const message = messageEl ? messageEl.value : '';
+  emitRequest('storyteller:wake', { action, message });
+}
+
+// 说书人：提交夜晚审核
+function submitStorytellerNight() {
+  if (!_stState || !_stState.nightReview) return;
+
+  const infos = Array.from(document.querySelectorAll('[data-stinfo]')).map(el => ({
+    id: el.dataset.stinfo,
+    message: el.value
+  }));
+
+  const deaths = Array.from(document.querySelectorAll('#stDeathList input[type="checkbox"]:checked'))
+    .map(el => el.value);
+
+  const statusMap = {};
+  document.querySelectorAll('[data-ststatus]').forEach(el => {
+    const pid = el.dataset.ststatus;
+    if (!statusMap[pid]) statusMap[pid] = { playerId: pid, drunk: false, poisoned: false };
+    statusMap[pid][el.dataset.field] = el.checked;
+  });
+  const statuses = Object.values(statusMap);
+
+  // 防止重复提交
+  const btn = $('stConfirmNightBtn');
+  if (btn) btn.disabled = true;
+  emitRequest('storyteller:confirmNight', { infos, deaths, statuses });
+}
+
+// 说书人：执行白天随机决策（如心上人死亡后的永久醉酒对象），立即生效
+function submitStorytellerChoice(kind, chosenId) {
+  if (!kind || !chosenId) return;
+  emitRequest('storyteller:choose', { kind, chosenId });
+}
+
+// 说书人：死亡名单勾选变化时同步身份表状态（未提交前仅本地预览）
+function syncDeathStatus(el) {
+  if (!el) return;
+  const cell = document.querySelector(`[data-st-player-status="${el.value}"]`);
+  if (!cell) return;
+  cell.textContent = el.checked ? '死亡' : '存活';
+  cell.classList.toggle('st-player-dead', el.checked);
+}
+
+// 说书人：回答白天问题
+function submitStorytellerAnswer(id) {
+  const selects = Array.from(document.querySelectorAll('[data-stans]'));
+  const answers = selects.map(el => el.value === '1');
+  emitRequest('storyteller:answerQuestion', { id, answers });
+}
+
+// 构造控制台内容
+function buildStorytellerBody(st) {
+  const review = st.nightReview;
+  const pending = st.pendingWake;
+  const infos = review ? (review.infos || []) : (st.pendingInfos || []);
+  const nightActions = st.nightActions || [];
+  const actionByPlayer = new Map(nightActions.map(a => [a.playerId, a]));
+  const describeNightAction = (a) => {
+    if (a.action === 'targets') {
+      const targetText = (a.targets || []).map(t => `${t.seat + 1}号${escapeHtml(t.name)}`).join('、');
+      return `选择了 ${targetText || '无人'}`;
+    }
+    if (a.action === 'role') return `选择角色：${escapeHtml(a.roleId || '')}`;
+    if (a.action === 'none') return '执行了无需选择目标的行动';
+    if (a.action === 'skipped') return `被跳过${a.note ? '（' + escapeHtml(a.note) + '）' : ''}`;
+    return escapeHtml(a.action || '');
+  };
+  const playerById = new Map((st.players || []).map(p => [p.id, p]));
+  // 信息条目头部：名称 → 本局角色（含虚假身份）→ 本夜行动
+  const buildInfoHead = (playerId, seat, name, isBot) => {
+    const p = playerById.get(playerId);
+    const act = actionByPlayer.get(playerId);
+    const roleHtml = p && p.roleName
+      ? `<span class="st-info-role">${escapeHtml(p.roleName)}${p.fakeRoleName ? `<span class="st-info-fake">（假身份：${escapeHtml(p.fakeRoleName)}）</span>` : ''}</span>`
+      : '';
+    return `<div class="st-info-head">
+      <span class="st-info-who">${seat + 1}号 ${escapeHtml(name)}${isBot ? ' 🤖' : ''}</span>
+      ${roleHtml}
+      ${act ? `<span class="st-info-night">🌙 ${describeNightAction(act)}</span>` : ''}
+    </div>`;
+  };
+  let html = `<div class="st-grid">
+    <section class="st-quad st-quad-action">
+      <div class="st-quad-title">🌙 行动与信息</div>
+      <div class="st-quad-body" data-empty="本夜唤醒已结束">`;
+
+  if (pending) {
+    html += `<div class="st-card">
+      <div class="st-card-title">🌙 唤醒 ${pending.seat + 1}号 ${escapeHtml(pending.name)}（${escapeHtml(pending.roleName)}）</div>
+      <div class="st-tip">系统建议的行动提示如下，可修改后再唤醒；玩家将看到修改后的文本。</div>
+      <textarea id="stWakeMessage" class="st-textarea" rows="2">${escapeHtml((pending.payload && pending.payload.message) || '请行动')}</textarea>
+      <div class="st-actions">
+        <button class="btn btn-sm btn-success" onclick="submitStorytellerWake('wake')">唤醒并发送</button>
+        <button class="btn btn-sm btn-secondary" onclick="submitStorytellerWake('skip')">跳过此人</button>
+      </div>
+    </div>`;
+  }
+
+  if (infos.length > 0) {
+    html += `<div class="st-card">
+      <div class="st-card-title">📜 待发信息（${infos.length}）</div>
+      <div class="st-tip">这些是夜晚产生的私密信息（含机器人玩家的信息），可编辑文案；确认夜晚时统一发送给对应玩家。</div>
+      <div class="st-info-list">`;
+    infos.forEach(info => {
+      html += `<div class="st-info-item">
+        ${buildInfoHead(info.playerId, info.seat, info.playerName, info.isBot)}
+        <textarea class="st-textarea" data-stinfo="${info.id}" rows="2">${escapeHtml(info.message || '')}</textarea>
+      </div>`;
+    });
+    html += `</div>`;
+    // 没有待发信息但有夜间行动的玩家，同样把行动记录列在信息区
+    const extraActs = nightActions.filter(a => !infos.some(i => i.playerId === a.playerId));
+    if (extraActs.length > 0) {
+      html += `<div class="st-info-list st-info-extra">`;
+      extraActs.forEach(a => {
+        html += `<div class="st-info-item">
+          ${buildInfoHead(a.playerId, a.seat, a.name, a.isBot)}
+        </div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  } else if (review) {
+    html += `<div class="st-card">
+      <div class="st-card-title">📜 待发信息（0）</div>
+      <div class="st-tip">本夜没有产生需要发送的私密信息（本局没有信息类角色，或信息角色本夜未获得信息）。</div>
+    </div>`;
+  }
+
+  html += `      </div>
+    </section>
+
+    <section class="st-quad st-quad-review">
+      <div class="st-quad-title">⚖ 夜晚审核</div>
+      <div class="st-quad-body" data-empty="夜晚尚未结束，暂无审核内容">
+  `;
+
+  if (review) {
+    // 死亡名单
+    html += `<div class="st-card">
+      <div class="st-card-title">⚰️ 夜晚死亡名单（第${review.nightCount}夜）</div>
+      <div class="st-tip">默认按系统结算勾选。可取消以救活，或勾选其他玩家使其死亡。</div>
+      <div id="stDeathList" class="st-death-list">`;
+    (review.deaths || []).forEach(d => {
+      html += `<label class="st-death-item${d.locked ? ' locked' : ''}">
+        <input type="checkbox" value="${d.id}" ${d.checked ? 'checked' : ''} ${d.locked ? 'disabled' : ''} onchange="syncDeathStatus(this)">
+        <span>${d.seat + 1}号 ${escapeHtml(d.name)}</span>
+        <span class="st-role">${escapeHtml(d.roleName || '')}</span>
+      </label>`;
+    });
+    html += `</div></div>`;
+
+    // 醉酒 / 中毒
+    html += `<div class="st-card">
+      <div class="st-card-title">🧪 醉酒 / 中毒标记</div>
+      <div class="st-tip">勾选后将在确认时写入玩家状态。</div>
+      <div class="st-status-list">`;
+    (review.statuses || []).forEach(s => {
+      html += `<div class="st-status-item">
+        <span class="st-status-name">${s.seat + 1}号 ${escapeHtml(s.name)}</span>
+        <label><input type="checkbox" data-ststatus="${s.playerId}" data-field="drunk" ${s.drunk ? 'checked' : ''}> 醉酒</label>
+        <label><input type="checkbox" data-ststatus="${s.playerId}" data-field="poisoned" ${s.poisoned ? 'checked' : ''}> 中毒</label>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  html += `      </div>
+    </section>
+
+    <section class="st-quad st-quad-todo">
+      <div class="st-quad-title">❓ 待处理</div>
+      <div class="st-quad-body" data-empty="当前没有待回答问题或随机效果">
+  `;
+
+  if (st.pendingQuestion) {
+    const q = st.pendingQuestion;
+    html += `<div class="st-card st-question">
+      <div class="st-card-title">❓ 待回答问题</div>
+      <div class="st-tip">提问者：${q.seat !== undefined && q.seat !== null ? '' : ''}${escapeHtml(q.playerName || '')}</div>`;
+    (q.questions || []).forEach((item, i) => {
+      html += `<div class="st-question-item">
+        <div class="st-question-text">${escapeHtml(item.text)}</div>
+        <select data-stans="${i}">
+          <option value="1">是</option>
+          <option value="0">否</option>
+        </select>
+      </div>`;
+    });
+    html += `<div class="st-actions">
+        <button class="btn btn-sm btn-primary" onclick="submitStorytellerAnswer('${q.id}')">提交回答</button>
+      </div>
+    </div>`;
+  }
+
+  // 全部随机决策统一在「待处理」区点击选择
+  const topChoices = st.pendingChoices || [];
+  if (topChoices.length > 0) {
+    html += `<div class="st-card">
+      <div class="st-card-title">🎲 待选择的随机效果</div>
+      <div class="st-tip">点击玩家即生效，该行保留并显示「已选择」，可点击其他玩家修改；修补匠／隐士点击名字会在「夜晚死亡名单」中勾选／取消勾选该玩家。</div>`;
+    topChoices.forEach(c => {
+      const isDeathCandidate = c.kind === 'night_death_candidate';
+      html += `<div class="st-choice-row">
+        <label>${escapeHtml(c.label || c.kind)}</label>
+        <div class="st-choice-options">`;
+      (c.options || []).forEach(o => {
+        const text = `${o.seat >= 0 ? (o.seat + 1) + '号 ' : ''}${o.name || ''}`;
+        const picked = c.chosenId === o.id;
+        const mark = picked ? (isDeathCandidate ? '（已勾选）' : '（已选择）') : '';
+        html += `<button class="btn btn-sm ${picked ? 'btn-primary' : 'btn-secondary'}" onclick="submitStorytellerChoice('${c.kind}','${o.id}')">${escapeHtml(text)}${mark}</button>`;
+      });
+      html += `</div></div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `      </div>
+    </section>
+
+    <section class="st-quad st-quad-log">
+      <div class="st-quad-title">🎭 身份表</div>
+      <div class="st-quad-body" data-empty="暂无玩家">
+  `;
+
+  html += `<div class="st-card">
+    <table class="st-player-table">
+      <thead><tr><th>座位</th><th>玩家</th><th>角色</th><th>阵营</th><th>状态</th></tr></thead>
+      <tbody>`;
+  // 身份表状态跟随夜晚死亡名单的勾选：勾选显示死亡，取消显示存活
+  const deathChecked = new Map();
+  (review ? (review.deaths || []) : []).forEach(d => deathChecked.set(d.id, !!d.checked));
+  (st.players || []).forEach(p => {
+    const dead = deathChecked.has(p.id) ? deathChecked.get(p.id) : !p.isAlive;
+    const foolBadge = p.foolImmune === true
+      ? '<span class="st-fool-immune">免死可用</span>'
+      : (p.foolImmune === false ? '<span class="st-fool-used">免死已用</span>' : '');
+    html += `<tr data-st-player="${p.id}">
+      <td>${p.seat + 1}</td>
+      <td>${escapeHtml(p.name)}${p.isBot ? ' 🤖' : ''}</td>
+      <td class="st-role-cell">
+        <div>${escapeHtml(p.roleName || '未分配')}${p.fakeRoleName ? `<span class="st-role-fake">（假身份：${escapeHtml(p.fakeRoleName)}）</span>` : ''}${foolBadge}</div>
+        ${p.abilityDesc ? `<div class="st-role-ability">${escapeHtml(p.abilityDesc)}</div>` : ''}
+      </td>
+      <td>${p.team === 'GOOD' ? '善良' : p.team === 'EVIL' ? '邪恶' : '-'}</td>
+      <td data-st-player-status="${p.id}" class="${dead ? 'st-player-dead' : ''}">${dead ? '死亡' : '存活'}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>`;
+
+  html += `      </div>
+    </section>
+  </div>`;
+  return html;
+}
+
+// 渲染控制台（仅房主）
+function renderStorytellerPanel(state) {
+  const st = state && state.storyteller;
+  if (!st) return;
+  _stState = st;
+  const panel = $('storytellerPanel');
+  if (!panel) return;
+
+  const pending = st.pendingWake;
+  const review = st.nightReview;
+  const question = st.pendingQuestion;
+  const choiceKey = (st.pendingChoices || []).map(c => c.kind).join(',');
+  const key = [st.awaiting || '', pending ? pending.playerId : '', review ? review.nightCount : '', question ? question.id : '', choiceKey].join('|');
+
+  // 夜晚审核结束、进入白天时自动关闭控制台
+  if (_stHadReview && !review) {
+    panel.style.display = 'none';
+    _stAutoKey = '';
+    _stDismissedKey = '';
+    _stRenderedSig = '';
+  }
+  _stHadReview = !!review;
+
+  // 新的等待项自动打开一次；用户手动关闭后不再自动弹出
+  if (st.awaiting && key !== _stAutoKey && key !== _stDismissedKey) {
+    _stAutoKey = key;
+    _stDismissedKey = '';
+    panel.style.display = 'flex';
+    _stRenderedSig = '';
+  }
+
+  const statusText = st.awaiting === 'wake'
+    ? '等待唤醒'
+    : st.awaiting === 'nightEnd'
+      ? '等待夜晚审核'
+      : st.awaiting === 'question'
+        ? '等待回答问题'
+        : st.awaiting === 'choice'
+          ? '等待选择随机效果'
+          : '暂不需要操作';
+  const statusEl = $('stStatusBar');
+  if (statusEl) statusEl.textContent = statusText;
+
+  // 夜晚审核时：确认按钮占用关闭按钮的位置，隐藏关闭按钮；白天恢复关闭按钮
+  const closeBtn = $('stCloseBtn');
+  if (closeBtn) closeBtn.style.display = review ? 'none' : '';
+  const actionSlot = $('stHeaderActionSlot');
+  if (actionSlot) {
+    actionSlot.innerHTML = review
+      ? '<button class="btn btn-sm btn-primary" id="stConfirmNightBtn" onclick="submitStorytellerNight()">确认并进入白天</button>'
+      : '';
+  }
+
+  // 等待项和列表未变化时不重绘，避免覆盖正在编辑的文本
+  const sig = JSON.stringify([
+    key,
+    (st.pendingInfos || []).map(i => i.id),
+    review ? (review.deaths || []).map(d => d.id + ':' + (d.checked ? 1 : 0)) : null,
+    review ? (review.choices || []).map(c => c.kind) : null,
+    (st.pendingChoices || []).map(c => c.kind + ':' + (c.chosenId || '')),
+    (st.nightActions || []).length,
+    (st.nightActions || []).map(a => a.playerId + ':' + a.action + ':' + ((a.targets || []).length)),
+    st.nightActionNight || 0
+  ]);
+  if (sig === _stRenderedSig) return;
+  _stRenderedSig = sig;
+
+  const body = $('stBody');
+  if (body) body.innerHTML = buildStorytellerBody(st);
 }
 

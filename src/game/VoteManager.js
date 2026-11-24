@@ -1,5 +1,5 @@
 // 投票/提名管理器
-const { PHASES } = require('../config/game-config');
+const { PHASES, BMR_ROLE_IDS } = require('../config/game-config');
 const { getAlivePlayers, isEffectivelyDead } = require('../utils/helpers');
 const { Bard } = require('../roles/Townsfolk2');
 const { Mutant } = require('../roles/Outsider3');
@@ -280,8 +280,8 @@ class VoteManager {
     this.engine.waitForConfirmation();
   }
 
-  closeNominations() {
-    this.resolveExecution();
+  async closeNominations() {
+    return await this.resolveExecution();
   }
 
   // 技能造成的处决：与普通处决共用「死亡记录 + 处决动画」，返回被处决的玩家（未死亡返回 null）
@@ -324,7 +324,25 @@ class VoteManager {
   }
 
   // SNV 变种人：当天公开声称过外来者（疯狂）时可能被处决
-  resolveMutantMadness(gs) {
+  async resolveMutantMadness(gs) {
+    // 人工说书人：改为由说书人判定是否处决
+    if (this.engine.isManualStoryteller()) {
+      const mutant = getAlivePlayers(this.engine.room)
+        .find(p => p.role && p.role.id === 'mutant');
+      const claimedToday = mutant && mutant.abilityState && mutant.abilityState.mutantMadDay === gs.dayCount;
+      if (mutant && claimedToday && !mutant.isPoisoned && !mutant.isDrunk) {
+        const ans = await this.engine.askStorytellerQuestions(
+          [`变种人 ${mutant.seat + 1}号 ${mutant.name} 今天公开声称自己是外来者。\n是否因其疯狂而处决他/她？`],
+          { kind: 'mutant', playerId: mutant.id, playerName: mutant.name }
+        );
+        if (!ans.ok || !ans.answers[0]) return null;
+        return this.executeByAbility(mutant, 'MUTANT',
+          `${mutant.seat + 1}号 ${mutant.name}（变种人）因公开声称外来者被处决（说书人判定）`,
+          { byStoryteller: true });
+      }
+      return null;
+    }
+
     const result = Mutant.checkMadExecution(this.engine, gs);
     if (!result) return null;
     const mutant = result.player;
@@ -350,14 +368,14 @@ class VoteManager {
     return true;
   }
 
-  resolveExecution() {
+  async resolveExecution() {
     const gs = this.engine.room.gameState;
     gs.phase = PHASES.EXECUTION;
 
     // SNV：洗脑师 / 变种人造成的处决先结算（同样播放处决动画、计入今日有处决）
     const abilityExecuted = [
       this.resolveCerenovusCurse(gs),
-      this.resolveMutantMadness(gs)
+      await this.resolveMutantMadness(gs)
     ].filter(Boolean);
     const hasAbilityExecution = abilityExecuted.length > 0;
 
@@ -449,10 +467,23 @@ class VoteManager {
     if (toExecute) {
       // 检查和平主义者拯救（处决前判断，拯救则不执行处决）
       let pacifistSaved = false;
-      try {
-        const Pacifist = require('../roles/Townsfolk2').Pacifist;
-        pacifistSaved = Pacifist.checkPacifistSave(toExecute, this.engine);
-      } catch (e) { /* BMR 角色未加载时忽略 */ }
+      if (this.engine.isManualStoryteller() && toExecute.role && toExecute.role.team === 'GOOD') {
+        // 人工说书人：由说书人决定是否发动和平主义者能力
+        const pacifist = getAlivePlayers(this.engine.room)
+          .find(p => p.role && p.role.id === BMR_ROLE_IDS.PACIFIST);
+        if (pacifist && !pacifist.isPoisoned && !pacifist.isDrunk) {
+          const ans = await this.engine.askStorytellerQuestions(
+            [`${toExecute.seat + 1}号 ${toExecute.name}（${toExecute.role.name}）即将被处决。\n和平主义者 ${pacifist.seat + 1}号 ${pacifist.name} 是否发动能力救下他/她？`],
+            { kind: 'pacifist', playerId: pacifist.id, playerName: pacifist.name }
+          );
+          pacifistSaved = !!(ans.ok && ans.answers[0]);
+        }
+      } else {
+        try {
+          const Pacifist = require('../roles/Townsfolk2').Pacifist;
+          pacifistSaved = Pacifist.checkPacifistSave(toExecute, this.engine);
+        } catch (e) { /* BMR 角色未加载时忽略 */ }
+      }
 
       if (pacifistSaved) {
         // 和平主义者阻止了处决：玩家不死

@@ -1,7 +1,7 @@
 // BMR镇民角色集合（黯月初升）
 const Role = require('./Role');
 const { BMR_ROLE_IDS, getScriptConfig } = require('../config/game-config');
-const { randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, revivePlayer } = require('../utils/helpers');
+const { randomChoice, getAlivePlayers, getAliveNeighbors, applyDrunk, clearDrunkSource, revivePlayer } = require('../utils/helpers');
 
 // 辅助：获取当晚因自身能力被唤醒的玩家ID集合
 // 数据来源是 NightResolver.markWoken 记录的真实唤醒名单：只有真正进入行动面板的玩家才算，
@@ -44,10 +44,20 @@ class Grandmother extends Role {
 
   resolveNight(gameState, player, engine) {
     if (gameState.nightCount === 0) {
-      // 首夜：随机选一名善良玩家作为孙子
-      const alive = getAlivePlayers(engine.room).filter(p => p.id !== player.id && p.role.team === 'GOOD');
-      if (alive.length === 0) return;
-      const grandchild = randomChoice(alive);
+      // 首夜：优先使用房主自定义的孙子，否则随机选一名善良玩家
+      let grandchild = null;
+      const presetId = player.abilityState && player.abilityState.grandchildId;
+      if (presetId) {
+        const preset = engine.room.players.get(presetId);
+        if (preset && preset.id !== player.id && preset.role && preset.role.team === 'GOOD') {
+          grandchild = preset;
+        }
+      }
+      if (!grandchild) {
+        const alive = getAlivePlayers(engine.room).filter(p => p.id !== player.id && p.role.team === 'GOOD');
+        if (alive.length === 0) return;
+        grandchild = randomChoice(alive);
+      }
       player.abilityState.grandchildId = grandchild.id;
 
       let roleName = grandchild.role.name;
@@ -143,6 +153,37 @@ class Sailor extends Role {
         targetId: targetId,
         message: `你选择了 ${target.seat + 1}号 ${target.name}，${fakeDrunk ? '你' : 'TA'}醉酒了`
       }, true, { realInfo: '水手中毒/醉酒，技能失效' });
+      return { success: true };
+    }
+
+    // 人工说书人：由说书人选择谁醉酒
+    if (engine.isManualStoryteller && engine.isManualStoryteller() && engine.room.gameState.storytellerArmed) {
+      engine.requestStorytellerChoice(
+        'sailor_drunk',
+        `水手选择了 ${target.seat + 1}号 ${target.name}：选择醉酒者`,
+        [
+          { id: player.id, seat: player.seat, name: `${player.name}（水手自己）` },
+          { id: target.id, seat: target.seat, name: `${target.name}（目标）` }
+        ],
+        (opt) => {
+          const drunked = engine.room.players.get(opt.id);
+          if (!drunked) return;
+          applyDrunk(drunked, 'sailor', 1);
+          engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（水手）选择了 ${target.seat + 1}号 ${target.name}，${drunked.id === player.id ? '水手自己' : '对方'}醉酒（说书人判定）`, {
+            playerId: player.id, targetId: target.id, byStoryteller: true
+          });
+        },
+        (prevId) => {
+          // 说书人改选：撤销上一次选择造成的醉酒
+          const prev = engine.room.players.get(prevId);
+          if (prev) clearDrunkSource(prev, 'sailor');
+        }
+      );
+      engine.setPlayerPrivateInfo(player, {
+        type: 'sailor',
+        targetId: targetId,
+        message: `你选择了 ${target.seat + 1}号 ${target.name}，醉酒结果由说书人判定`
+      });
       return { success: true };
     }
 
@@ -318,21 +359,17 @@ class Exorcist extends Role {
       target.abilityState = target.abilityState || {};
       target.abilityState.exorcisedNight = gameState.nightCount;
 
-      engine.setPlayerPrivateInfo(player, {
-        type: 'exorcist',
-        targetId: targetId,
-        message: `你选择了 ${target.seat + 1}号 ${target.name}，TA是恶魔！恶魔能力失效。`
-      });
       engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（驱魔人）选中恶魔 ${target.seat + 1}号 ${target.name}，恶魔能力失效`, {
         playerId: player.id, targetId
       });
-    } else {
-      engine.setPlayerPrivateInfo(player, {
-        type: 'exorcist',
-        targetId: targetId,
-        message: `你选择了 ${target.seat + 1}号 ${target.name}，无事发生`
-      });
     }
+
+    // 无论是否选中恶魔，给驱魔人的信息都不透露目标身份与效果，只显示选择了谁
+    engine.setPlayerPrivateInfo(player, {
+      type: 'exorcist',
+      targetId: targetId,
+      message: `你选择了 ${target.seat + 1}号 ${target.name}`
+    });
 
     return { success: true };
   }
@@ -388,6 +425,43 @@ class Innkeeper extends Role {
       if (t) t.isProtected = true;
     }
 
+    const names = targets.map(tid => {
+      const t = engine.room.players.get(tid);
+      return t ? `${t.seat + 1}号${t.name}` : '?';
+    }).join('、');
+
+    // 人工说书人：由说书人选择两名被保护者中谁醉酒
+    if (engine.isManualStoryteller && engine.isManualStoryteller() && engine.room.gameState.storytellerArmed) {
+      engine.requestStorytellerChoice(
+        'innkeeper_drunk',
+        `旅店老板保护了 ${names}：选择其中醉酒的一名`,
+        targets.map(tid => {
+          const t = engine.room.players.get(tid);
+          return t ? { id: t.id, seat: t.seat, name: t.name } : null;
+        }).filter(Boolean),
+        (opt) => {
+          const drunkPlayer = engine.room.players.get(opt.id);
+          if (!drunkPlayer) return;
+          applyDrunk(drunkPlayer, 'innkeeper', 1);
+          engine.logAction('ABILITY', `${drunkPlayer.seat + 1}号 ${drunkPlayer.name} 被旅店老板醉酒（说书人判定）`, {
+            playerId: player.id, targetId: drunkPlayer.id, byStoryteller: true
+          });
+        },
+        (prevId) => {
+          // 说书人改选：撤销上一次选择造成的醉酒
+          const prev = engine.room.players.get(prevId);
+          if (prev) clearDrunkSource(prev, 'innkeeper');
+        }
+      );
+      gameState.nightActions.innkeeper = { targetIds: targets };
+      engine.setPlayerPrivateInfo(player, {
+        type: 'innkeeper',
+        protectedIds: targets,
+        message: `你保护了 ${names}，其中一名玩家醉酒（由说书人判定）`
+      });
+      return { success: true };
+    }
+
     // 随机一人醉酒：持续「当晚 + 接下来的整个白天」，到下个黄昏解除
     const drunkTarget = Math.random() < 0.5 ? targets[0] : targets[1];
     const drunkPlayer = engine.room.players.get(drunkTarget);
@@ -397,10 +471,6 @@ class Innkeeper extends Role {
 
     gameState.nightActions.innkeeper = { targetIds: targets };
 
-    const names = targets.map(tid => {
-      const t = engine.room.players.get(tid);
-      return t ? `${t.seat + 1}号${t.name}` : '?';
-    }).join('、');
     const drunkName = drunkPlayer ? `${drunkPlayer.seat + 1}号${drunkPlayer.name}` : '?';
 
     engine.setPlayerPrivateInfo(player, {
@@ -476,13 +546,7 @@ class Gambler extends Role {
     player.abilityState.gambleGuessId = guessRoleId;
     player.abilityState.gambleGuess = guessName;
 
-    engine.setPlayerPrivateInfo(player, {
-      type: 'gambler',
-      targetId: targetId,
-      guess: guessName,
-      message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guessName}】，等待天亮结算...`
-    });
-
+    // 信息统一在天亮结算时下发一条（避免行动时与结算时重复发送）
     return { success: true };
   }
 
@@ -503,42 +567,38 @@ class Gambler extends Role {
     const realRoleId = target.role ? target.role.id : '';
     const realRole = target.role ? target.role.name : '';
     const correct = (realRoleId === guessId);
-    // 醉酒/中毒时技能失效：无论猜对猜错都不会因自己的能力死亡。
-    // 为不让玩家察觉能力被打断，猜错时给出「猜对了」的假信息（真相只写入上帝视角日志）。
+    let gamblerDied = false;
+    // 醉酒/中毒时技能失效：无论猜对猜错都不会因自己的能力死亡
     const debuff = player.isPoisoned ? '中毒' : (player.isDrunk ? '醉酒' : null);
     const abilityDisabled = !!debuff;
 
-    if (correct || abilityDisabled) {
-      engine.setPlayerPrivateInfo(player, {
-        type: 'gambler',
-        targetId: targetId,
-        guess: guess,
-        result: true,
-        message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜对了！`
-      }, abilityDisabled && !correct, abilityDisabled && !correct ? {
-        realInfo: `赌徒${debuff}，技能失效；实际猜错但不会死亡`
-      } : null);
-
-      if (abilityDisabled) {
-        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（赌徒）${debuff}，技能失效：猜测${correct ? '正确' : '错误'}都不会死亡。目标 ${target.seat + 1}号 ${target.name} 实为【${realRole}】`, {
-          playerId: player.id, targetId, guess, guessId, realRole, realRoleId, correct, disabledBy: player.isPoisoned ? 'poison' : 'drunk'
-        });
-      }
-    } else {
-      // 猜错时不向赌徒透露目标的真实身份（真实身份只写入上帝视角行动日志）
-      engine.setPlayerPrivateInfo(player, {
-        type: 'gambler',
-        targetId: targetId,
-        guess: guess,
-        result: false,
-        message: `你猜测 ${target.seat + 1}号 ${target.name} 是【${guess}】，猜错了，你死了！`
+    if (abilityDisabled) {
+      engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（赌徒）${debuff}，技能失效：猜测${correct ? '正确' : '错误'}都不会死亡。目标 ${target.seat + 1}号 ${target.name} 实为【${realRole}】`, {
+        playerId: player.id, targetId, guess, guessId, realRole, realRoleId, correct, disabledBy: player.isPoisoned ? 'poison' : 'drunk'
       });
+    } else if (!correct) {
+      // 猜错时不向赌徒透露结果的真实性（真实身份只写入上帝视角行动日志）
       if (player.isAlive && !player.isProtected) {
         engine.deathManager.killPlayer(player.id, 'GAMBLER', gameState.nightCount, -1);
         engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（赌徒）猜测错误，死亡。目标 ${target.seat + 1}号 ${target.name} 实为【${realRole}】`, {
           playerId: player.id, targetId, guess, guessId, realRole, realRoleId
         });
+        gamblerDied = true;
       }
+    }
+
+    // 无论猜对猜错、是否中毒/醉酒，给赌徒的信息都不透露结果，只显示选择了谁与猜测的角色
+    engine.setPlayerPrivateInfo(player, {
+      type: 'gambler',
+      targetId,
+      guess,
+      message: `你选择了 ${target.seat + 1}号 ${target.name}，猜测角色：【${guess}】`
+    });
+
+    // 若说书人审核快照已生成，立即重建，保证死亡名单自动勾选赌徒
+    const st = gameState.storyteller;
+    if (gamblerDied && engine.isManualStoryteller() && st && st.nightReview) {
+      engine.nightResolver._buildNightReview();
     }
 
     player.abilityState.gambleTarget = null;
@@ -620,19 +680,42 @@ class Gossip extends Role {
     player.abilityState.gossipAIPending = false;
 
     if (isTrue && !isPoisoned && !isDrunk) {
-      const victimInfo = BalanceSystem.selectGossipVictim(engine);
-      if (victimInfo && victimInfo.player) {
-        const victim = victimInfo.player;
-        engine.deathManager.killPlayer(victim.id, 'GOSSIP', gameState.nightCount, -1);
+      if (engine.isManualStoryteller && engine.isManualStoryteller() && engine.room.gameState.storytellerArmed) {
+        // 人工说书人：由说书人选择因声明为真而死亡的玩家
+        const alive = Array.from(engine.room.players.values()).filter(p => p.isAlive && p.seat !== -1);
+        engine.requestStorytellerChoice(
+          'gossip_victim',
+          `造谣者声明为真：选择一名玩家死亡（声明：${statement}）`,
+          alive.map(p => ({ id: p.id, seat: p.seat, name: p.name })),
+          (opt) => {
+            const victim = engine.room.players.get(opt.id);
+            if (!victim || !victim.isAlive) return;
+            engine.deathManager.killPlayer(victim.id, 'GOSSIP', gameState.nightCount, -1);
+            engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 死亡（说书人判定）`, {
+              playerId: player.id, victimId: victim.id, statement, byStoryteller: true
+            });
+          }
+        );
         engine.setPlayerPrivateInfo(player, {
           type: 'gossip',
           result: true,
-          victimId: victim.id,
-          message: `你的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 因此死亡`
+          message: `你的声明"${statement}"为真，今夜将有一名玩家因此死亡（由说书人判定）`
         });
-        engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 死亡（偏袒${victimInfo.favoredTeam === 'GOOD' ? '好人' : victimInfo.favoredTeam === 'EVIL' ? '邪恶' : '随机'}）`, {
-          playerId: player.id, victimId: victim.id, statement, balanceScore: victimInfo.balanceScore
-        });
+      } else {
+        const victimInfo = BalanceSystem.selectGossipVictim(engine);
+        if (victimInfo && victimInfo.player) {
+          const victim = victimInfo.player;
+          engine.deathManager.killPlayer(victim.id, 'GOSSIP', gameState.nightCount, -1);
+          engine.setPlayerPrivateInfo(player, {
+            type: 'gossip',
+            result: true,
+            victimId: victim.id,
+            message: `你的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 因此死亡`
+          });
+          engine.logAction('ABILITY', `${player.seat + 1}号 ${player.name}（造谣者）的声明"${statement}"为真，${victim.seat + 1}号 ${victim.name} 死亡（偏袒${victimInfo.favoredTeam === 'GOOD' ? '好人' : victimInfo.favoredTeam === 'EVIL' ? '邪恶' : '随机'}）`, {
+            playerId: player.id, victimId: victim.id, statement, balanceScore: victimInfo.balanceScore
+          });
+        }
       }
     } else {
       let reason = '声明为假';

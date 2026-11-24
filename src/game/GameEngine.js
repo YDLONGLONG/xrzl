@@ -62,7 +62,34 @@ class GameEngine {
     this.victoryChecker = new VictoryChecker(this);
     this.balanceSystem = BalanceSystem;
     this.botManager = new BotManager(this);
+
+    // 人工说书人：挂起的白天问答 Promise
+    this._stQuestion = null;
   }
+
+  // 是否为人工说书人模式
+  isManualStoryteller() {
+    return !!this.room.storytellerMode;
+  }
+
+  // 确保说书人状态存在（仅人工模式使用）
+  _ensureStorytellerState() {
+    const gs = this.room.gameState;
+    if (!gs.storyteller) {
+      gs.storyteller = {
+        pendingWake: null,
+        pendingInfos: [],
+        nightReview: null,
+        pendingQuestion: null,
+        pendingChoices: []
+      };
+    }
+    const st = gs.storyteller;
+    if (!Array.isArray(st.pendingInfos)) st.pendingInfos = [];
+    if (!Array.isArray(st.pendingChoices)) st.pendingChoices = [];
+    return st;
+  }
+
 
   // 添加行动日志
   logAction(type, message, data = {}) {
@@ -274,6 +301,7 @@ class GameEngine {
         currentVotes: n.currentVotes ? Object.assign({}, n.currentVotes) : {}
       })),
       deathsToAnnounce: gs.deathsToAnnounce,
+      revivesToAnnounce: gs.revivesToAnnounce || [],
       todaysDeaths: gs.todaysDeaths,
       players: allPlayers,
       composition: gs.composition || null,
@@ -310,6 +338,33 @@ class GameEngine {
 
   // 设置玩家私密信息（自动记录真假信息和上帝视角日志）
   setPlayerPrivateInfo(player, info, isFalse = false, realInfo = null) {
+    const gs = this.room.gameState;
+    // 人工说书人：夜晚所有玩家的信息先入待发队列（含机器人与托管玩家），由说书人编辑并确认后发送
+    const nightPhase = gs && (gs.phase === PHASES.FIRST_NIGHT || gs.phase === PHASES.NIGHT || gs.phase === PHASES.NIGHT_WAKE);
+    if (this.isManualStoryteller() && gs && gs.storytellerArmed && nightPhase
+        && player && player.seat >= 0 && !this._stFlushing) {
+      const st = this._ensureStorytellerState();
+      st.pendingInfos.push({
+        id: 'stinfo_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        playerId: player.id,
+        playerName: player.name,
+        seat: player.seat,
+        roleName: player.role ? player.role.name : '未知',
+        isBot: !!player.isBot,
+        message: info && info.message != null ? String(info.message) : '',
+        isFalse: !!isFalse,
+        realInfo: isFalse ? realInfo : null,
+        day: gs.dayCount || 0,
+        phase: gs.phase
+      });
+      this.broadcastState();
+      return;
+    }
+    this._deliverPrivateInfo(player, info, isFalse, realInfo);
+  }
+
+  // 实际发送私密信息（人工说书人确认后也走这里）
+  _deliverPrivateInfo(player, info, isFalse = false, realInfo = null) {
     const gs = this.room.gameState;
     const infoEntry = {
       ...info,
@@ -360,6 +415,276 @@ class GameEngine {
     }
   }
 
+  // 人工说书人：发送待发信息（可编辑文案）
+  flushStorytellerInfos(edits = []) {
+    const st = this.room.gameState.storyteller;
+    if (!st || !Array.isArray(st.pendingInfos) || st.pendingInfos.length === 0) return 0;
+    const editMap = {};
+    (Array.isArray(edits) ? edits : []).forEach(e => {
+      if (e && e.id) editMap[e.id] = e.message;
+    });
+    const queue = st.pendingInfos.slice();
+    st.pendingInfos = [];
+    this._stFlushing = true;
+    try {
+      for (const item of queue) {
+        const player = this.room.players.get(item.playerId);
+        if (!player) continue;
+        const message = (editMap[item.id] !== undefined && editMap[item.id] !== null)
+          ? String(editMap[item.id])
+          : item.message;
+        this._deliverPrivateInfo(player, { message }, item.isFalse, item.realInfo);
+      }
+    } finally {
+      this._stFlushing = false;
+    }
+    return queue.length;
+  }
+
+  // 人工说书人：下发给房主的状态快照
+  getStorytellerSnapshot() {
+    const gs = this.room.gameState;
+    const st = gs.storyteller || {};
+    const review = st.nightReview || null;
+    const choices = st.pendingChoices || [];
+    // 本夜死亡以玩家实时状态为准（如赌徒猜错、月之子诅咒等在快照生成后发生的死亡）
+    const diedTonightIds = new Set();
+    if (review) {
+      Array.from(this.room.players.values())
+        .filter(p => p.seat !== -1 && p.isDead && p.deathNight === review.nightCount)
+        .forEach(p => diedTonightIds.add(p.id));
+    }
+    const deathRows = review ? (review.deaths || []).map(d => ({
+      id: d.id, seat: d.seat, name: d.name, roleName: d.roleName,
+      checked: !!d.checked || diedTonightIds.has(d.id), locked: !!d.locked
+    })) : [];
+    if (review) {
+      // 快照生成后才发生的本夜死亡，补进死亡名单并默认勾选
+      const rowIds = new Set(deathRows.map(d => d.id));
+      Array.from(this.room.players.values())
+        .filter(p => p.seat !== -1 && diedTonightIds.has(p.id) && !rowIds.has(p.id))
+        .forEach(p => deathRows.push({
+          id: p.id, seat: p.seat, name: p.name,
+          roleName: p.role ? p.role.name : '未知',
+          checked: true, locked: false
+        }));
+      deathRows.sort((a, b) => a.seat - b.seat);
+    }
+    // 夜间阶段取当前夜的行动记录；白天取刚刚结束的一夜（beginNight 时已转存）
+    const isNightPhase = gs.phase === PHASES.FIRST_NIGHT
+      || gs.phase === PHASES.NIGHT
+      || gs.phase === PHASES.NIGHT_WAKE;
+    const nightActions = (isNightPhase ? gs.nightActionLog : gs.lastNightActionLog) || [];
+    let awaiting = null;
+    if (st.pendingWake) awaiting = 'wake';
+    else if (review) awaiting = 'nightEnd';
+    else if (st.pendingQuestion) awaiting = 'question';
+    else if (choices.length > 0) awaiting = 'choice';
+
+    return {
+      awaiting,
+      pendingWake: st.pendingWake || null,
+      pendingChoices: choices.map(c => ({
+        kind: c.kind,
+        label: c.label,
+        options: (c.options || []).map(o => ({ id: o.id, seat: o.seat, name: o.name })),
+        chosenId: c.chosenId || null
+      })),
+      pendingInfos: (st.pendingInfos || []).map(info => ({
+        id: info.id,
+        playerId: info.playerId,
+        playerName: info.playerName,
+        seat: info.seat,
+        roleName: info.roleName,
+        message: info.message
+      })),
+      nightReview: review ? {
+        nightCount: review.nightCount,
+        deaths: deathRows,
+        statuses: (review.statuses || []).map(s => ({
+          playerId: s.playerId, seat: s.seat, name: s.name,
+          drunk: !!s.drunk, poisoned: !!s.poisoned,
+          foolImmune: s.foolImmune === true ? true : (s.foolImmune === false ? false : null)
+        })),
+        choices: (review.choices || []).map(c => ({
+          kind: c.kind, label: c.label,
+          options: (c.options || []).map(o => ({ id: o.id, seat: o.seat, name: o.name })),
+          chosenId: c.chosenId || null
+        })),
+        infos: (review.infos || []).map(info => ({
+          id: info.id, playerId: info.playerId, playerName: info.playerName,
+          seat: info.seat, message: info.message
+        }))
+      } : null,
+      pendingQuestion: st.pendingQuestion ? {
+        id: st.pendingQuestion.id,
+        kind: st.pendingQuestion.kind,
+        playerId: st.pendingQuestion.playerId,
+        playerName: st.pendingQuestion.playerName,
+        questions: (st.pendingQuestion.questions || []).map(q => ({ text: q.text }))
+      } : null,
+      players: Array.from(this.room.players.values())
+        .filter(p => p.seat !== -1)
+        .sort((a, b) => a.seat - b.seat)
+        .map(p => ({
+          id: p.id,
+          seat: p.seat,
+          name: p.name,
+          roleId: p.role ? p.role.id : null,
+          roleName: p.role ? p.role.name : '未分配',
+          abilityDesc: p.role && p.role.abilityDesc ? p.role.abilityDesc : '',
+          fakeRoleName: p.fakeRole ? p.fakeRole.name : '',
+          team: p.role ? p.role.team : null,
+          // 弄臣：首次死亡免疫是否还可用（非弄臣为 null）
+          foolImmune: p.role && p.role.id === 'fool' ? !(p.abilityState && p.abilityState.usedDeath) : null,
+          isAlive: p.isAlive,
+          isDead: p.isDead,
+          isBot: !!p.isBot,
+          aiTakeover: !!p.aiTakeover
+        })),
+      nightActions: nightActions.map(a => ({
+        playerId: a.playerId,
+        seat: a.seat,
+        name: a.name,
+        roleName: a.roleName || '',
+        action: a.action,
+        targets: (a.targets || []).map(t => ({ id: t.id, seat: t.seat, name: t.name })),
+        roleId: a.roleId || null,
+        note: a.note || '',
+        at: a.at
+      })),
+      nightActionNight: gs.nightCount
+    };
+  }
+
+  // 人工说书人：提出待回答的是非题，返回 Promise<{ok, answers}>
+  askStorytellerQuestions(questions, meta = {}) {
+    return new Promise((resolve) => {
+      if (!this.isManualStoryteller()) {
+        resolve({ ok: false, reason: 'notManual' });
+        return;
+      }
+      // 同时只保留一个问题，旧问题按中断处理
+      this._finishStorytellerQuestion({ ok: false, reason: 'superseded' });
+      const st = this._ensureStorytellerState();
+      const id = 'stq_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+      const list = (Array.isArray(questions) ? questions : [questions])
+        .map(q => ({ text: String(q == null ? '' : q) }));
+      st.pendingQuestion = {
+        id,
+        kind: meta.kind || 'general',
+        playerId: meta.playerId || null,
+        playerName: meta.playerName || '',
+        questions: list,
+        answers: []
+      };
+      // 10 分钟未回答视为失败，避免对局永久卡住
+      const timer = setTimeout(() => {
+        this._finishStorytellerQuestion({ ok: false, reason: 'timeout' }, id);
+        this.broadcastState();
+      }, 10 * 60 * 1000);
+      this._stQuestion = { id, resolve, timer };
+      this.broadcastState();
+    });
+  }
+
+  // 结束当前挂起的问题（可指定 id 防止旧定时器误伤新问题）
+  _finishStorytellerQuestion(result, id = null) {
+    const ctx = this._stQuestion;
+    if (!ctx) return false;
+    if (id && ctx.id !== id) return false;
+    clearTimeout(ctx.timer);
+    this._stQuestion = null;
+    const st = this.room.gameState.storyteller;
+    if (st && st.pendingQuestion && st.pendingQuestion.id === ctx.id) st.pendingQuestion = null;
+    try { ctx.resolve(result); } catch (e) { /* 忽略重复 resolve */ }
+    return true;
+  }
+
+  // 说书人回答问题
+  answerStorytellerQuestion(id, answers) {
+    const st = this.room.gameState.storyteller;
+    if (!st || !st.pendingQuestion) return { success: false, message: '当前没有待回答的问题' };
+    if (id && st.pendingQuestion.id !== id) return { success: false, message: '问题已失效' };
+    const total = (st.pendingQuestion.questions || []).length;
+    const arr = Array.isArray(answers) ? answers.map(a => !!a) : [];
+    if (arr.length !== total) return { success: false, message: '回答数量不正确' };
+    const ok = this._finishStorytellerQuestion({ ok: true, answers: arr }, st.pendingQuestion.id);
+    if (!ok) return { success: false, message: '问题已失效' };
+    this.broadcastState();
+    return { success: true };
+  }
+
+  // 中断挂起问题（房主交接 / 对局结束）
+  cancelStorytellerQuestion(reason = 'interrupted') {
+    const had = this._finishStorytellerQuestion({ ok: false, reason });
+    if (had) this.broadcastState();
+  }
+
+  // 说书人：唤醒 / 跳过
+  handleStorytellerWake(action, message) {
+    if (!this.isManualStoryteller()) return { success: false, message: '当前不是人工说书人模式' };
+    return this.nightResolver.resumeWake(action, message);
+  }
+
+  // 说书人：确认夜晚审核
+  handleStorytellerConfirmNight(payload = {}) {
+    if (!this.isManualStoryteller()) return { success: false, message: '当前不是人工说书人模式' };
+    return this.nightResolver.confirmNight(payload);
+  }
+
+  // 随机决策统一入口：自动模式立即执行，人工模式挂起等待说书人选择
+  // 人工模式下白天同样挂起（不依赖 storytellerArmed），夜晚流程行为不变
+  // revertFn：说书人改选时撤销上一次选择的效果（可选）
+  requestStorytellerChoice(kind, label, options, applyFn, revertFn = null) {
+    const list = (Array.isArray(options) ? options : []).filter(Boolean);
+    if (list.length === 0) return false;
+    if (!this.isManualStoryteller()) {
+      applyFn(list[Math.floor(Math.random() * list.length)]);
+      return true;
+    }
+    const st = this._ensureStorytellerState();
+    st.pendingChoices.push({ kind, label, options: list, applyFn, revertFn, chosenId: null });
+    this.broadcastState();
+    return true;
+  }
+
+  // 应用说书人的随机决策（白天立即生效 / 夜晚审核时统一应用）
+  applyStorytellerChoice(kind, chosenId) {
+    const st = this._ensureStorytellerState();
+    // 修补匠 / 隐士：点击名字只切换「夜晚死亡名单」里的勾选状态，不立即结算生死
+    if (kind === 'night_death_candidate') {
+      const choice = (st.pendingChoices || []).find(c =>
+        c.kind === kind && (c.options || []).some(o => o.id === chosenId)
+      );
+      if (!choice) return false;
+      choice.chosenId = choice.chosenId === chosenId ? null : chosenId;
+      // 重建审核快照，使死亡名单的勾选与点击结果保持一致
+      if (st.nightReview) this.nightResolver._buildNightReview();
+      this.broadcastState();
+      return true;
+    }
+
+    const idx = st.pendingChoices.findIndex(c => c.kind === kind);
+    if (idx < 0) return false;
+    const choice = st.pendingChoices[idx];
+    const opt = (choice.options || []).find(o => o.id === chosenId);
+    if (!opt) return false;
+    const prevId = choice.chosenId || null;
+    // 点击已选中的目标：保持选中，不重复生效
+    if (prevId === chosenId) return true;
+    // 改选：先撤销上一次选择的效果，再应用新选择；条目保留在待处理区
+    if (prevId && typeof choice.revertFn === 'function') {
+      choice.revertFn(prevId);
+    }
+    choice.chosenId = chosenId;
+    if (typeof choice.applyFn === 'function') choice.applyFn(opt);
+    // 重建审核快照：让死亡名单、醉酒/中毒标记、身份表等与点击结果保持一致
+    if (st.nightReview) this.nightResolver._buildNightReview();
+    this.broadcastState();
+    return true;
+  }
+
   startGame(customRoles = {}, options = {}) {
     this.room.startedAt = new Date();
     // 清理上一局可能残留的自动推进定时器
@@ -406,6 +731,18 @@ class GameEngine {
     // 再设置恶魔/爪牙/酒鬼信息（会产生PRIVATE_INFO日志）
     this.roleAllocator.setupEvilTeamInfo(seatedPlayers);
 
+    // 人工说书人：初始化状态。开局信息仍直接下发，后续夜晚进入审核流
+    if (this.isManualStoryteller()) {
+      this.room.gameState.storytellerArmed = false;
+      this.room.gameState.storyteller = {
+        pendingWake: null,
+        pendingInfos: [],
+        nightReview: null,
+        pendingQuestion: null,
+        pendingChoices: []
+      };
+    }
+
     this.logAction('GAME_START', `游戏开始！共${seatedPlayers.length}名玩家${hasCustom ? '（自定义角色）' : ''}`, { playerCount: seatedPlayers.length });
 
     // 重置确认集合
@@ -417,6 +754,11 @@ class GameEngine {
 
   transitionTo(phase) {
     const gs = this.room.gameState;
+    // 人工说书人：只有夜间阶段启用信息拦截
+    if (gs.storyteller && phase !== PHASES.FIRST_NIGHT && phase !== PHASES.NIGHT && phase !== PHASES.NIGHT_WAKE) {
+      gs.storytellerArmed = false;
+      gs.storyteller.pendingWake = null;
+    }
     gs.phase = phase;
     this.room.confirmations.clear();
 
@@ -477,6 +819,11 @@ class GameEngine {
         seat: d.seat,
         name: d.name,
         playerId: d.playerId
+      })),
+      revives: (gs.revivesToAnnounce || []).map(r => ({
+        seat: r.seat,
+        name: r.name,
+        playerId: r.playerId
       }))
     });
 
@@ -540,7 +887,7 @@ class GameEngine {
 
       case PHASES.DAY_DISCUSSION:
         // 讨论/提名合并阶段结束：立即结算处决（处决阶段自动进入夜晚，无需确认）
-        this.voteManager.closeNominations();
+        Promise.resolve(this.voteManager.closeNominations()).catch(() => {});
         break;
 
       case PHASES.NIGHT_WAKE:
@@ -554,7 +901,7 @@ class GameEngine {
         break;
 
       case PHASES.VOTING:
-        this.voteManager.endVoting();
+        Promise.resolve(this.voteManager.endVoting()).catch(() => {});
         break;
     }
   }
@@ -778,8 +1125,8 @@ class GameEngine {
     return this.voteManager.endDefense(playerId);
   }
 
-  endVoting() {
-    this.voteManager.endVoting();
+  async endVoting() {
+    return await this.voteManager.endVoting();
   }
 
   setupRedHerring(fortuneteller) {
@@ -882,6 +1229,7 @@ class GameEngine {
         currentVotes: n.currentVotes ? Object.assign({}, n.currentVotes) : {}
       })),
       deathsToAnnounce: gs.deathsToAnnounce,
+      revivesToAnnounce: gs.revivesToAnnounce || [],
       todaysDeaths: gs.todaysDeaths,
       winner: gs.winner,
       winReason: gs.winReason,
@@ -943,7 +1291,7 @@ class GameEngine {
       probConfigMeta: viewerId === room.hostId ? getProbConfigMeta(room.script || 'tb') : null,
       probMode: viewerId === room.hostId ? room.probMode : null,
       allRoles: gs.winner ? Array.from(room.players.values())
-        .filter(p => p.seat !== -1)
+        .filter(p => p.seat !== -1 && p.role)
         .map(p => ({
           id: p.id,
           name: p.name,
@@ -989,6 +1337,12 @@ class GameEngine {
         butlerYesBlocked
       }
     };
+
+    // 人工说书人：仅房主可见的审核快照
+    if (this.isManualStoryteller() && viewerId === room.hostId) {
+      state.isStoryteller = true;
+      state.storyteller = this.getStorytellerSnapshot();
+    }
 
     return state;
   }

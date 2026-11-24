@@ -203,16 +203,42 @@ class DeathManager {
     return player;
   }
 
+  // 说书人取消死亡：恢复玩家存活状态
+  revivePlayer(playerId) {
+    const player = this.engine.room.players.get(playerId);
+    if (!player) return null;
+    player.isAlive = true;
+    player.isDead = false;
+    player.deathNight = -1;
+    player.deathDay = -1;
+    player.deathCause = null;
+    player.voteToken = 0;
+    // 同步移除当天死亡记录，避免影响僵怖等判定
+    const gs = this.engine.room.gameState;
+    if (gs && Array.isArray(gs.todaysDeaths)) {
+      gs.todaysDeaths = gs.todaysDeaths.filter(d => d.playerId !== playerId);
+    }
+    this.engine.logAction('DEATH', `${player.seat+1}号 ${player.name} 被说书人判定为存活`, {
+      playerId, revivedByStoryteller: true
+    });
+    this.engine.io.to(this.engine.room.id).emit('player:revived', {
+      playerId,
+      seat: player.seat,
+      name: player.name
+    });
+    return player;
+  }
+
   // 检查红唇女郎继承
   checkScarletWoman() {
     const room = this.engine.room;
     const gs = room.gameState;
     const alive = getAlivePlayers(room);
 
-    const demonAlive = alive.some(p => p.role.category === 'DEMON' && !p.role.isFakeDemon);
+    const demonAlive = alive.some(p => p.role && p.role.category === 'DEMON' && !p.role.isFakeDemon);
     if (demonAlive) return;
 
-    const sw = alive.find(p => p.role.id === 'scarletwoman');
+    const sw = alive.find(p => p.role && p.role.id === 'scarletwoman');
     // 中毒/醉酒的红唇女郎能力失效，不能继承恶魔
     if (sw && alive.length >= 5 && !sw.isPoisoned && !sw.isDrunk) {
       // 红唇女郎变成新恶魔（保持同剧本的恶魔类型）
